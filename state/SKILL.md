@@ -65,6 +65,8 @@ OS analogy: `meta.yml` ≈ PCB (standardized external interface); `state/` ≈ p
 
 Format: `<yyMMdd>-<4-char nanoid>` (e.g., `260516-x7k2`). Automatic, collision-free, sortable by `ls -lt`. No other formats are accepted.
 
+**On creation, the program MUST surface the new execution ID to the user.** Without knowing the ID, the user cannot resume this execution later. Present it inline (e.g., "Started execution `260516-x7k2` — say `resume 260516-x7k2` to come back to it.") or as a structured handoff — but it must be visible to the user, not buried in logs or only written to `meta.yml`.
+
 ### meta.yml
 
 ```yaml
