@@ -1,0 +1,131 @@
+#!/usr/bin/env bun
+//
+// list-resources <category>
+//
+// Prints a compact "<name>: <description>" listing for every resource entry
+// in the chosen category. Lets the agent narrow candidates in the `selecting`
+// phase without loading every full SKILL.md / DESIGN.md / craft file into context.
+//
+//   categories:
+//     skills            — resources/skills/<name>/SKILL.md           (YAML frontmatter)
+//     design-templates  — resources/design-templates/<name>/SKILL.md (YAML frontmatter)
+//     design-systems    — resources/design-systems/<name>/DESIGN.md  (# title + intro up to first ##)
+//     craft             — resources/craft/<name>.md                  (# title + intro up to first ##)
+//
+//   output line format:   <name>: <one-line description>
+//   description is whitespace-collapsed; no length truncation.
+
+import { readdirSync, readFileSync, existsSync, statSync } from "fs";
+import { join } from "path";
+
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+});
+
+const VALID = ["skills", "design-templates", "design-systems", "craft"] as const;
+type Category = (typeof VALID)[number];
+
+const category = process.argv[2] as Category | undefined;
+if (!category || !VALID.includes(category)) {
+  console.error(`Usage: list-resources <${VALID.join("|")}>`);
+  process.exit(1);
+}
+
+const scriptDir = import.meta.dir;
+const root = join(scriptDir, "..", "resources", category);
+if (!existsSync(root) || !statSync(root).isDirectory()) {
+  console.error(`No such resource dir: ${root}`);
+  process.exit(1);
+}
+
+function extractFrontmatterDesc(content: string): string {
+  const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fm) return "";
+  const block = fm[1];
+
+  // Multi-line "description: |"
+  const multi = block.match(/^description:\s*\|\s*\n([\s\S]*?)(?=^[a-zA-Z_][\w-]*:|\Z)/m);
+  if (multi) {
+    return multi[1]
+      .split("\n")
+      .map((l) => l.replace(/^[ \t]+/, "").trimEnd())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  // Single-line "description: foo"
+  const single = block.match(/^description:\s*(.+)$/m);
+  if (single) return single[1].trim();
+
+  return "";
+}
+
+// Unified extractor for design-systems (DESIGN.md) and craft (<name>.md):
+// take the first `# title` and everything that follows it up to (but not
+// including) the first `## subheading`.
+//
+//   keepQuotes = true   →  fold `> ...` lines into prose (used for
+//                          design-systems, where the tagline lives in a
+//                          `> Category: ... / > <tagline>` block).
+//   keepQuotes = false  →  drop `> ...` lines entirely (used for craft,
+//                          where the `> ...` block is upstream attribution
+//                          noise, not part of the rule's description).
+function extractMdIntro(content: string, keepQuotes = true): string {
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1]?.trim() ?? "";
+
+  const startIdx = titleMatch ? (titleMatch.index ?? 0) + titleMatch[0].length : 0;
+  const rest = content.slice(startIdx);
+  // Stop at the first `##` subheading OR a `---` horizontal rule (either marks
+  // the end of the intro section in our authoring convention).
+  const stop = rest.match(/^(?:##\s|---+\s*$)/m);
+  const endIdx = stop ? (stop.index ?? rest.length) : rest.length;
+
+  const intro = rest
+    .slice(0, endIdx)
+    .split("\n")
+    .map((line) => {
+      if (line.trimStart().startsWith(">")) {
+        return keepQuotes ? line.replace(/^\s*>\s*/, "").trim() : "";
+      }
+      return line.trim();
+    })
+    .filter(Boolean)
+    .join(" ");
+
+  if (title && intro) return `${title} — ${intro}`;
+  return title || intro;
+}
+
+function compact(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+if (category === "craft") {
+  const files = readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".md"))
+    .map((e) => e.name)
+    .sort();
+  for (const fname of files) {
+    const name = fname.replace(/\.md$/, "");
+    // craft: drop the `> Adapted from ...` attribution blocks
+    const info = extractMdIntro(readFileSync(join(root, fname), "utf-8"), false);
+    process.stdout.write(`${name}: ${compact(info)}\n`);
+  }
+} else {
+  const dirs = readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+  for (const name of dirs) {
+    let info = "";
+    if (category === "design-systems") {
+      const p = join(root, name, "DESIGN.md");
+      if (existsSync(p)) info = extractMdIntro(readFileSync(p, "utf-8"));
+    } else {
+      const p = join(root, name, "SKILL.md");
+      if (existsSync(p)) info = extractFrontmatterDesc(readFileSync(p, "utf-8"));
+    }
+    process.stdout.write(`${name}: ${compact(info)}\n`);
+  }
+}
