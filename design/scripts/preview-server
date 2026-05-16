@@ -1,0 +1,192 @@
+#!/usr/bin/env bun
+//
+// preview-server <output-dir> <exec-dir> [--port=N]
+//
+// Serves files from <output-dir>. Injects preview-overlay.js into every HTML
+// response so the user can annotate / tweak elements in the browser. Accepts
+// POST /feedback and POST /tweak from the overlay, writing each batch to the
+// appropriate inbox under <exec-dir>/state/ and appending a new input-NNN
+// entry to <exec-dir>/input.md so the agent picks it up on its next turn.
+//
+//   POST /feedback   body: { items: [ { url, selector, comment } ] }
+//                    → appends to <exec-dir>/state/feedback-inbox (JSONL)
+//                    → appends input.md entry
+//
+//   POST /tweak      body: { items: [ { url, selector, note, props } ] }
+//                    → appends to <exec-dir>/state/tweak-inbox  (JSONL)
+//                    → appends input.md entry
+//
+// Static GET requests are served from <output-dir>. HTML responses get the
+// overlay script tag inserted before </body> (or appended if no body close).
+
+import { readFileSync, existsSync, statSync, appendFileSync, mkdirSync } from "fs";
+import { join, extname, dirname, resolve } from "path";
+
+const args = process.argv.slice(2);
+const positional = args.filter((a) => !a.startsWith("--"));
+const portArg = args.find((a) => a.startsWith("--port="));
+const requestedPort = portArg ? parseInt(portArg.slice(7), 10) : 0;
+
+if (positional.length < 2) {
+  console.error("Usage: preview-server <output-dir> <exec-dir> [--port=N]");
+  process.exit(1);
+}
+
+const root = resolve(positional[0]);
+const execDir = resolve(positional[1]);
+if (!existsSync(root) || !statSync(root).isDirectory()) {
+  console.error(`output-dir does not exist or is not a directory: ${root}`);
+  process.exit(1);
+}
+if (!existsSync(execDir) || !statSync(execDir).isDirectory()) {
+  console.error(`exec-dir does not exist or is not a directory: ${execDir}`);
+  process.exit(1);
+}
+
+const overlayPath = join(import.meta.dir, "preview-overlay.js");
+// Re-read overlay JS from disk on every request so edits during development
+// take effect with a browser refresh — no server restart needed.
+const readOverlay = (): string => readFileSync(overlayPath, "utf-8");
+
+const inputMdPath = join(execDir, "input.md");
+const feedbackInbox = join(execDir, "state", "feedback-inbox");
+const tweakInbox = join(execDir, "state", "tweak-inbox");
+
+mkdirSync(join(execDir, "state"), { recursive: true });
+
+function mimeFor(p: string): string {
+  switch (extname(p).toLowerCase()) {
+    case ".html": return "text/html; charset=utf-8";
+    case ".css": return "text/css; charset=utf-8";
+    case ".js": case ".mjs": return "application/javascript; charset=utf-8";
+    case ".json": return "application/json";
+    case ".png": return "image/png";
+    case ".jpg": case ".jpeg": return "image/jpeg";
+    case ".svg": return "image/svg+xml";
+    case ".webp": return "image/webp";
+    case ".gif": return "image/gif";
+    case ".woff": return "font/woff";
+    case ".woff2": return "font/woff2";
+    case ".pdf": return "application/pdf";
+    default: return "application/octet-stream";
+  }
+}
+
+function injectOverlay(html: string): string {
+  const tag = `\n<script>${readOverlay()}</script>\n`;
+  if (html.includes("</body>")) return html.replace("</body>", tag + "</body>");
+  return html + tag;
+}
+
+function isoNow(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
+}
+
+function nextInputNum(): number {
+  if (!existsSync(inputMdPath)) return 1;
+  const content = readFileSync(inputMdPath, "utf-8");
+  const matches = [...content.matchAll(/^## input-(\d+)\b/gm)];
+  if (matches.length === 0) return 1;
+  return Math.max(...matches.map((m) => parseInt(m[1], 10))) + 1;
+}
+
+function appendInputEntry(title: string, body: string): string {
+  const n = nextInputNum();
+  const id = `input-${String(n).padStart(3, "0")}`;
+  const sep = existsSync(inputMdPath) && readFileSync(inputMdPath, "utf-8").trim().length > 0
+    ? "\n\n---\n\n"
+    : "";
+  const ts = isoNow();
+  const entry = `${sep}## ${id} @ ${ts} — ${title}\n\n${body}\n`;
+  appendFileSync(inputMdPath, entry);
+  return id;
+}
+
+function appendJsonl(p: string, obj: unknown): void {
+  mkdirSync(dirname(p), { recursive: true });
+  appendFileSync(p, JSON.stringify(obj) + "\n");
+}
+
+async function readJsonBody(req: Request): Promise<any | null> {
+  try { return await req.json(); } catch { return null; }
+}
+
+const server = Bun.serve({
+  port: requestedPort,
+  hostname: "0.0.0.0",
+  async fetch(req) {
+    const url = new URL(req.url);
+    const pathname = url.pathname;
+
+    if (req.method === "POST" && pathname === "/feedback") {
+      const body = await readJsonBody(req);
+      if (!body || !Array.isArray(body.items) || body.items.length === 0) {
+        return new Response("bad request", { status: 400 });
+      }
+      const ts = isoNow();
+      for (const item of body.items) appendJsonl(feedbackInbox, { ts, ...item });
+      const inputId = appendInputEntry(
+        `Live annotations (${body.items.length})`,
+        `User submitted ${body.items.length} annotation(s) via the preview overlay. ` +
+          "See `state/feedback-inbox` for the entries; process each by applying it to the relevant " +
+          "file in the output directory, then move the consumed entries to `state/feedback-resolved`. " +
+          "See the `live-annotate` skill for the full procedure."
+      );
+      return Response.json({ ok: true, accepted: body.items.length, input_id: inputId });
+    }
+
+    if (req.method === "POST" && pathname === "/tweak") {
+      const body = await readJsonBody(req);
+      if (!body || !Array.isArray(body.items) || body.items.length === 0) {
+        return new Response("bad request", { status: 400 });
+      }
+      const ts = isoNow();
+      for (const item of body.items) appendJsonl(tweakInbox, { ts, ...item });
+      const inputId = appendInputEntry(
+        `Live tweaks (${body.items.length})`,
+        `User submitted ${body.items.length} structured tweak(s) via the preview overlay. ` +
+          "See `state/tweak-inbox` for the entries; apply each `props` change to the relevant " +
+          "CSS rule (or inline style if more specific), then move the consumed entries to " +
+          "`state/tweak-resolved`. See the `live-tweak` skill for the full procedure."
+      );
+      return Response.json({ ok: true, accepted: body.items.length, input_id: inputId });
+    }
+
+    if (pathname === "/__overlay.js") {
+      return new Response(readOverlay(), { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return new Response("method not allowed", { status: 405 });
+    }
+
+    let relPath = decodeURIComponent(pathname.replace(/^\/+/, ""));
+    if (relPath === "" || relPath.endsWith("/")) relPath += "index.html";
+    const absPath = resolve(root, relPath);
+    if (!absPath.startsWith(root)) return new Response("forbidden", { status: 403 });
+
+    let targetPath = absPath;
+    if (!existsSync(targetPath)) return new Response("not found", { status: 404 });
+    if (statSync(targetPath).isDirectory()) {
+      targetPath = join(targetPath, "index.html");
+      if (!existsSync(targetPath)) return new Response("not found", { status: 404 });
+    }
+
+    if (extname(targetPath).toLowerCase() === ".html") {
+      const html = readFileSync(targetPath, "utf-8");
+      return new Response(injectOverlay(html), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    return new Response(Bun.file(targetPath), { headers: { "Content-Type": mimeFor(targetPath) } });
+  },
+});
+
+console.log(`preview-server: listening on 0.0.0.0:${server.port}`);
+console.log(`  local:    http://localhost:${server.port}`);
+console.log(`  LAN:      http://<this-host-ip>:${server.port}  (bound to 0.0.0.0 — reachable from other machines)`);
+console.log(`  serving:  ${root}`);
+console.log(`  exec dir: ${execDir}`);
+console.log(`  POST /feedback  → ${feedbackInbox} + input.md`);
+console.log(`  POST /tweak     → ${tweakInbox} + input.md`);

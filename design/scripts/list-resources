@@ -43,8 +43,11 @@ function extractFrontmatterDesc(content: string): string {
   if (!fm) return "";
   const block = fm[1];
 
-  // Multi-line "description: |"
-  const multi = block.match(/^description:\s*\|\s*\n([\s\S]*?)(?=^[a-zA-Z_][\w-]*:|\Z)/m);
+  // Multi-line "description: |" — captures indented lines until a line at the
+  // parent's indent level (or end of block). \Z is not valid in JS regex; this
+  // form relies on the fact that the body of a YAML literal block is the
+  // contiguous run of indented lines that immediately follows.
+  const multi = block.match(/^description:\s*\|\s*\n((?:[ \t]+[^\n]*\n?)+)/m);
   if (multi) {
     return multi[1]
       .split("\n")

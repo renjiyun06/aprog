@@ -11,7 +11,7 @@ description: |
 
 Designs websites, mobile prototypes, hi-fi mockups, slide decks, single-page artifacts, and media outputs (image / video / audio).
 
-Uses the **state** skill for execution state.
+> **Required first step**: load the `state` skill before proceeding. This skill is layered on top of the state protocol; every reference below to `${EXEC}`, `meta.yml`, `input.md`, `state/`, `input_cursor`, and "resume" assumes you've read it.
 
 ---
 
@@ -28,7 +28,7 @@ This document uses two root variables to refer to files unambiguously. Every fil
 
 All deliverables are written to a single directory chosen by the user — whatever the shape (a single HTML file, a multi-page site, a deck, generated media), everything goes in that one directory.
 
-**Artifacts MUST be served via a local HTTP server** (e.g., `python3 -m http.server <port>` rooted at the output directory, or any equivalent) so the user can preview them in a browser. The skill is responsible for starting this server in `designing` and surfacing its URL to the user.
+**Artifacts MUST be served via `${SKILL}/scripts/preview-server`** so the user can preview them in a browser AND drop in-page feedback back to the agent. The preview-server does three things: serves files from the output directory, injects an overlay JS that lets the user click-to-annotate or click-to-tweak page elements, and accepts the resulting batches at `POST /feedback` / `POST /tweak` — writing each to `${EXEC}/state/feedback-inbox` or `${EXEC}/state/tweak-inbox` (JSONL) and appending a corresponding `input-NNN` entry to `${EXEC}/input.md` so the agent picks it up on its next turn. Plain `python3 -m http.server` is **not** sufficient — it cannot inject the overlay or receive POST. See the `live-annotate` and `live-tweak` functional skills for inbox processing procedures.
 
 ---
 
@@ -57,14 +57,16 @@ Four phases. The current phase MUST be written to `${EXEC}/meta.yml`'s `phase` f
 
 > **Two categories of resources, only one is selected at project level.**
 > - **Design templates** (`${SKILL}/resources/design-templates/`) define the **shape** of the deliverable — prototype, deck, single-page artifact, image/video/audio template, etc. A project picks **exactly one** at `selecting` time.
-> - **Functional skills** (`${SKILL}/resources/skills/`) are **on-demand utilities** invoked mid-task (brief capture, asset packaging, screenshot, image enhancement, etc.). Never selected at project level. Their **headers (name + description) are loaded at `designing` entry** via `${SKILL}/scripts/list-resources skills` so the agent knows what's available; their **bodies are Read only at the moment of invocation**, never preloaded. See `designing`.
+> - **Functional skills** (`${SKILL}/resources/skills/`) are **on-demand utilities** invoked mid-task (brief capture, asset packaging, screenshot, image enhancement, etc.). Never selected at project level. Their **headers are loaded at `selecting` entry alongside the other indices**; only their **bodies are on-demand** — Read at the moment of invocation, never preloaded.
 
 **Behavior**:
-- **Load the full header index** for all three resource categories via the list script. The script extracts each entry's frontmatter / markdown header (name + description) — file bodies are NOT pulled in, so the full catalog fits in context:
-  - `${SKILL}/scripts/list-resources design-templates` — header info for every shape
-  - `${SKILL}/scripts/list-resources design-systems` — header info for every brand system
-  - `${SKILL}/scripts/list-resources craft` — header info for every craft rule
-- With the full header index in context, narrow each category to 2–3 candidates that best match the brief. Only then Read the full SKILL.md / DESIGN.md / craft file for those you propose.
+- **Load the full header index** for **all four resource categories** via the list script. The script extracts each entry's frontmatter / markdown header (name + description) — file bodies are NOT pulled in, so the full catalog fits in context:
+  - `${SKILL}/scripts/list-resources design-templates` — every shape (proposed in this phase)
+  - `${SKILL}/scripts/list-resources design-systems` — every brand system (proposed in this phase)
+  - `${SKILL}/scripts/list-resources craft` — every craft rule (proposed in this phase)
+  - `${SKILL}/scripts/list-resources skills` — every functional skill (not proposed here; kept in working memory for on-demand invocation later in `designing`)
+- **Consume each command's FULL output.** Do NOT pipe through `head` / `tail` / `grep`, do NOT truncate. An incomplete index means later candidate matching (selecting) and on-demand utility matching (designing) will silently miss entries.
+- With the full indices in context, narrow design-templates / design-systems / craft each to 2–3 candidates that best match the brief. Only then Read the full SKILL.md / DESIGN.md / craft file for those you propose.
 - Propose 2–3 candidate **design templates** with one-sentence rationale each. User picks or accepts a recommendation.
 - Propose 2–3 candidate **design systems** matching the brand voice (one-line tokens summary each). User picks.
 - Propose 2–4 **craft rules** to opt into (typography, color, accessibility, anti-AI-slop, etc.).
@@ -97,15 +99,16 @@ Four phases. The current phase MUST be written to `${EXEC}/meta.yml`'s `phase` f
 6. `${SKILL}/resources/design-templates/<selected-template>/SKILL.md` — the active shape (workflow + scaffold)
 7. `${SKILL}/resources/design-templates/<selected-template>/references/*.md` — layouts, components, checklist, themes (if present)
 
-**C. Indexes (header info only, body Read on demand later)**:
-8. **Functional skill index** via `${SKILL}/scripts/list-resources skills` — keep in working memory so on-demand invocation can match against available utilities. Read individual `${SKILL}/resources/skills/<name>/SKILL.md` only at the moment of invocation.
+**C. Indexes already loaded (from `selecting`)**:
+8. **Functional skill index** — loaded in `selecting` via `${SKILL}/scripts/list-resources skills`. Kept in working memory throughout `designing` so on-demand invocation can match against available utilities. Read the full `${SKILL}/resources/skills/<name>/SKILL.md` only at the moment of invocation. On resume, re-run the script to repopulate the index (see Resume behavior).
 
 **Conflict resolution**:
 - **Brand > craft** on visual tokens (specific brand voice overrides generic craft hygiene)
 - **User input (latest in `${EXEC}/input.md`) > everything**
 
 **Behavior**:
-- **Start a local HTTP server** rooted at the directory in `${EXEC}/state/output-dir` if not already running, and surface its URL to the user.
+- **Start the preview-server** if not already running:
+  `${SKILL}/scripts/preview-server <output-dir> ${EXEC}` (pass the path stored in `${EXEC}/state/output-dir` as `<output-dir>`; the server auto-picks a free port and prints its URL). Surface the URL to the user.
 - Generate the first artifact set. Write files to that output directory. Update `${EXEC}/state/produced-files` to reflect what now exists.
 - On new input (the next `input-NNN` in `${EXEC}/input.md`): determine what changed. Regenerate, add, replace, or **remove** files as needed. Keep `${EXEC}/state/produced-files` in sync with the actual contents of the output directory. Advance `${EXEC}/meta.yml.input_cursor` only after the request is fully reflected.
 - **On a delete request**: remove the file(s) from the output directory, rewrite `${EXEC}/state/produced-files` to drop the removed entries, and log the deletion + reason in `${EXEC}/state/design-decisions`.
@@ -173,15 +176,27 @@ On resume:
 1. Read `${EXEC}/meta.yml` — note `phase`, `input_cursor`, `status`.
 2. Read every input section **after** `input_cursor` in `${EXEC}/input.md` — those are unprocessed.
 3. Read state keys relevant to the current `phase` from `${EXEC}/state/` (see State KV map).
-4. **If `phase == designing`**, reloading docs is not enough — also:
+4. **If `phase == designing`**, reloading state KVs is **not enough**. The skill's resource library is your working memory for generation; without it, the next artifact you produce will silently drift from brand / craft / template. You MUST re-run the full `designing` entry load — all three groups A / B / C of its composition order:
 
-   a. **Re-run the `designing` entry load** — all three groups A/B/C of its composition order, including the functional skill index from `${SKILL}/scripts/list-resources skills`. Without the index, on-demand utility matching has nothing to match against.
+   a. **Group A — execution state** (`${EXEC}/state/brand-brief`, `${EXEC}/state/design-decisions`). Already covered by step 3 above, but re-confirm.
 
-   b. **Restart the local HTTP server** rooted at the directory named in `${EXEC}/state/output-dir`. The previous server is gone; the user has no live preview until a new one is up. Pick any free port, surface the new URL.
+   b. **Group B — resource library (THIS IS THE MOST OMITTED STEP)**. Read each of the following from `${SKILL}/`:
+      - `${SKILL}/resources/design-systems/<selected-design-system>/DESIGN.md` — **required**
+      - `${SKILL}/resources/design-systems/<selected-design-system>/tokens.css` — if present
+      - `${SKILL}/resources/design-systems/<selected-design-system>/components.html` — if present
+      - `${SKILL}/resources/craft/<name>.md` for **every** name in `${EXEC}/state/selected-craft`
+      - `${SKILL}/resources/design-templates/<selected-template>/SKILL.md` — **required**
+      - `${SKILL}/resources/design-templates/<selected-template>/references/*.md` — all files if the directory exists
 
-   c. **Reconcile `${EXEC}/state/produced-files`** with the actual contents of the output directory. Between sessions the user may have manually added, edited, or deleted files. If reality has drifted, rewrite `${EXEC}/state/produced-files` to match what's on disk before processing any new input.
+      Without these in context, the agent cannot honor the brand voice, craft rules, or template scaffold — generation will revert to generic defaults. **Don't skip a file because "I already know this brand"** — you don't; the previous agent's memory is gone.
 
-   d. **Re-establish phase invariants**: confirm `${EXEC}/state/selected-template`, `${EXEC}/state/selected-design-system`, and `${EXEC}/state/output-dir` are all set and valid (the output directory still exists; the named template / design-system still exist under `${SKILL}/resources/`). If any is missing or broken, surface the issue to the user before continuing — do not silently proceed.
+   c. **Group C — functional skill index**. Re-run `${SKILL}/scripts/list-resources skills` and consume its **FULL** output (no `head` / `tail` / `grep` / truncation). Without the full index, on-demand utility matching silently misses entries.
+
+   d. **Restart the preview-server** (`${SKILL}/scripts/preview-server <output-dir> ${EXEC}`). The previous server is gone; the user has no live preview, and any new in-browser annotations / tweaks have nowhere to land. Surface the new URL.
+
+   e. **Reconcile `${EXEC}/state/produced-files`** with the actual contents of the output directory. Between sessions the user may have manually added, edited, or deleted files. If reality has drifted, rewrite `${EXEC}/state/produced-files` to match what's on disk before processing any new input.
+
+   f. **Re-establish phase invariants**: confirm `${EXEC}/state/selected-template`, `${EXEC}/state/selected-design-system`, and `${EXEC}/state/output-dir` are all set and valid (the output directory still exists; the named template / design-system still exist under `${SKILL}/resources/`). If any is missing or broken, surface the issue to the user before continuing — do not silently proceed.
 5. Take action per the current phase's rules.
 6. Advance `${EXEC}/meta.yml.input_cursor` only after fully reflecting each processed input into `${EXEC}/state/` and/or the output directory.
 
