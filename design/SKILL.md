@@ -9,8 +9,6 @@ description: |
 
 # design
 
-This skill's body is a **single YAML spec** below. It encodes both the machinery (phases, transitions, state schema, on-entry loads, scripts) AND the judgment (rationale, warnings, philosophy) — the latter live inline as `|` literal-block strings next to the rule they explain. There is no separate docs/ directory; everything you need is in this file.
-
 > **Required first step**: load the `state` skill **before** proceeding.
 > This spec is layered on top of the state protocol; every reference to
 > `${EXEC}`, `meta.yml`, `input.md`, `state/`, `input_cursor`, and "resume"
@@ -401,9 +399,3 @@ resume:
     - take action per current phase
     - advance meta.yml.input_cursor only after each input is FULLY reflected
 ```
-
----
-
-## Legacy
-
-The previous prose-form spec is preserved at `SKILL.legacy.md` for reference. Both forms encode the same contract; this YAML-bodied form is the source of truth going forward.
