@@ -1,7 +1,8 @@
 # Rationale
 
-The "why" behind specific spec rules. Anchors are referenced from `SPEC.yaml`
-via the `why:` field.
+The "why" behind specific spec rules. Anchors are referenced from the YAML
+spec in `SKILL.md` via `why:` / `see:` fields. Read this when the spec
+points here; otherwise the spec's machinery is enough.
 
 ---
 
@@ -11,12 +12,15 @@ via the `why:` field.
 
 The skill mandates serving artifacts via `${SKILL}/scripts/preview-server`, not via `python3 -m http.server` or any other generic static server.
 
-Two reasons:
+Three reasons:
 
-1. **Overlay injection.** The preview-server injects an in-page overlay script that lets the user click-to-annotate and click-to-tweak elements on the rendered page. Without it, the live-feedback loop (`live-annotate` + `live-tweak`) cannot exist — the user has no UI to leave a comment.
-2. **Inbox endpoints.** The preview-server exposes `POST /feedback` and `POST /tweak`. These write JSONL records into `${EXEC}/state/feedback-inbox` / `tweak-inbox` AND append a new `input-NNN` entry to `${EXEC}/input.md` — so the next agent turn picks the feedback up automatically. Static servers obviously cannot do this.
+1. **Overlay injection.** The preview-server injects an in-page overlay script that lets the user click-to-annotate any element. Without it the live-feedback loop has no UI surface.
+2. **Server-side draft storage.** Pending annotations live as JSONL on the server in `${EXEC}/state/feedback-draft`, not in the browser. This means: drafts survive tab close, are visible across browsers / tabs / collaborators (refresh = sync), and the agent can read drafts as a regular state KV BEFORE the user commits. Static servers cannot offer this.
+3. **Atomic commit.** `POST /commit` atomically drains the draft into `${EXEC}/state/feedback-inbox` (the agent-facing queue), appends a new `input-NNN` entry to `${EXEC}/input.md`, and clears the draft. The atomicity (file rename + in-process mutex) prevents the loss / duplication race that would happen if two browsers committed simultaneously.
 
-The preview-server is a bridge between two worlds: the user's browser (rich UI surface) and the agent's input.md (the protocol's serial instruction stream). Without it, every browser observation costs a context switch back to chat.
+The preview-server is a bridge between two worlds: the user's browser (rich UI surface) and the agent's input.md (the protocol's serial instruction stream). The two-stage draft → commit design lets the user think in the browser at their pace, then send a coherent batch when ready.
+
+The legacy tweak mode (click-to-edit CSS) is hidden in the current overlay; its modal and `/tweak` endpoint are preserved dormant in case the workflow returns.
 
 ---
 
