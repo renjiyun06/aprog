@@ -3,23 +3,32 @@
 // preview-server <output-dir> <exec-dir> [--port=N]
 //
 // Serves files from <output-dir>. Injects preview-overlay.js into every HTML
-// response so the user can annotate / tweak elements in the browser. Accepts
-// POST /feedback and POST /tweak from the overlay, writing each batch to the
-// appropriate inbox under <exec-dir>/state/ and appending a new input-NNN
-// entry to <exec-dir>/input.md so the agent picks it up on its next turn.
+// response so the user can annotate elements in the browser. Pending
+// annotations live as a draft on the server, NOT in the user's browser, so:
+//   - they survive tab close
+//   - they're visible to every browser hitting the same server (refresh-based sync)
+//   - the agent can read them as a regular state KV before they're committed
 //
-//   POST /feedback   body: { items: [ { url, selector, comment } ] }
-//                    → appends to <exec-dir>/state/feedback-inbox (JSONL)
-//                    → appends input.md entry
+// The flow is two-stage:
 //
-//   POST /tweak      body: { items: [ { url, selector, note, props } ] }
-//                    → appends to <exec-dir>/state/tweak-inbox  (JSONL)
-//                    → appends input.md entry
+//   draft  →  ${EXEC}/state/feedback-draft   (JSONL, mutable)
+//   commit →  ${EXEC}/state/feedback-inbox   (JSONL, append-only, agent reads)
+//          +  ${EXEC}/input.md               (new input-NNN entry)
 //
-// Static GET requests are served from <output-dir>. HTML responses get the
-// overlay script tag inserted before </body> (or appended if no body close).
+// Endpoints (annotation flow):
+//
+//   GET    /draft               → { feedback: Comment[] }
+//   POST   /draft/feedback      body: { url, selector, comment }
+//                               → { ok, id, count } ; appends to feedback-draft
+//   DELETE /draft/feedback/:id  → { ok, count }     ; rewrites feedback-draft minus :id
+//   DELETE /draft               → { ok }            ; clears all drafts
+//   POST   /commit              → { ok, accepted, input_id }
+//                                 atomic: rename draft → temp → drain into inbox →
+//                                 append input.md entry → unlink temp.
+//
+// /tweak endpoint preserved (dormant; UI button hidden) for future revival.
 
-import { readFileSync, existsSync, statSync, appendFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, statSync, appendFileSync, mkdirSync, renameSync, unlinkSync } from "fs";
 import { join, extname, dirname, resolve } from "path";
 
 const args = process.argv.slice(2);
@@ -50,10 +59,12 @@ const readOverlay = (): string => readFileSync(overlayPath, "utf-8");
 
 const inputMdPath = join(execDir, "input.md");
 const feedbackInbox = join(execDir, "state", "feedback-inbox");
+const feedbackDraft = join(execDir, "state", "feedback-draft");
 const tweakInbox = join(execDir, "state", "tweak-inbox");
 
 mkdirSync(join(execDir, "state"), { recursive: true });
 
+// ---------- mime ----------
 function mimeFor(p: string): string {
   switch (extname(p).toLowerCase()) {
     case ".html": return "text/html; charset=utf-8";
@@ -78,10 +89,19 @@ function injectOverlay(html: string): string {
   return html + tag;
 }
 
+// ---------- helpers ----------
 function isoNow(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`;
+}
+
+function shortId(): string {
+  // 6 chars from [0-9a-z] — collision-resistant enough at the draft scale.
+  const a = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let s = "";
+  for (let i = 0; i < 6; i++) s += a[Math.floor(Math.random() * a.length)];
+  return s;
 }
 
 function nextInputNum(): number {
@@ -109,35 +129,147 @@ function appendJsonl(p: string, obj: unknown): void {
   appendFileSync(p, JSON.stringify(obj) + "\n");
 }
 
+function readJsonl<T>(p: string): T[] {
+  if (!existsSync(p)) return [];
+  const text = readFileSync(p, "utf-8");
+  const out: T[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try { out.push(JSON.parse(trimmed) as T); } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
+function writeJsonl(p: string, rows: unknown[]): void {
+  mkdirSync(dirname(p), { recursive: true });
+  const body = rows.length === 0 ? "" : rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+  writeFileSync(p, body);
+}
+
 async function readJsonBody(req: Request): Promise<any | null> {
   try { return await req.json(); } catch { return null; }
 }
 
+// ---------- mutex for draft mutations ----------
+// Bun.serve handles requests concurrently. Draft writes are read-modify-write
+// (delete rewrites the file, commit renames it) — serialize them.
+let chain: Promise<unknown> = Promise.resolve();
+function serial<T>(fn: () => Promise<T> | T): Promise<T> {
+  const next = chain.then(() => fn());
+  chain = next.then(() => {}, () => {});
+  return next;
+}
+
+// ---------- types ----------
+type Comment = {
+  id: string;
+  ts: string;
+  url: string;
+  selector: string;
+  comment: string;
+};
+
+// ---------- handlers ----------
+function handleGetDraft(): Response {
+  const feedback = readJsonl<Comment>(feedbackDraft);
+  return Response.json({ feedback });
+}
+
+async function handlePostDraftFeedback(req: Request): Promise<Response> {
+  const body = await readJsonBody(req);
+  if (!body || typeof body.url !== "string" || typeof body.selector !== "string" || typeof body.comment !== "string") {
+    return new Response("bad request", { status: 400 });
+  }
+  const comment = body.comment.trim();
+  if (!comment) return new Response("empty comment", { status: 400 });
+  return serial(() => {
+    const entry: Comment = {
+      id: shortId(),
+      ts: isoNow(),
+      url: body.url,
+      selector: body.selector,
+      comment,
+    };
+    appendJsonl(feedbackDraft, entry);
+    const count = readJsonl<Comment>(feedbackDraft).length;
+    return Response.json({ ok: true, id: entry.id, count });
+  });
+}
+
+function handleDeleteDraftFeedback(id: string): Promise<Response> {
+  return serial(() => {
+    const rows = readJsonl<Comment>(feedbackDraft);
+    const next = rows.filter((r) => r.id !== id);
+    if (next.length === rows.length) {
+      return new Response("not found", { status: 404 });
+    }
+    writeJsonl(feedbackDraft, next);
+    return Response.json({ ok: true, count: next.length });
+  });
+}
+
+function handleDeleteDraftAll(): Promise<Response> {
+  return serial(() => {
+    if (existsSync(feedbackDraft)) writeJsonl(feedbackDraft, []);
+    return Response.json({ ok: true });
+  });
+}
+
+function handleCommit(): Promise<Response> {
+  return serial(() => {
+    if (!existsSync(feedbackDraft)) {
+      return Response.json({ ok: true, accepted: 0, input_id: null });
+    }
+    // Atomic rename to a stable temp file; new POST /draft writes meanwhile go
+    // to a fresh feedback-draft (created by appendFileSync) and survive.
+    const ts = Date.now();
+    const stage = `${feedbackDraft}.committing-${ts}`;
+    renameSync(feedbackDraft, stage);
+
+    const rows = readJsonl<Comment>(stage);
+    if (rows.length === 0) {
+      try { unlinkSync(stage); } catch {}
+      return Response.json({ ok: true, accepted: 0, input_id: null });
+    }
+    // Append each into the inbox (drop the draft `id`; inbox doesn't need it).
+    for (const r of rows) {
+      appendJsonl(feedbackInbox, { ts: r.ts, url: r.url, selector: r.selector, comment: r.comment });
+    }
+    const inputId = appendInputEntry(
+      `Live annotations (${rows.length})`,
+      `User committed ${rows.length} annotation(s) via the preview overlay. ` +
+        "See `state/feedback-inbox` for the entries; process each by applying it to the relevant " +
+        "file in the output directory, then move the consumed entries to `state/feedback-resolved`. " +
+        "See the `live-annotate` skill for the full procedure."
+    );
+    try { unlinkSync(stage); } catch {}
+    return Response.json({ ok: true, accepted: rows.length, input_id: inputId });
+  });
+}
+
+// ---------- server ----------
 const server = Bun.serve({
   port: requestedPort,
   hostname: "0.0.0.0",
   async fetch(req) {
     const url = new URL(req.url);
     const pathname = url.pathname;
+    const method = req.method;
 
-    if (req.method === "POST" && pathname === "/feedback") {
-      const body = await readJsonBody(req);
-      if (!body || !Array.isArray(body.items) || body.items.length === 0) {
-        return new Response("bad request", { status: 400 });
-      }
-      const ts = isoNow();
-      for (const item of body.items) appendJsonl(feedbackInbox, { ts, ...item });
-      const inputId = appendInputEntry(
-        `Live annotations (${body.items.length})`,
-        `User submitted ${body.items.length} annotation(s) via the preview overlay. ` +
-          "See `state/feedback-inbox` for the entries; process each by applying it to the relevant " +
-          "file in the output directory, then move the consumed entries to `state/feedback-resolved`. " +
-          "See the `live-annotate` skill for the full procedure."
-      );
-      return Response.json({ ok: true, accepted: body.items.length, input_id: inputId });
+    // --- draft / commit (annotation flow) ---
+    if (method === "GET" && pathname === "/draft") return handleGetDraft();
+    if (method === "POST" && pathname === "/draft/feedback") return handlePostDraftFeedback(req);
+    if (method === "DELETE" && pathname.startsWith("/draft/feedback/")) {
+      const id = pathname.slice("/draft/feedback/".length);
+      if (!id) return new Response("bad request", { status: 400 });
+      return handleDeleteDraftFeedback(id);
     }
+    if (method === "DELETE" && pathname === "/draft") return handleDeleteDraftAll();
+    if (method === "POST" && pathname === "/commit") return handleCommit();
 
-    if (req.method === "POST" && pathname === "/tweak") {
+    // --- legacy /tweak (dormant; overlay UI is hidden but endpoint preserved) ---
+    if (method === "POST" && pathname === "/tweak") {
       const body = await readJsonBody(req);
       if (!body || !Array.isArray(body.items) || body.items.length === 0) {
         return new Response("bad request", { status: 400 });
@@ -154,11 +286,13 @@ const server = Bun.serve({
       return Response.json({ ok: true, accepted: body.items.length, input_id: inputId });
     }
 
+    // --- overlay script direct access ---
     if (pathname === "/__overlay.js") {
       return new Response(readOverlay(), { headers: { "Content-Type": "application/javascript; charset=utf-8" } });
     }
 
-    if (req.method !== "GET" && req.method !== "HEAD") {
+    // --- static files from output-dir ---
+    if (method !== "GET" && method !== "HEAD") {
       return new Response("method not allowed", { status: 405 });
     }
 
@@ -188,5 +322,5 @@ console.log(`  local:    http://localhost:${server.port}`);
 console.log(`  LAN:      http://<this-host-ip>:${server.port}  (bound to 0.0.0.0 — reachable from other machines)`);
 console.log(`  serving:  ${root}`);
 console.log(`  exec dir: ${execDir}`);
-console.log(`  POST /feedback  → ${feedbackInbox} + input.md`);
-console.log(`  POST /tweak     → ${tweakInbox} + input.md`);
+console.log(`  draft:    ${feedbackDraft}`);
+console.log(`  inbox:    ${feedbackInbox} (filled on POST /commit)`);

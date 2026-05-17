@@ -11,7 +11,14 @@ description: |
 
 # live-annotate
 
-When the preview-server receives annotation batches from the in-browser overlay, it writes one JSONL record per annotation to `${EXEC}/state/feedback-inbox` and appends a new entry to `${EXEC}/input.md`. This skill defines how the agent **drains** that inbox.
+When the user is annotating in the browser, the preview-server holds each comment as a **draft** in `${EXEC}/state/feedback-draft`. Drafts can be viewed, deleted, and added to from any browser — they are not committed to the agent yet.
+
+When the user clicks **Send batch**, the preview-server atomically:
+1. drains every draft into `${EXEC}/state/feedback-inbox` (JSONL, append-only),
+2. appends a new `input-NNN` entry to `${EXEC}/input.md`,
+3. clears `feedback-draft`.
+
+This skill defines how the agent **drains the inbox** after commit. `feedback-draft` is the user's editable staging area — the agent SHOULD NOT process drafts; only the inbox.
 
 Invoke this skill on demand when:
 

@@ -28,7 +28,9 @@ This document uses two root variables to refer to files unambiguously. Every fil
 
 All deliverables are written to a single directory chosen by the user — whatever the shape (a single HTML file, a multi-page site, a deck, generated media), everything goes in that one directory.
 
-**Artifacts MUST be served via `${SKILL}/scripts/preview-server`** so the user can preview them in a browser AND drop in-page feedback back to the agent. The preview-server does three things: serves files from the output directory, injects an overlay JS that lets the user click-to-annotate or click-to-tweak page elements, and accepts the resulting batches at `POST /feedback` / `POST /tweak` — writing each to `${EXEC}/state/feedback-inbox` or `${EXEC}/state/tweak-inbox` (JSONL) and appending a corresponding `input-NNN` entry to `${EXEC}/input.md` so the agent picks it up on its next turn. Plain `python3 -m http.server` is **not** sufficient — it cannot inject the overlay or receive POST. See the `live-annotate` and `live-tweak` functional skills for inbox processing procedures.
+**Artifacts MUST be served via `${SKILL}/scripts/preview-server`** so the user can preview them in a browser AND drop in-page feedback back to the agent. The preview-server serves files from the output directory, injects an overlay JS that lets the user click any element to leave a comment, and persists those comments **server-side** as drafts in `${EXEC}/state/feedback-draft` (JSONL). Drafts are visible across all browser tabs and survive tab close. When the user clicks **Send batch** the server atomically drains the draft into `${EXEC}/state/feedback-inbox` (the agent-facing queue) and appends an `input-NNN` entry to `${EXEC}/input.md`. Plain `python3 -m http.server` is **not** sufficient — it cannot inject the overlay or receive POST. See the `live-annotate` functional skill for inbox processing.
+
+Tweak mode (click-to-edit CSS) exists in the codebase but the UI is currently HIDDEN — tweak inbox / endpoints are preserved dormant for future revival.
 
 ---
 
@@ -151,6 +153,10 @@ All keys are files under `${EXEC}/state/`.
 | `produced-files` | Markdown table | designing | current list of files in the output directory (path + status); rewritten as files are added / replaced / removed |
 | `current-revision` | plain text | designing | latest iteration identifier |
 | `design-decisions` | Markdown | designing | major choices + rationale |
+| `feedback-draft` | JSONL (one comment per line, with `id`) | designing | pending annotations from the preview overlay before the user clicks Send batch. Server-managed via `POST /draft/feedback` / `DELETE /draft/feedback/:id` / `POST /commit`. Agent MAY read but SHOULD NOT process — items only graduate to `feedback-inbox` on commit. |
+| `feedback-inbox` | JSONL (`ts`, `url`, `selector`, `comment`) | designing | committed annotations awaiting agent processing. Each commit also appends a corresponding `input-NNN` entry to `input.md`. See `live-annotate` skill. |
+| `feedback-resolved` | JSONL | designing | processed entries moved here by the `live-annotate` skill. |
+| `tweak-inbox` / `tweak-resolved` | JSONL | designing | dormant — tweak UI is hidden but server endpoint still appends here if invoked. |
 
 Subdirectories under `${EXEC}/state/` are reserved for future namespacing; not used in v0.1.0.
 
