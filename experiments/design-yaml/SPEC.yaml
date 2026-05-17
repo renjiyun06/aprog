@@ -1,0 +1,197 @@
+# design skill — YAML spec (experiment).
+#
+# Companion prose lives in docs/. Where this spec points at docs (e.g.,
+# `why: docs/rationale.md#resume-b`), the LLM is expected to read that
+# section before acting on the surrounding rule. Spec carries the
+# machinery; docs carry the judgment.
+
+name: design
+version: 0.1.0-yaml-experiment
+kind: application
+description: |
+  Designs websites, mobile prototypes, hi-fi mockups, slide decks,
+  single-page artifacts, and media outputs (image / video / audio).
+
+depends_on:
+  - skill: state
+    note: |
+      MUST be loaded first. This spec uses ${EXEC}, meta.yml, input.md,
+      state/, input_cursor, and resume semantics — all defined by the
+      state protocol.
+
+paths:
+  EXEC: ~/.aprog/<execution-id>/   # current execution directory
+  SKILL: <directory holding this SPEC.yaml>
+
+# ---------------------------------------------------------------------------
+# Output channel — every artifact must be served via the preview-server so
+# the user can inspect AND drop in-page feedback back to the agent.
+# ---------------------------------------------------------------------------
+output:
+  serve_via: ${SKILL}/scripts/preview-server
+  why: docs/rationale.md#preview-server
+  forbidden_fallbacks:
+    - "python3 -m http.server"   # cannot inject overlay JS or accept POST
+  inbox_endpoints:
+    - method: POST
+      path: /feedback
+      writes_jsonl: ${EXEC}/state/feedback-inbox
+      handled_by: functional-skill live-annotate
+    - method: POST
+      path: /tweak
+      writes_jsonl: ${EXEC}/state/tweak-inbox
+      handled_by: functional-skill live-tweak
+  on_inbox_write: append a new input-NNN entry to ${EXEC}/input.md
+
+# ---------------------------------------------------------------------------
+# State KV schema. Each row is a file under ${EXEC}/state/ — filename IS
+# the key. `format` is for humans; the protocol stores raw bytes.
+# ---------------------------------------------------------------------------
+state_kv:
+  - { key: brand-brief,            format: md,        phase: discovery,  purpose: accumulating brand/intent/audience }
+  - { key: discovery-notes,        format: md,        phase: discovery,  purpose: scratch of open axes / observations }
+  - { key: selected-template,      format: text,      phase: selecting,  required: true, purpose: "single design-template name (the shape)" }
+  - { key: selected-design-system, format: text,      phase: selecting,  required: true, purpose: "single design-system name (the brand)" }
+  - { key: selected-craft,         format: lines,     phase: selecting,                  purpose: "opted-in craft rule names" }
+  - { key: output-dir,             format: abs-path,  phase: selecting,  required: true, purpose: "where artifacts go" }
+  - { key: target-screens,         format: lines,     phase: designing,                  purpose: "screens / artifacts to produce" }
+  - { key: produced-files,         format: md-table,  phase: designing,  mutable: true,  purpose: "current files on disk; rewritten on add/replace/remove" }
+  - { key: current-revision,       format: text,      phase: designing,                  purpose: "iteration identifier" }
+  - { key: design-decisions,       format: md,        phase: designing,  append: true,   purpose: "major choices + rationale" }
+
+# ---------------------------------------------------------------------------
+# FSM. The state protocol does NOT prescribe phase names; each program
+# defines its own.
+# ---------------------------------------------------------------------------
+phases:
+
+  discovery:
+    goal: build a substantive brief — brand, intent, audience, artifact kind
+    principles: docs/principles.md#discovery
+    behavior:
+      - ask one open question at a time
+      - cover over time: project kind, audience, brand voice, references, constraints, success criteria
+      - each user reply should narrow the design space or surface a new unanswered axis
+    writes: [brand-brief, discovery-notes]
+    transitions:
+      - to: selecting
+        when: |
+          brand-brief covers kind, audience, brand voice, and ≥1 reference;
+          AND user's recent answers no longer introduce new uncertainty.
+
+  selecting:
+    goal: lock in design-template, design-system, opted-in craft, output-dir
+    on_entry:
+      load_indices:
+        - run: ${SKILL}/scripts/list-resources design-templates
+          why: candidates proposed in this phase
+        - run: ${SKILL}/scripts/list-resources design-systems
+          why: candidates proposed in this phase
+        - run: ${SKILL}/scripts/list-resources craft
+          why: candidates proposed in this phase
+        - run: ${SKILL}/scripts/list-resources skills
+          why: kept in working memory for on-demand invocation later in designing
+      constraints:
+        - consume FULL output of every list-resources run
+        - do NOT pipe through head / tail / grep / awk; do NOT truncate
+        - see docs/rationale.md#index-truncation
+    behavior:
+      - narrow each category to 2–3 candidates that best match the brief
+      - only THEN Read the full SKILL.md / DESIGN.md / craft file for proposed candidates
+      - propose 2–3 design-templates with one-sentence rationale
+      - propose 2–3 design-systems matching the brand voice
+      - propose 2–4 craft rules
+      - ask user for output-dir (offer a default if no preference)
+    writes: [selected-template, selected-design-system, selected-craft, output-dir]
+    notes:
+      cardinality: docs/rationale.md#template-vs-craft-cardinality
+    transitions:
+      - to: designing
+        when: all required state writes set AND output-dir exists on disk
+
+  designing:
+    goal: produce and iterate artifacts
+    on_entry:
+      load:
+        a_execution_state:
+          - ${EXEC}/state/brand-brief
+          - ${EXEC}/state/design-decisions
+        b_resource_library:
+          why: docs/rationale.md#resume-b
+          required:
+            - ${SKILL}/resources/design-systems/${state.selected-design-system}/DESIGN.md
+            - ${SKILL}/resources/design-templates/${state.selected-template}/SKILL.md
+          optional_if_present:
+            - ${SKILL}/resources/design-systems/${state.selected-design-system}/tokens.css
+            - ${SKILL}/resources/design-systems/${state.selected-design-system}/components.html
+            - ${SKILL}/resources/design-templates/${state.selected-template}/references/*.md
+          per_state_value:
+            for_each: ${name} in ${state.selected-craft}
+            read: ${SKILL}/resources/craft/${name}.md
+        c_functional_skill_index:
+          loaded_in_phase: selecting
+          kept_in_memory_for: designing
+          body_loaded_on_demand: true
+          why: docs/rationale.md#functional-skill-index
+      start_server:
+        cmd: ${SKILL}/scripts/preview-server ${state.output-dir} ${EXEC}
+        bind: 0.0.0.0
+        surface_to_user: url
+    conflict_precedence:
+      - brand > craft         # on visual tokens
+      - user_input > all      # latest input.md entry wins everything
+      - why: docs/rationale.md#conflict-precedence
+    behavior:
+      - generate first artifact set; write to ${state.output-dir}
+      - update ${state.produced-files} to reflect what now exists
+      - on each new input-NNN: determine what changed; regenerate / add / replace / remove
+      - on a delete request: remove file(s); rewrite produced-files; log to design-decisions
+      - keep produced-files in sync with disk reality
+      - advance input_cursor only AFTER an input is fully reflected
+      - on-demand: match against the functional-skill index loaded in selecting; Read full SKILL.md only at the moment of invocation
+    writes: [target-screens, produced-files, current-revision, design-decisions]
+    transitions:
+      - to: done
+        when: user explicitly signals completion
+
+  done:
+    goal: clean handoff
+    actions:
+      - write summary.md into ${state.output-dir}
+      - set meta.yml.status = completed
+    transitions:
+      - to: designing
+        when: a new input-NNN arrives after done
+
+# ---------------------------------------------------------------------------
+# Resume contract. Phase-aware. designing is the heaviest because the
+# skill's resource library must be re-pulled into context.
+# ---------------------------------------------------------------------------
+resume:
+  agent_history_persisted: false
+  recoverable_surface:
+    - ${EXEC}/meta.yml
+    - ${EXEC}/input.md
+    - ${EXEC}/state/
+  steps:
+    - read meta.yml — note phase, input_cursor, status
+    - read every input.md entry AFTER input_cursor
+    - read state/ keys relevant to the current phase
+    - conditional:
+        if: phase == designing
+        then:
+          - rerun phases.designing.on_entry.load (groups A, B, C)
+          - rerun phases.selecting.on_entry.load_indices.skills (for the functional skill index)
+          - restart preview-server (the previous instance is gone)
+          - reconcile state.produced-files with what's actually on disk
+          - verify selected-template / selected-design-system / output-dir still valid
+          - why_critical: docs/rationale.md#resume-b
+    - take action per current phase
+    - advance meta.yml.input_cursor only after each input is FULLY reflected
+
+# ---------------------------------------------------------------------------
+# Cross-references
+# ---------------------------------------------------------------------------
+docs:
+  - docs/principles.md   # discovery philosophy + guiding principles
+  - docs/rationale.md    # the "why" passages — read when SPEC points here
