@@ -1,0 +1,144 @@
+#!/usr/bin/env bun
+//
+// list-resources <category>
+//
+// Prints a compact "<name>: <description>" listing for every resource entry
+// in the chosen category. Lets the agent narrow candidates without loading
+// every full body into context.
+//
+//   flat-md categories (resources/<category>/<name>.md):
+//     product-patterns   — broad product shapes (marketplace / subscription / SaaS / 工单 / ...)
+//     module-recipes     — reusable business module designs (优惠券 / 积分 / 订单生命周期 / ...)
+//     process-templates  — reusable process skeletons (下单 / 退款 / 对账差异处理 / ...)
+//     role-cards         — role + concerns templates (消费者 / 加盟商 / 客服 / 运营 / 财务 / ...)
+//     checklists         — cross-cutting checks (状态机闭环 / 金钱双闭环 / ...)
+//     principles         — macro principles ("金钱流必须双闭环" / ...)
+//
+//   subdir categories (resources/<category>/<name>/...):
+//     render-templates   — HTML rendering styles for the brief, each a folder with template.html
+//     skills             — functional skills (e.g. live-annotate); each a folder with SKILL.md
+//
+//   output line format:   <name>: <one-line description>
+//   description is whitespace-collapsed; no length truncation.
+//
+// Resources start EMPTY by design. shape graduates patterns through the
+// review phase's harvest pass. Calling list-resources on an empty category
+// prints nothing (exit 0) — that is correct, not an error.
+
+import { readdirSync, readFileSync, existsSync, statSync } from "fs";
+import { join } from "path";
+
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+});
+
+const FLAT = ["product-patterns", "module-recipes", "process-templates", "role-cards", "checklists", "principles"] as const;
+const SUBDIR_FRONTMATTER = ["render-templates", "skills"] as const;
+const VALID = [...FLAT, ...SUBDIR_FRONTMATTER] as const;
+type Category = (typeof VALID)[number];
+
+const category = process.argv[2] as Category | undefined;
+if (!category || !VALID.includes(category)) {
+  console.error(`Usage: list-resources <${VALID.join("|")}>`);
+  process.exit(1);
+}
+
+const scriptDir = import.meta.dir;
+const root = join(scriptDir, "..", "resources", category);
+if (!existsSync(root) || !statSync(root).isDirectory()) {
+  // Missing category dir is a setup bug; empty category dir is fine.
+  console.error(`No such resource dir: ${root}`);
+  process.exit(1);
+}
+
+function extractFrontmatterDesc(content: string): string {
+  const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fm) return "";
+  const block = fm[1];
+
+  // Multi-line "description: |"
+  const multi = block.match(/^description:\s*\|\s*\n((?:[ \t]+[^\n]*\n?)+)/m);
+  if (multi) {
+    return multi[1]
+      .split("\n")
+      .map((l) => l.replace(/^[ \t]+/, "").trimEnd())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  // Single-line "description: foo"
+  const single = block.match(/^description:\s*(.+)$/m);
+  if (single) return single[1].trim();
+
+  return "";
+}
+
+// Same intro extractor as design/scripts/list-resources: first `# title`
+// followed by everything up to (but not including) the first `##` or `---`.
+function extractMdIntro(content: string, keepQuotes = true): string {
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1]?.trim() ?? "";
+
+  const startIdx = titleMatch ? (titleMatch.index ?? 0) + titleMatch[0].length : 0;
+  const rest = content.slice(startIdx);
+  const stop = rest.match(/^(?:##\s|---+\s*$)/m);
+  const endIdx = stop ? (stop.index ?? rest.length) : rest.length;
+
+  const intro = rest
+    .slice(0, endIdx)
+    .split("\n")
+    .map((line) => {
+      if (line.trimStart().startsWith(">")) {
+        return keepQuotes ? line.replace(/^\s*>\s*/, "").trim() : "";
+      }
+      return line.trim();
+    })
+    .filter(Boolean)
+    .join(" ");
+
+  if (title && intro) return `${title} — ${intro}`;
+  return title || intro;
+}
+
+function compact(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+// Flat .md categories: prefer frontmatter description, fall back to # title + intro.
+// Resources promoted via the review.harvest pass carry frontmatter (see SKILL.md);
+// hand-written or imported files may not — both work.
+if ((FLAT as readonly string[]).includes(category)) {
+  const files = readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".md"))
+    .map((e) => e.name)
+    .sort();
+  for (const fname of files) {
+    const name = fname.replace(/\.md$/, "");
+    const content = readFileSync(join(root, fname), "utf-8");
+    let info = extractFrontmatterDesc(content);
+    if (!info) info = extractMdIntro(content, false);
+    process.stdout.write(`${name}: ${compact(info)}\n`);
+  }
+} else {
+  // Subdir categories: each entry is a folder with SKILL.md (skills) or
+  // template.html + optional README.md (render-templates).
+  const dirs = readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+  for (const name of dirs) {
+    let info = "";
+    if (category === "skills") {
+      const p = join(root, name, "SKILL.md");
+      if (existsSync(p)) info = extractFrontmatterDesc(readFileSync(p, "utf-8"));
+    } else if (category === "render-templates") {
+      // Prefer README.md description; fall back to template.html title comment.
+      const readme = join(root, name, "README.md");
+      if (existsSync(readme)) {
+        info = extractFrontmatterDesc(readFileSync(readme, "utf-8")) ||
+               extractMdIntro(readFileSync(readme, "utf-8"));
+      }
+    }
+    process.stdout.write(`${name}: ${compact(info)}\n`);
+  }
+}
