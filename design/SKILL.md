@@ -26,59 +26,43 @@ kind: application
 depends_on:
   - skill: state
     note: MUST be loaded first. The state skill defines ${EXEC}, meta.yml, input.md, state/, input_cursor, and resume.
+  - skill: live-annotate
+    note: |
+      Provides the preview-server + overlay + draft/commit pipeline used by the
+      designing phase. ${LIVE_ANNOTATE} points to its directory. The
+      feedback-inbox drain procedure for design is defined in
+      aprog/live-annotate/SKILL.md under drain_procedure (design branch:
+      source-of-truth IS the HTML file under output-dir; edit directly).
 
 paths:
-  EXEC: ~/.aprog/<execution-id>/   # current execution directory
-  SKILL: <directory holding this SKILL.md>
+  EXEC:          ~/.aprog/<execution-id>/   # current execution directory
+  SKILL:         <directory holding this SKILL.md>
+  LIVE_ANNOTATE: ${SKILL}/../live-annotate/ # sibling aprog skill — preview-server + overlay live here
 
 # ---------------------------------------------------------------------------
-# Output channel — every artifact must be served via the preview-server so
-# the user can preview AND drop in-page feedback. Pending feedback is
-# server-side state, NOT browser sessionStorage.
+# Output channel — every artifact is served via the live-annotate preview
+# server. The full wire protocol (endpoints, draft/commit flow, atomicity,
+# server-side draft storage rationale) lives in aprog/live-annotate/SKILL.md.
+# Below is design's application-specific binding.
 # ---------------------------------------------------------------------------
 output:
-  serve_via: ${SKILL}/scripts/preview-server
+  serve_via: ${LIVE_ANNOTATE}/scripts/preview-server
   forbidden_fallbacks:
     - "python3 -m http.server"   # cannot inject overlay JS or accept POST
-  why: |
-    The skill mandates serving artifacts via the preview-server, not a
-    generic static server. Three reasons:
+  source_of_truth: |
+    For design, the source-of-truth file IS the HTML/CSS/JS under
+    ${state.output-dir}. When the live-annotate drain procedure resolves
+    (url, selector) → file, the agent edits that file directly; the
+    preview-server auto-serves the next refresh. NO render step in design
+    (contrast: shape, where state/ is canonical and HTML is a view).
 
-    1. Overlay injection — the preview-server injects an in-page overlay
-       script that lets the user click-to-annotate any element. Without
-       it the live-feedback loop has no UI surface.
-    2. Server-side draft storage — pending annotations live as JSONL on
-       the server in ${EXEC}/state/feedback-draft, NOT in the browser.
-       So: drafts survive tab close, are visible across browsers / tabs
-       / collaborators (refresh = sync), and the agent can read drafts
-       as a regular state KV BEFORE the user commits. Static servers
-       cannot offer this.
-    3. Atomic commit — POST /commit atomically drains the draft into
-       state/feedback-inbox (the agent-facing queue), appends a new
-       input-NNN entry to input.md, and clears the draft. The atomicity
-       (file rename + in-process mutex) prevents the loss/duplication
-       race when two browsers commit simultaneously.
-
-    The preview-server bridges two worlds: the browser (rich UI surface)
-    and input.md (the protocol's serial instruction stream). The
-    two-stage draft → commit design lets the user think in the browser
-    at their pace, then send a coherent batch when ready.
-
-    Tweak mode (click-to-edit CSS) is hidden in the current overlay;
-    the modal and /tweak endpoint are preserved dormant in case the
-    workflow returns.
-
-  flow:
-    - user clicks an element in the browser → comment saved to state/feedback-draft
-    - drafts are mutable from any browser (delete, add, see others' pending)
-    - Send batch → POST /commit → server drains draft into state/feedback-inbox, appends a new input-NNN entry to input.md, clears the draft
-
-  endpoints:
-    - { method: GET,    path: /draft,              returns: "{ feedback: Comment[] }" }
-    - { method: POST,   path: /draft/feedback,     body: "{ url, selector, comment }", returns: "{ ok, id, count }" }
-    - { method: DELETE, path: /draft/feedback/:id, returns: "{ ok, count }" }
-    - { method: DELETE, path: /draft,              returns: "{ ok }" }
-    - { method: POST,   path: /commit,             returns: "{ ok, accepted, input_id }" }
+  protocol_ref: |
+    See aprog/live-annotate/SKILL.md for:
+      - endpoints (GET/POST/DELETE /draft, POST /commit)
+      - draft → commit semantics + atomicity guarantees
+      - inbox schema and drain_procedure
+      - idempotency rules and failure modes
+      - overlay UX (Ctrl+`, arrow-key DOM walk, draft badges)
 
 # ---------------------------------------------------------------------------
 # State KV schema. Each row is a file under ${EXEC}/state/ — the filename
@@ -292,25 +276,25 @@ phases:
           kept_in_memory_for: designing
           body_loaded_on_demand: true
           why: |
-            Functional skills (live-annotate, future on-demand
-            utilities) are NOT selected at project level — they're
-            matched against on-demand mid-task, when an event triggers
-            them (e.g., preview-server writes an inbox entry).
-
-            For the match to work, the agent needs the INDEX (header
-            info per skill — name + description) IN WORKING MEMORY.
-            The full body is loaded only when the skill is actually
-            invoked.
+            On-demand functional skills bundled under design/resources/skills/
+            (e.g. live-tweak, dormant; future utilities) are NOT selected at
+            project level — they're matched against on-demand mid-task, when
+            an event triggers them. For the match to work, the agent needs
+            the INDEX (header info per skill — name + description) in
+            working memory. The full body is loaded only when the skill is
+            actually invoked.
 
             Loading the index at selecting (not designing) entry is
             deliberate: by the time the user finishes selecting and the
-            first artifacts are generating, on-demand matches can
-            already happen (a tweak might arrive seconds after first
-            preview). Waiting until designing entry would create a
-            window where the agent doesn't yet know what utilities
-            exist.
+            first artifacts are generating, on-demand matches can already
+            happen. Waiting until designing entry would create a window
+            where the agent doesn't yet know what utilities exist.
+
+            NOT IN THIS INDEX: live-annotate. It is a top-level depends_on,
+            already loaded — its preview-server is the surface that feeds
+            on-demand events into input.md in the first place.
       start_server:
-        cmd: ${SKILL}/scripts/preview-server ${state.output-dir} ${EXEC}
+        cmd: ${LIVE_ANNOTATE}/scripts/preview-server ${state.output-dir} ${EXEC}
         bind: 0.0.0.0
         surface_to_user: url
     conflict_precedence:
@@ -346,7 +330,7 @@ phases:
       - keep produced-files in sync with disk reality
       - advance input_cursor only AFTER an input is fully reflected
       - on-demand: match against the functional-skill index loaded in selecting; Read full SKILL.md only at the moment of invocation
-      - feedback-inbox processing is delegated to the live-annotate functional skill
+      - feedback-inbox processing is delegated to the live-annotate library skill
     writes: [target-screens, produced-files, current-revision, design-decisions]
     transitions:
       - to: done

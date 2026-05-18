@@ -26,7 +26,6 @@
 //                                 atomic: rename draft → temp → drain into inbox →
 //                                 append input.md entry → unlink temp.
 //
-// /tweak endpoint preserved (dormant; UI button hidden) for future revival.
 
 import { readFileSync, writeFileSync, existsSync, statSync, appendFileSync, mkdirSync, renameSync, unlinkSync } from "fs";
 import { join, extname, dirname, resolve } from "path";
@@ -60,7 +59,6 @@ const readOverlay = (): string => readFileSync(overlayPath, "utf-8");
 const inputMdPath = join(execDir, "input.md");
 const feedbackInbox = join(execDir, "state", "feedback-inbox");
 const feedbackDraft = join(execDir, "state", "feedback-draft");
-const tweakInbox = join(execDir, "state", "tweak-inbox");
 
 mkdirSync(join(execDir, "state"), { recursive: true });
 
@@ -239,9 +237,12 @@ function handleCommit(): Promise<Response> {
     const inputId = appendInputEntry(
       `Live annotations (${rows.length})`,
       `User committed ${rows.length} annotation(s) via the preview overlay. ` +
-        "See `state/feedback-inbox` for the entries; process each by applying it to the relevant " +
-        "file in the output directory, then move the consumed entries to `state/feedback-resolved`. " +
-        "See the `live-annotate` skill for the full procedure."
+        "See `state/feedback-inbox` for the entries — each carries (ts, url, selector, comment). " +
+        "Drain via the `live-annotate` skill's procedure: resolve (url, selector) to the calling " +
+        "application's source-of-truth file (design → the HTML in output-dir; shape → a state/ " +
+        "file + re-run render; other applications define their own resolver), apply the edit, " +
+        "append to `state/feedback-resolved`, remove the consumed line from `feedback-inbox`, and " +
+        "advance the input cursor."
     );
     try { unlinkSync(stage); } catch {}
     return Response.json({ ok: true, accepted: rows.length, input_id: inputId });
@@ -267,24 +268,6 @@ const server = Bun.serve({
     }
     if (method === "DELETE" && pathname === "/draft") return handleDeleteDraftAll();
     if (method === "POST" && pathname === "/commit") return handleCommit();
-
-    // --- legacy /tweak (dormant; overlay UI is hidden but endpoint preserved) ---
-    if (method === "POST" && pathname === "/tweak") {
-      const body = await readJsonBody(req);
-      if (!body || !Array.isArray(body.items) || body.items.length === 0) {
-        return new Response("bad request", { status: 400 });
-      }
-      const ts = isoNow();
-      for (const item of body.items) appendJsonl(tweakInbox, { ts, ...item });
-      const inputId = appendInputEntry(
-        `Live tweaks (${body.items.length})`,
-        `User submitted ${body.items.length} structured tweak(s) via the preview overlay. ` +
-          "See `state/tweak-inbox` for the entries; apply each `props` change to the relevant " +
-          "CSS rule (or inline style if more specific), then move the consumed entries to " +
-          "`state/tweak-resolved`. See the `live-tweak` skill for the full procedure."
-      );
-      return Response.json({ ok: true, accepted: body.items.length, input_id: inputId });
-    }
 
     // --- overlay script direct access ---
     if (pathname === "/__overlay.js") {
