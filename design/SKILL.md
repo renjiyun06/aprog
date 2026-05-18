@@ -1,6 +1,6 @@
 ---
 name: design
-version: 0.3.0
+version: 0.4.0
 kind: application
 description: |
   Designs websites, mobile prototypes, hi-fi mockups, slide decks,
@@ -9,86 +9,57 @@ description: |
 
 # design
 
-> **Required first step**: load the `state` skill **before** proceeding.
-> This spec is layered on top of the state protocol; every reference to
-> `${EXEC}`, `meta.yml`, `input.md`, `state/`, `input_cursor`, and "resume"
-> assumes you've already read the state skill.
-
----
-
-## Spec
-
 ```yaml
 name: design
-version: 0.3.0
+version: 0.4.0
 kind: application
 
 depends_on:
   - skill: state
-    note: MUST be loaded first. The state skill defines ${EXEC}, meta.yml, input.md, state/, input_cursor, and resume.
+    note: MUST be loaded first. The state skill defines ${EXEC}, meta.yml, input.md, execution-state/, state.yaml, input_cursor, and resume.
   - skill: live-annotate
     note: |
       Provides the preview-server + overlay + draft/commit pipeline used by the
-      designing phase. ${LIVE_ANNOTATE} points to its directory. The
-      feedback-inbox drain procedure for design is defined in
-      aprog/live-annotate/SKILL.md under drain_procedure (design branch:
-      source-of-truth IS the HTML file under output-dir; edit directly).
+      designing phase. Its SKILL.md defines server invocation, endpoints, and
+      drain_procedure.
 
 paths:
-  EXEC:          ~/.aprog/<execution-id>/   # current execution directory
-  SKILL:         <directory holding this SKILL.md>
-  LIVE_ANNOTATE: ${SKILL}/../live-annotate/ # sibling aprog skill — preview-server + overlay live here
+  EXEC:  ~/.aprog/<execution-id>/
+  SKILL: <directory holding this SKILL.md>
 
-# ---------------------------------------------------------------------------
-# Output channel — every artifact is served via the live-annotate preview
-# server. The full wire protocol (endpoints, draft/commit flow, atomicity,
-# server-side draft storage rationale) lives in aprog/live-annotate/SKILL.md.
-# Below is design's application-specific binding.
-# ---------------------------------------------------------------------------
 output:
-  serve_via: ${LIVE_ANNOTATE}/scripts/preview-server
-  forbidden_fallbacks:
-    - "python3 -m http.server"   # cannot inject overlay JS or accept POST
-  source_of_truth: |
-    For design, the source-of-truth file IS the HTML/CSS/JS under
-    ${state.output-dir}. When the live-annotate drain procedure resolves
-    (url, selector) → file, the agent edits that file directly; the
-    preview-server auto-serves the next refresh. NO render step in design
-    (contrast: shape, where state/ is canonical and HTML is a view).
+  serve_via:
+    provider: live-annotate
+    component: preview-server
 
-  protocol_ref: |
-    See aprog/live-annotate/SKILL.md for:
-      - endpoints (GET/POST/DELETE /draft, POST /commit)
-      - draft → commit semantics + atomicity guarantees
-      - inbox schema and drain_procedure
-      - idempotency rules and failure modes
-      - overlay UX (Ctrl+`, arrow-key DOM walk, draft badges)
+state_schema:
+  - { key: brand-brief,            storage: by-ref, content_type: markdown, description: accumulating brand/intent/audience (written across discovery) }
+  - { key: discovery-notes,        storage: by-ref, content_type: markdown, description: scratch of open axes / observations (discovery) }
+  - { key: selected-template,      storage: inline,                          description: single design-template name — the shape (selecting; required by designing) }
+  - { key: selected-design-system, storage: inline,                          description: single design-system name — the brand (selecting; required by designing) }
+  - { key: selected-craft,         storage: inline,                          description: opted-in craft rule names — list of strings (selecting) }
+  - { key: output-dir,             storage: inline,                          description: absolute path where artifacts go (selecting; required by designing) }
+  - { key: target-screens,         storage: inline,                          description: screens / artifacts to produce — list of strings (designing) }
+  - { key: produced-files,         storage: by-ref, content_type: markdown, description: current files on disk as a markdown table; rewritten on add/replace/remove (designing) }
+  - { key: current-revision,       storage: inline,                          description: iteration identifier (designing) }
+  - { key: design-decisions,       storage: by-ref, content_type: markdown, description: major choices + rationale; append-only prose log (designing) }
 
-# ---------------------------------------------------------------------------
-# State KV schema. Each row is a file under ${EXEC}/state/ — the filename
-# IS the key. `format` is for humans; the protocol stores raw bytes.
-# ---------------------------------------------------------------------------
-state_kv:
-  - { key: brand-brief,            format: md,        phase: discovery,  purpose: accumulating brand/intent/audience }
-  - { key: discovery-notes,        format: md,        phase: discovery,  purpose: scratch of open axes / observations }
-  - { key: selected-template,      format: text,      phase: selecting,  required: true, purpose: "single design-template name (the shape)" }
-  - { key: selected-design-system, format: text,      phase: selecting,  required: true, purpose: "single design-system name (the brand)" }
-  - { key: selected-craft,         format: lines,     phase: selecting,                  purpose: "opted-in craft rule names" }
-  - { key: output-dir,             format: abs-path,  phase: selecting,  required: true, purpose: "where artifacts go" }
-  - { key: target-screens,         format: lines,     phase: designing,                  purpose: "screens / artifacts to produce" }
-  - { key: produced-files,         format: md-table,  phase: designing,  mutable: true,  purpose: "current files on disk; rewritten on add/replace/remove" }
-  - { key: current-revision,       format: text,      phase: designing,                  purpose: "iteration identifier" }
-  - { key: design-decisions,       format: md,        phase: designing,  append: true,   purpose: "major choices + rationale" }
-  - { key: feedback-draft,         format: jsonl,     phase: designing,  mutable: true,  purpose: "pending annotations from preview overlay; preview-server manages; AGENT MAY READ but SHOULD NOT process — items graduate to feedback-inbox only on commit" }
-  - { key: feedback-inbox,         format: jsonl,     phase: designing,  append: true,   purpose: "committed annotations awaiting agent processing; each commit also appends an input-NNN entry to input.md" }
-  - { key: feedback-resolved,      format: jsonl,     phase: designing,  append: true,   purpose: "processed entries moved here by live-annotate skill" }
-  - { key: tweak-inbox,            format: jsonl,     phase: designing,  dormant: true,  purpose: "dormant; tweak UI hidden but server endpoint preserved" }
-
-cardinality:
-  template: 1   # exactly one design-template per project
-  design_system: 1
-  craft: N      # opt into many; they combine
-  why: |
+resources:
+  overview: |
+    design ships with a bundled resource library under ${SKILL}/resources/.
+    Four categories of building blocks, each with a different role in the
+    final artifact and a different binding to the project. The skill never
+    invents a brand or a layout from scratch — it composes one by picking
+    from this library at the selecting phase, then loading the picks into
+    working memory at designing.
+  root: ${SKILL}/resources/
+  list_command: ${SKILL}/scripts/list-resources <category>
+  categories:
+    - { name: design-templates, role: SHAPE of the deliverable (deck, multi-page site, mobile prototype, ...), cardinality: 1 per project,     bound_at: selecting }
+    - { name: design-systems,   role: BRAND VOICE (tokens, components, prose voice),                            cardinality: 1 per project,     bound_at: selecting }
+    - { name: craft,            role: universal HYGIENE rules (typography, color contrast, anti-AI-slop, ...),  cardinality: N (opt-in),         bound_at: selecting }
+    - { name: skills,           role: on-demand UTILITIES matched mid-task (live-tweak, screenshot, ...),       cardinality: on-demand,          bound_at: matched at designing, never pre-selected }
+  cardinality_rationale: |
     The asymmetry is intentional.
 
     A design-template defines the SHAPE of the deliverable (a deck is
@@ -108,32 +79,27 @@ cardinality:
     not a contradiction — it's three orthogonal disciplines layered on
     the same artifact.
 
-    So: shape = 1, brand = 1, hygiene = N. The spec encodes this with
-    `required: true` on the singular fields and a plain list for craft.
+    Skills are NOT bound at project level. They are matched on-demand
+    during designing when an event or user request triggers them.
+    Their indices are loaded into memory in selecting (so matching can
+    happen the moment designing starts), but no skill is "selected"
+    up-front. An execution may invoke zero, one, or many.
 
-# ---------------------------------------------------------------------------
-# Resource loading discipline — recurs across phases. The discipline is:
-#   INDICES are loaded WHOLE; BODIES are loaded ON DEMAND.
-# Specific phase rules below honor this.
-# ---------------------------------------------------------------------------
-resource_loading_discipline: |
-  - INDICES (frontmatter / header info from list-resources) are loaded
-    WHOLE. When the spec says `run: ${SKILL}/scripts/list-resources
-    <category>`, consume the ENTIRE output. Piping through head, tail,
-    grep, or awk produces a silent partial index — matches against it
-    silently miss entries. See `phases.selecting.on_entry.constraints`
-    for the consequence.
-  - BODIES (full SKILL.md / DESIGN.md / craft files) are loaded ON
-    DEMAND. Reading them upfront wastes context. Read only the
-    candidates you're proposing or invoking. Exception: the SELECTED
-    template and design-system are read in full at designing entry —
-    they're the working memory for generation (see
-    `phases.designing.on_entry.load.b_resource_library`).
+    So: shape = 1, brand = 1, hygiene = N, skills = on-demand.
+  loading_discipline: |
+    - INDICES (frontmatter / header info from list-resources) are loaded
+      WHOLE. When the spec says `run: ${SKILL}/scripts/list-resources
+      <category>`, consume the ENTIRE output. Piping through head, tail,
+      grep, or awk produces a silent partial index — matches against it
+      silently miss entries. See `phases.selecting.on_entry.constraints`
+      for the consequence.
+    - BODIES (full SKILL.md / DESIGN.md / craft files) are loaded ON
+      DEMAND. Reading them upfront wastes context. Read only the
+      candidates you're proposing or invoking. Exception: the SELECTED
+      template and design-system are read in full at designing entry —
+      they're the working memory for generation (see
+      `phases.designing.on_entry.load.b_resource_library`).
 
-# ---------------------------------------------------------------------------
-# FSM. The state protocol does NOT prescribe phase names; each program
-# defines its own and writes the current phase to meta.yml.phase.
-# ---------------------------------------------------------------------------
 phases:
 
   discovery:
@@ -224,8 +190,8 @@ phases:
     on_entry:
       load:
         a_execution_state:
-          - ${EXEC}/state/brand-brief
-          - ${EXEC}/state/design-decisions
+          - ${state.brand-brief}
+          - ${state.design-decisions}
         b_resource_library:
           why: |
             THIS IS THE SINGLE MOST-OMITTED STEP ON RESUME. READ THIS
@@ -233,8 +199,8 @@ phases:
 
             Group B lives under ${SKILL}/, NOT under ${EXEC}/. When the
             agent is focused on the execution (meta.yml, input.md,
-            state/), it's invisible. The other groups are easy to
-            remember:
+            execution-state/), it's invisible. The other groups are easy
+            to remember:
             - Group A (brand-brief, design-decisions) lives right next
               to meta.yml — obviously relevant.
             - Group C (functional skill index) is small and easy.
@@ -243,20 +209,20 @@ phases:
               AND the easiest to skip.
 
             What happens when group B is skipped: the agent reads
-            `state/selected-design-system: kami`, THINKS IT REMEMBERS
-            what "kami" looks like, and starts generating. The output
-            DRIFTS from the actual brand because the brand prose was
-            never loaded — only the name. Same silent failure for craft
-            rules and the template scaffold.
+            `state.yaml`'s `selected-design-system: kami`, THINKS IT
+            REMEMBERS what "kami" looks like, and starts generating.
+            The output DRIFTS from the actual brand because the brand
+            prose was never loaded — only the name. Same silent failure
+            for craft rules and the template scaffold.
 
             DON'T skip a file because "I already know this brand." YOU
             DON'T. The previous agent's working memory is gone; the new
-            agent starts blank. Reading `state/selected-design-system:
-            kami` proves only that "kami" was selected — it proves
-            NOTHING about what kami looks like.
+            agent starts blank. Reading `selected-design-system: kami`
+            from state.yaml proves only that "kami" was selected — it
+            proves NOTHING about what kami looks like.
 
             Past failure: an agent resumed execution 260516-pkm1, read
-            state KVs, and produced output that violated the kami
+            state.yaml, and produced output that violated the kami
             brand's strict 12-column grid. Group B never re-read. The
             user caught it on the next preview round, not the agent.
 
@@ -294,13 +260,15 @@ phases:
             already loaded — its preview-server is the surface that feeds
             on-demand events into input.md in the first place.
       start_server:
-        cmd: ${LIVE_ANNOTATE}/scripts/preview-server ${state.output-dir} ${EXEC}
+        provider: live-annotate
+        component: preview-server
+        args: [ ${state.output-dir}, ${EXEC} ]
         bind: 0.0.0.0
         surface_to_user: url
     conflict_precedence:
       rules:
-        - brand > craft         # on visual tokens
-        - user_input > all      # latest input.md entry wins everything
+        - on visual tokens, brand wins over craft
+        - user input wins over brand and craft (latest input.md entry)
       why: |
         The order is NOT a moral hierarchy — it's a SPECIFICITY
         hierarchy. More specific evidence wins.
@@ -352,34 +320,26 @@ phases:
       a mobile version"), pause generation, capture into brand-brief,
       then resume. Phases are checkpoints, not gates.
 
-# ---------------------------------------------------------------------------
-# Resume contract. Phase-aware. designing is the heaviest because the
-# skill's resource library must be re-pulled into context. See
-# `phases.designing.on_entry.load.b_resource_library.why` for the warning
-# in full; the gist:
-#
-#     The previous agent's memory is gone. Re-read EVERY file in group
-#     B. Don't trust the in-context names of brand/template/craft.
-# ---------------------------------------------------------------------------
 resume:
-  agent_history_persisted: false
   recoverable_surface:
     - ${EXEC}/meta.yml
     - ${EXEC}/input.md
-    - ${EXEC}/state/
+    - ${EXEC}/execution-state/
   steps:
-    - read meta.yml — note phase, input_cursor, status
+    - read meta.yml — note phase, input_cursor, status, state_schema
     - read every input.md entry AFTER input_cursor
-    - read state/ keys relevant to the current phase
-    - conditional:
-        if: phase == designing
-        then:
-          - rerun phases.designing.on_entry.load (groups A, B, C)
-          - rerun phases.selecting.on_entry.load_indices.skills (the functional skill index)
-          - restart preview-server (the previous instance is gone)
-          - reconcile state.produced-files with what's actually on disk
-          - verify selected-template / selected-design-system / output-dir still valid
-          - critical_warning: see phases.designing.on_entry.load.b_resource_library.why
+    - read ${EXEC}/execution-state/state.yaml; for by-ref keys relevant to the current phase, read their blob files
+    - rerun phases.${phase}.on_entry (if defined) — this re-pulls list-resources catalogs, the selected resource library, and re-starts any servers from scratch
     - take action per current phase
     - advance meta.yml.input_cursor only after each input is FULLY reflected
+  phase_extras:
+    discovery: []
+    selecting:
+      - on_entry.load_indices already covers the catalog reload; nothing extra
+    designing:
+      - reconcile state.produced-files with what's actually on disk
+      - verify selected-template / selected-design-system / output-dir still valid
+      - critical_warning: see phases.designing.on_entry.load.b_resource_library.why
+    done:
+      - if a new input arrived after done, transition back to designing
 ```
