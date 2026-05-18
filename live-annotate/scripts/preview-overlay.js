@@ -65,7 +65,7 @@
     .__po-root { position: fixed; z-index: 2147483647; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #111; }
     .__po-fab { bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
     .__po-btn { background: #111; color: #fff; border: none; border-radius: 999px; padding: 8px 14px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.18); font: inherit; }
-    .__po-btn[data-mode] { min-width: 132px; text-align: center; }
+    .__po-fab .__po-btn { min-width: 132px; text-align: center; }
     .__po-btn[data-mode="annotate"][data-active="true"] { background: #f59e0b; }
     .__po-btn.__po-send { background: #16a34a; }
     .__po-btn.__po-cancel { background: #6b7280; }
@@ -79,6 +79,9 @@
     .__po-chip-btn { background: rgba(255,255,255,0.18); color: #fff; border: none; border-radius: 3px; padding: 1px 6px; font: inherit; cursor: pointer; }
     .__po-chip-btn:hover { background: rgba(255,255,255,0.3); }
     body.__po-active *, body.__po-active { cursor: crosshair !important; }
+    body.__po-active .__po-modal, body.__po-active .__po-modal * { cursor: auto !important; }
+    body.__po-active .__po-modal textarea, body.__po-active .__po-modal input { cursor: text !important; }
+    body.__po-active .__po-modal button, body.__po-active .__po-modal .__po-existing-del { cursor: pointer !important; }
     .__po-modal { position: fixed; background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 16px; width: 420px; max-width: calc(100vw - 32px); box-sizing: border-box; z-index: 2147483647; max-height: calc(100vh - 32px); overflow: auto; }
     .__po-modal h4 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #374151; }
     .__po-modal .__po-sel { font-family: ui-monospace, monospace; font-size: 11px; color: #6b7280; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; margin-bottom: 10px; word-break: break-all; }
@@ -322,8 +325,9 @@
 
     const modal = document.createElement("div");
     modal.className = "__po-modal";
-    modal.style.left = Math.min(x, window.innerWidth - 460) + "px";
-    modal.style.top = Math.min(y, window.innerHeight - 320) + "px";
+    // Initial off-screen placement — actual position set after append once we know modal size.
+    modal.style.left = "-9999px";
+    modal.style.top = "-9999px";
 
     function renderItem(c) {
       const sameUrl = c.url === url;
@@ -355,6 +359,11 @@
         <button class="__po-btn __po-small" data-action="add">Add comment</button>
       </div>`;
     document.body.appendChild(modal);
+    const _mw = modal.offsetWidth, _mh = modal.offsetHeight;
+    const _left = Math.max(16, Math.min(x, window.innerWidth - _mw - 16));
+    const _top  = Math.max(16, Math.min(y, window.innerHeight - _mh - 16));
+    modal.style.left = _left + "px";
+    modal.style.top  = _top  + "px";
     const ta = modal.querySelector("textarea");
     ta.focus();
 
@@ -411,7 +420,6 @@
   // ----- commit -----
   async function commitBatch() {
     if (drafts.length === 0) return;
-    if (!confirm(`Commit ${drafts.length} draft annotation(s) to the agent?`)) return;
     btnSend.disabled = true;
     try {
       const r = await fetch("/commit", { method: "POST" });
