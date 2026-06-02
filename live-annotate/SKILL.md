@@ -45,6 +45,24 @@ state_schema:
   - { key: feedback-inbox,    storage: by-ref, content_type: jsonl, description: committed annotations awaiting agent processing (append-only on the server side; consumed by the application's drain) }
   - { key: feedback-resolved, storage: by-ref, content_type: jsonl, description: processed entries archived here, with resolved_at + applied_to (append-only) }
 
+blob_path_convention: |
+  The preview-server does NOT read state.yaml to resolve these three
+  blobs — it hardcodes their location for simplicity:
+
+    feedback-draft    → ${EXEC}/execution-state/feedback-draft.jsonl
+    feedback-inbox    → ${EXEC}/execution-state/feedback-inbox.jsonl
+    feedback-resolved → ${EXEC}/execution-state/feedback-resolved.jsonl
+
+  The calling application's state.yaml MUST therefore declare these
+  keys with `$file` values that match the convention:
+
+    feedback-draft:    { $file: feedback-draft.jsonl }
+    feedback-inbox:    { $file: feedback-inbox.jsonl }
+    feedback-resolved: { $file: feedback-resolved.jsonl }
+
+  Reads (agent drain, debugging) still go through state.yaml — the
+  contract holds in both directions as long as the paths agree.
+
 drain_procedure:
   trigger: |
     Run when a new input-NNN titled "Live annotations" appears in

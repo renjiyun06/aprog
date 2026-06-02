@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tech Design Map · aprog docs</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="../index.html">aprog / docs</a></span>
+    <nav>
+      <a href="../cli.html">CLI</a>
+      <a href="../data-model.html">Data Model</a>
+      <a href="../architecture.html">Architecture</a>
+      <a href="index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="crumb">
+      <a href="../index.html">docs</a>
+      <span class="sep">/</span>
+      <span class="current">tech design</span>
+    </p>
+
+    <div class="eyebrow">04 · Map</div>
+    <h1>Technical Design</h1>
+    <p class="lead">
+      架构落到具体技术栈. 这是一张地图: 点击任意组件深入它的内部结构;
+      点击任一关键流程查看完整时序. 越往下层抽象越具体, 越往上层越偏概览.
+    </p>
+
+    <div class="pills">
+      <span class="pill accent">L1 · 这里 (Map)</span>
+      <span class="pill muted">L1.5 · Journey (端到端走读)</span>
+      <span class="pill muted">L2 · 组件聚焦</span>
+      <span class="pill muted">L3 · 协议 / 代码 / 配置参考</span>
+    </div>
+
+    <a href="journey.html" style="display:block; margin: 1.5rem 0 0; padding: 1.25rem 1.5rem; border: 1.5px solid var(--accent); border-radius: 10px; background: linear-gradient(135deg, #5e5ce60d, #db27770d, #ea580c0d, #16a34a0d); text-decoration:none; color:inherit;">
+      <div style="display:flex; align-items:baseline; gap:0.6rem; margin-bottom: 0.35rem;">
+        <span class="mono" style="color:var(--fg-subtle); font-weight:700; font-size:0.78rem; letter-spacing:0.08em;">RECOMMENDED START</span>
+        <span style="margin-left:auto; color:var(--accent); font-size:0.85rem;">L1.5 · Journey ↗</span>
+      </div>
+      <div style="font-size:1.15rem; font-weight:600; color:var(--accent); margin-bottom:0.3rem;">端到端走读: 登录 → spawn → attach → detach → /exit</div>
+      <p style="margin:0; font-size:0.9rem; color:var(--fg-muted); line-height:1.55;">
+        跟着一个用户走 6 幕完整生命周期, 每幕展示<strong>哪些模块上台</strong> + <strong>各自提供的机制</strong>.
+        9 个模块各有固定颜色, 顺着读一遍, platform 怎么转就在脑子里了. 配色 + 流图, 不堆代码.
+      </p>
+    </a>
+
+    <h2 id="system-map">系统全景</h2>
+    <p style="color:var(--fg-muted)">三个区域. 每个标蓝边的组件都可点击进入 L2 详细页面.</p>
+
+    <figure class="figure">
+      <svg viewBox="0 0 1120 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="aprog 系统全景, 组件可点击">
+        <defs>
+          <marker id="map-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#59636e"/>
+          </marker>
+          <marker id="map-arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+          </marker>
+        </defs>
+
+        <!-- Zone backgrounds -->
+        <g>
+          <rect x="20" y="50" width="320" height="510" rx="12" fill="#fafbfc" stroke="#d1d9e0" stroke-dasharray="4 5"/>
+          <text x="180" y="35" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">用户本机</text>
+
+          <rect x="360" y="50" width="400" height="510" rx="12" fill="#fafbfc" stroke="#d1d9e0" stroke-dasharray="4 5"/>
+          <text x="560" y="35" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">APROG VM</text>
+
+          <rect x="780" y="50" width="320" height="510" rx="12" fill="#fafbfc" stroke="#d1d9e0" stroke-dasharray="4 5"/>
+          <text x="940" y="35" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">外部 · DAYTONA CLOUD</text>
+        </g>
+
+        <!-- CLI (clickable) -->
+        <a href="cli.html">
+          <rect class="node-bg" x="80" y="220" width="200" height="120" rx="10" fill="#fff" stroke="#0969da" stroke-width="2"/>
+          <text class="node-label" x="180" y="262" font-size="22" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">CLI</text>
+          <text class="node-label" x="180" y="290" font-size="12" fill="#1f2328" text-anchor="middle">Go · Bubble Tea TUI</text>
+          <text class="node-label" x="180" y="310" font-size="12" fill="#59636e" text-anchor="middle">cobra · cross-compile</text>
+          <text class="click-hint" x="180" y="328" text-anchor="middle">click → L2 ↗</text>
+        </a>
+
+        <!-- Control Plane (clickable) -->
+        <a href="control-plane.html">
+          <rect class="node-bg" x="380" y="100" width="360" height="220" rx="10" fill="#fff" stroke="#0969da" stroke-width="2"/>
+          <text class="node-label" x="560" y="138" font-size="20" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">Control Plane</text>
+          <text class="node-label" x="560" y="158" font-size="11" fill="#59636e" text-anchor="middle">Go service · chi router · WS server</text>
+
+          <g font-size="11" class="mono">
+            <rect x="400" y="178" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="475" y="195" fill="#1f2328" text-anchor="middle">auth</text>
+
+            <rect x="568" y="178" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="643" y="195" fill="#1f2328" text-anchor="middle">process</text>
+
+            <rect x="400" y="210" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="475" y="227" fill="#1f2328" text-anchor="middle">snapshot</text>
+
+            <rect x="568" y="210" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="643" y="227" fill="#1f2328" text-anchor="middle">sandbox</text>
+
+            <rect x="400" y="242" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="475" y="259" fill="#1f2328" text-anchor="middle">stream</text>
+
+            <rect x="568" y="242" width="150" height="26" rx="4" fill="#f6f8fa"/>
+            <text class="node-label" x="643" y="259" fill="#1f2328" text-anchor="middle">api</text>
+          </g>
+          <text class="click-hint" x="560" y="298" text-anchor="middle">click → L2 ↗</text>
+        </a>
+
+        <!-- DB (clickable) -->
+        <a href="ref/db-schema.html">
+          <ellipse class="node-bg" cx="460" cy="365" rx="65" ry="11" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <path class="node-bg" d="M 395 365 L 395 425 A 65 11 0 0 0 525 425 L 525 365" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <ellipse cx="460" cy="365" rx="65" ry="11" fill="none" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="460" y="400" font-size="13" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">SQLite</text>
+          <text class="node-label" x="460" y="418" font-size="10" fill="#59636e" text-anchor="middle">aprog.db</text>
+          <text class="click-hint" x="460" y="448" text-anchor="middle">click → schema ↗</text>
+        </a>
+
+        <!-- Snapshot disk (clickable) -->
+        <a href="ref/snapshot-disk.html">
+          <ellipse class="node-bg" cx="660" cy="365" rx="65" ry="11" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <path class="node-bg" d="M 595 365 L 595 425 A 65 11 0 0 0 725 425 L 725 365" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <ellipse cx="660" cy="365" rx="65" ry="11" fill="none" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="660" y="395" font-size="12" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">snapshot</text>
+          <text class="node-label" x="660" y="412" font-size="10" fill="#59636e" text-anchor="middle">/var/lib/aprog/proc/</text>
+          <text class="click-hint" x="660" y="448" text-anchor="middle">click → L3 ↗</text>
+        </a>
+
+        <!-- Sandbox container (cluster, clickable for image overview) -->
+        <a href="sandbox.html">
+          <rect class="node-bg" x="800" y="80" width="280" height="460" rx="10" fill="#fff" stroke="#0969da" stroke-width="2"/>
+          <text class="node-label" x="940" y="110" font-size="16" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">Sandbox</text>
+          <text class="node-label" x="940" y="128" font-size="11" fill="#59636e" text-anchor="middle">per Process · ephemeral</text>
+          <text class="click-hint" x="940" y="525" text-anchor="middle">click container → sandbox image L2 ↗</text>
+        </a>
+
+        <!-- claude-driver (nested clickable inside sandbox) -->
+        <a href="driver.html">
+          <rect class="node-bg" x="820" y="148" width="240" height="150" rx="8" fill="#0969da0d" stroke="#0969da" stroke-width="1.8"/>
+          <text class="node-label" x="940" y="178" font-size="14" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">claude-driver</text>
+          <text class="node-label" x="940" y="200" font-size="11" fill="#1f2328" text-anchor="middle">Node 20 · TypeScript</text>
+          <text class="node-label" x="940" y="220" font-size="11" fill="#1f2328" text-anchor="middle">@anthropic-ai/claude-agent-sdk</text>
+          <text class="node-label" x="940" y="240" font-size="11" fill="#1f2328" text-anchor="middle">JSON-lines on stdin / stdout</text>
+          <text class="node-label" x="940" y="262" font-size="10" fill="#59636e" text-anchor="middle">engine: query() agent loop</text>
+          <text class="click-hint" x="940" y="285" text-anchor="middle">click → driver L2 ↗</text>
+        </a>
+
+        <!-- /home/aprog inside sandbox -->
+        <g>
+          <rect x="820" y="316" width="240" height="170" rx="8" fill="#fafbfc" stroke="#d1d9e0"/>
+          <text x="940" y="342" font-size="12" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">/home/aprog/</text>
+          <g font-size="11" fill="#1f2328" class="mono">
+            <text x="836" y="364">meta.yml · input.md</text>
+            <text x="836" y="384">execution-state/</text>
+            <text x="836" y="404">session.jsonl</text>
+            <text x="836" y="424">.claude/skills/&lt;program&gt;/</text>
+          </g>
+          <text x="940" y="468" font-size="10" fill="#59636e" text-anchor="middle">working copy of snapshot</text>
+        </g>
+
+        <!-- Arrows -->
+        <!-- CLI → CP -->
+        <line x1="280" y1="280" x2="380" y2="200" stroke="#0969da" stroke-width="2" marker-end="url(#map-arrow-blue)"/>
+        <text x="330" y="232" font-size="11" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">HTTPS / WSS</text>
+
+        <!-- CP → DB -->
+        <line x1="460" y1="320" x2="460" y2="350" stroke="#59636e" stroke-width="1.5" marker-end="url(#map-arrow)"/>
+
+        <!-- CP → Snapshot -->
+        <line x1="660" y1="320" x2="660" y2="350" stroke="#59636e" stroke-width="1.5" marker-end="url(#map-arrow)"/>
+
+        <!-- CP → Sandbox (across boundary) -->
+        <path d="M 740 200 Q 770 200 800 200" fill="none" stroke="#59636e" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#map-arrow)"/>
+        <text x="770" y="190" font-size="11" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">Daytona SDK</text>
+
+      </svg>
+      <figcaption class="figure-caption">所有蓝边组件可点击. 上下行流量经 Control Plane 代理 (没有 CLI → Sandbox 直连), 见 <a href="../architecture.html#adr-1">ADR-1</a>.</figcaption>
+    </figure>
+
+    <h2 id="components">组件聚焦 (L2)</h2>
+    <div class="drilldown">
+
+      <a href="repo.html" style="border-color: var(--accent); background: linear-gradient(135deg, #5e5ce608, #0a84ff08, #db277708);">
+        <div class="head">
+          <span class="name">📁 Repo · Modules · Stack</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">仓库目录 + 每个模块的职责 / 部署位置 / 技术栈 / 选型理由. 改 X 看哪个文件, 上线 Y 装什么, 一文到底.</p>
+        <div class="tags">
+          <span class="tag">Go</span>
+          <span class="tag">TS</span>
+          <span class="tag">SQLite</span>
+          <span class="tag">3 binaries</span>
+        </div>
+      </a>
+
+      <a href="cli.html">
+        <div class="head">
+          <span class="name">CLI</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">用户终端入口. cobra 子命令分发, Bubble Tea 渲染 TUI, 跨平台单 binary 发布.</p>
+        <div class="tags">
+          <span class="tag">Go</span>
+          <span class="tag">cobra</span>
+          <span class="tag">bubbletea</span>
+        </div>
+      </a>
+
+      <a href="control-plane.html">
+        <div class="head">
+          <span class="name">Control Plane</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">后端服务. auth / process lifecycle / 快照磁盘 / Daytona 编排 / 流转代理 五大子模块.</p>
+        <div class="tags">
+          <span class="tag">Go</span>
+          <span class="tag">chi</span>
+          <span class="tag">sqlc</span>
+          <span class="tag">SQLite</span>
+        </div>
+      </a>
+
+      <a href="driver.html">
+        <div class="head">
+          <span class="name">claude-driver</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">沙箱内常驻 TS 进程. 用 streaming-input 模式跑 SDK <code>query()</code>, 翻 SDK 消息为 aprog 事件, hooks 注入 state-skill 协议.</p>
+        <div class="tags">
+          <span class="tag">TypeScript</span>
+          <span class="tag">Node 20</span>
+          <span class="tag">claude-agent-sdk</span>
+        </div>
+      </a>
+
+      <a href="sandbox.html">
+        <div class="head">
+          <span class="name">Sandbox Image</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">沙箱镜像形态. Dockerfile + 工具集 + driver bundle + 注入策略 + Daytona snapshot 发布.</p>
+        <div class="tags">
+          <span class="tag">node:20-bookworm</span>
+          <span class="tag">daytona snapshot</span>
+        </div>
+      </a>
+
+      <a href="flows.html">
+        <div class="head">
+          <span class="name">Key Flows</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">端到端时序图集. spawn / attach mode 1·2·3 / detach / exit 一处全览, 每个走到 L3 看完整时序.</p>
+        <div class="tags">
+          <span class="tag">sequence</span>
+          <span class="tag">SVG</span>
+        </div>
+      </a>
+
+      <a href="deployment.html">
+        <div class="head">
+          <span class="name">Deployment &amp; Ops</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">部署形态. systemd + nginx + TLS + 备份 + 日志 + 指标. CI/CD 三条交付线.</p>
+        <div class="tags">
+          <span class="tag">systemd</span>
+          <span class="tag">nginx</span>
+          <span class="tag">slog</span>
+        </div>
+      </a>
+
+    </div>
+
+    <h2 id="flows-grid">关键时序速览</h2>
+    <p style="color:var(--fg-muted)">每张卡片缩略图展示主要 actor 之间的消息形状, 点击进入完整时序图.</p>
+
+    <div class="flow-grid">
+
+      <a class="flow-card" href="ref/flow-spawn.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="35" y="14" text-anchor="middle">CLI</text>
+              <text x="120" y="14" text-anchor="middle">CP</text>
+              <text x="205" y="14" text-anchor="middle">DB</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="35" y1="20" x2="35" y2="92"/>
+              <line x1="120" y1="20" x2="120" y2="92"/>
+              <line x1="205" y1="20" x2="205" y2="92"/>
+            </g>
+            <line x1="35" y1="35" x2="115" y2="35" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="111,32 119,35 111,38" fill="#0969da"/>
+            <text x="75" y="30" font-size="8" fill="#0969da" text-anchor="middle" class="mono">POST /proc</text>
+
+            <line x1="120" y1="52" x2="200" y2="52" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="196,49 204,52 196,55" fill="#1f2328"/>
+            <text x="160" y="47" font-size="8" fill="#1f2328" text-anchor="middle" class="mono">INSERT process</text>
+
+            <line x1="200" y1="70" x2="125" y2="70" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="129,67 121,70 129,73" fill="#1f2328"/>
+
+            <line x1="115" y1="85" x2="40" y2="85" stroke="#0969da" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="44,82 36,85 44,88" fill="#0969da"/>
+            <text x="75" y="80" font-size="8" fill="#0969da" text-anchor="middle" class="mono">pid</text>
+          </svg>
+        </div>
+        <p class="title">spawn</p>
+        <p class="desc">注册 process + 初始化快照骨架. 不起沙箱, 不烧 compute.</p>
+      </a>
+
+      <a class="flow-card" href="ref/flow-attach-1.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="30" y="14" text-anchor="middle">CLI</text>
+              <text x="95" y="14" text-anchor="middle">CP</text>
+              <text x="160" y="14" text-anchor="middle">Daytona</text>
+              <text x="215" y="14" text-anchor="middle">drv</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="30" y1="20" x2="30" y2="95"/>
+              <line x1="95" y1="20" x2="95" y2="95"/>
+              <line x1="160" y1="20" x2="160" y2="95"/>
+              <line x1="215" y1="20" x2="215" y2="95"/>
+            </g>
+            <line x1="30" y1="30" x2="90" y2="30" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="86,27 94,30 86,33" fill="#0969da"/>
+            <line x1="95" y1="42" x2="155" y2="42" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="151,39 159,42 151,45" fill="#1f2328"/>
+            <text x="125" y="38" font-size="8" fill="#1f2328" text-anchor="middle">create+tar</text>
+            <line x1="95" y1="56" x2="210" y2="56" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="206,53 214,56 206,59" fill="#0969da"/>
+            <text x="155" y="52" font-size="8" fill="#0969da" text-anchor="middle">exec drv</text>
+            <line x1="215" y1="72" x2="35" y2="72" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="39,69 31,72 39,75" fill="#1f2328"/>
+            <text x="125" y="68" font-size="8" fill="#59636e" text-anchor="middle">stdout 流回</text>
+          </svg>
+        </div>
+        <p class="title">attach · mode 1</p>
+        <p class="desc">首次进入: 起沙箱 + 注入快照 + 启 driver + 打通流.</p>
+      </a>
+
+      <a class="flow-card" href="ref/flow-attach-3.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="30" y="14" text-anchor="middle">CLI</text>
+              <text x="105" y="14" text-anchor="middle">CP</text>
+              <text x="195" y="14" text-anchor="middle">Daytona+drv</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="30" y1="20" x2="30" y2="95"/>
+              <line x1="105" y1="20" x2="105" y2="95"/>
+              <line x1="195" y1="20" x2="195" y2="95"/>
+            </g>
+            <line x1="30" y1="32" x2="100" y2="32" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="96,29 104,32 96,35" fill="#0969da"/>
+            <text x="65" y="28" font-size="8" fill="#0969da" text-anchor="middle">attach</text>
+
+            <line x1="105" y1="48" x2="190" y2="48" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="186,45 194,48 186,51" fill="#1f2328"/>
+            <text x="148" y="44" font-size="8" fill="#1f2328" text-anchor="middle">replay --from=N</text>
+
+            <line x1="190" y1="65" x2="35" y2="65" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="39,62 31,65 39,68" fill="#1f2328"/>
+            <text x="112" y="61" font-size="8" fill="#59636e" text-anchor="middle">补丢失事件</text>
+
+            <line x1="190" y1="83" x2="35" y2="83" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="39,80 31,83 39,86" fill="#1f2328"/>
+            <text x="112" y="79" font-size="8" fill="#1f2328" text-anchor="middle">live stream</text>
+          </svg>
+        </div>
+        <p class="title">attach · mode 3</p>
+        <p class="desc">re-attach: 沙箱在, ring buffer 补 detach 间隙, 再续 live stream.</p>
+      </a>
+
+      <a class="flow-card" href="ref/flow-exit.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="30" y="14" text-anchor="middle">CLI</text>
+              <text x="100" y="14" text-anchor="middle">CP</text>
+              <text x="170" y="14" text-anchor="middle">Daytona</text>
+              <text x="218" y="14" text-anchor="middle">disk</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="30" y1="20" x2="30" y2="95"/>
+              <line x1="100" y1="20" x2="100" y2="95"/>
+              <line x1="170" y1="20" x2="170" y2="95"/>
+              <line x1="218" y1="20" x2="218" y2="95"/>
+            </g>
+            <line x1="30" y1="30" x2="95" y2="30" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="91,27 99,30 91,33" fill="#0969da"/>
+            <text x="62" y="26" font-size="8" fill="#0969da" text-anchor="middle">/exit</text>
+            <line x1="100" y1="46" x2="165" y2="46" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="161,43 169,46 161,49" fill="#1f2328"/>
+            <text x="132" y="42" font-size="8" fill="#1f2328" text-anchor="middle">tar -cf</text>
+            <line x1="165" y1="62" x2="105" y2="62" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="109,59 101,62 109,65" fill="#1f2328"/>
+            <line x1="100" y1="78" x2="215" y2="78" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="211,75 219,78 211,81" fill="#1f2328"/>
+            <text x="158" y="74" font-size="8" fill="#1f2328" text-anchor="middle">overwrite snap</text>
+            <line x1="100" y1="91" x2="165" y2="91" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="161,88 169,91 161,94" fill="#1f2328"/>
+            <text x="132" y="87" font-size="8" fill="#1f2328" text-anchor="middle">destroy</text>
+          </svg>
+        </div>
+        <p class="title">/exit</p>
+        <p class="desc">收尾: tar-out 沙箱 → 覆盖快照 → 销毁沙箱 → state=exited.</p>
+      </a>
+
+      <a class="flow-card" href="ref/flow-detach.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="35" y="14" text-anchor="middle">CLI</text>
+              <text x="120" y="14" text-anchor="middle">CP</text>
+              <text x="205" y="14" text-anchor="middle">drv</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="35" y1="20" x2="35" y2="95"/>
+              <line x1="120" y1="20" x2="120" y2="95"/>
+              <line x1="205" y1="20" x2="205" y2="95"/>
+            </g>
+            <line x1="35" y1="34" x2="115" y2="34" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="111,31 119,34 111,37" fill="#0969da"/>
+            <text x="75" y="30" font-size="8" fill="#0969da" text-anchor="middle">/detach</text>
+
+            <text x="160" y="58" font-size="8" fill="#59636e" text-anchor="middle" class="mono">沙箱 / driver 不动</text>
+
+            <text x="120" y="82" font-size="9" fill="#1f2328" text-anchor="middle" class="mono">关 WS · UPDATE last_attached_at</text>
+          </svg>
+        </div>
+        <p class="title">/detach</p>
+        <p class="desc">最轻量: 仅断 UI 通道. 沙箱继续吃 compute, ring buffer 兜事件.</p>
+      </a>
+
+      <a class="flow-card" href="ref/flow-login.html">
+        <div class="thumb">
+          <svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg">
+            <g font-size="9" class="mono" fill="#59636e">
+              <text x="40" y="14" text-anchor="middle">CLI</text>
+              <text x="120" y="14" text-anchor="middle">CP</text>
+              <text x="200" y="14" text-anchor="middle">DB</text>
+            </g>
+            <g stroke="#d1d9e0" stroke-dasharray="2 3">
+              <line x1="40" y1="20" x2="40" y2="95"/>
+              <line x1="120" y1="20" x2="120" y2="95"/>
+              <line x1="200" y1="20" x2="200" y2="95"/>
+            </g>
+            <line x1="40" y1="32" x2="115" y2="32" stroke="#0969da" stroke-width="1.2"/>
+            <polygon points="111,29 119,32 111,35" fill="#0969da"/>
+            <text x="77" y="28" font-size="8" fill="#0969da" text-anchor="middle">POST /login</text>
+            <line x1="120" y1="48" x2="195" y2="48" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="191,45 199,48 191,51" fill="#1f2328"/>
+            <text x="158" y="44" font-size="8" fill="#1f2328" text-anchor="middle">SELECT user</text>
+            <text x="160" y="64" font-size="8" fill="#59636e" text-anchor="middle">argon2 verify</text>
+            <line x1="120" y1="78" x2="195" y2="78" stroke="#1f2328" stroke-width="1.2"/>
+            <polygon points="191,75 199,78 191,81" fill="#1f2328"/>
+            <text x="158" y="74" font-size="8" fill="#1f2328" text-anchor="middle">INSERT session</text>
+            <line x1="115" y1="91" x2="45" y2="91" stroke="#0969da" stroke-width="1.2" stroke-dasharray="2 2"/>
+            <polygon points="49,88 41,91 49,94" fill="#0969da"/>
+            <text x="80" y="87" font-size="8" fill="#0969da" text-anchor="middle">token</text>
+          </svg>
+        </div>
+        <p class="title">login</p>
+        <p class="desc">argon2id 校验 + 新 AuthSession 入库 + 客户端写 credentials.</p>
+      </a>
+
+    </div>
+
+    <h2 id="references">参考</h2>
+    <div class="drilldown">
+      <a href="ref/db-schema.html">
+        <div class="head"><span class="name">DB schema</span><span class="arrow">→</span></div>
+        <p class="blurb">SQLite DDL: users / auth_sessions / processes 三张表 + 索引 + argon2id 参数.</p>
+      </a>
+      <a href="ref/wire-http.html">
+        <div class="head"><span class="name">HTTP REST</span><span class="arrow">→</span></div>
+        <p class="blurb">所有 endpoint 完整 request / response / status code.</p>
+      </a>
+      <a href="ref/wire-ws.html">
+        <div class="head"><span class="name">WebSocket protocol</span><span class="arrow">→</span></div>
+        <p class="blurb">CLI ↔ CP 上下行 JSON 事件全部 message types.</p>
+      </a>
+      <a href="ref/snapshot-disk.html">
+        <div class="head"><span class="name">快照磁盘</span><span class="arrow">→</span></div>
+        <p class="blurb">目录布局 · tar 协议 · 原子 overwrite 语义.</p>
+      </a>
+      <a href="../architecture.html#adrs">
+        <div class="head"><span class="name">ADRs ↗</span><span class="arrow">→</span></div>
+        <p class="blurb">4 条 load-bearing 决策 (跳转到 architecture).</p>
+      </a>
+      <a href="ref/security.html">
+        <div class="head"><span class="name">安全要点</span><span class="arrow">→</span></div>
+        <p class="blurb">Token / API key 注入 / 限流 / 沙箱越权防御.</p>
+      </a>
+    </div>
+
+  </main>
+
+  <footer>aprog tech design · <a href="../index.html">← back to docs root</a></footer>
+</body>
+</html>

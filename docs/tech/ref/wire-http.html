@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTTP API · L3 · aprog</title>
+  <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="../../index.html">aprog / docs</a></span>
+    <nav>
+      <a href="../../cli.html">CLI</a>
+      <a href="../../data-model.html">Data Model</a>
+      <a href="../../architecture.html">Architecture</a>
+      <a href="../index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="crumb">
+      <a href="../../index.html">docs</a>
+      <span class="sep">/</span>
+      <a href="../index.html">tech design</a>
+      <span class="sep">/</span>
+      <a href="../control-plane.html">control plane</a>
+      <span class="sep">/</span>
+      <span class="current">HTTP API</span>
+    </p>
+
+    <div class="eyebrow">L3 · Wire protocol</div>
+    <h1>HTTP REST API</h1>
+    <p class="lead">所有 endpoint. JSON in, JSON out. <code>Authorization: Bearer &lt;token&gt;</code> 除了 <code>/auth/login</code> 都要带.</p>
+
+    <h2 id="routes">路由总览</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>POST</td><td><code>/auth/login</code></td><td>—</td><td>登录, 换 token</td></tr>
+        <tr><td>POST</td><td><code>/auth/logout</code></td><td>token</td><td>失效当前 token</td></tr>
+        <tr><td>GET</td><td><code>/programs</code></td><td>token</td><td>列出 programs</td></tr>
+        <tr><td>GET</td><td><code>/programs/{name}</code></td><td>token</td><td>单 program 详情</td></tr>
+        <tr><td>GET</td><td><code>/proc</code></td><td>token</td><td>列当前 user 的 processes</td></tr>
+        <tr><td>POST</td><td><code>/proc</code></td><td>token</td><td>spawn 新 process</td></tr>
+        <tr><td>GET</td><td><code>/proc/{pid}</code></td><td>token + own</td><td>process 详情</td></tr>
+        <tr><td>POST</td><td><code>/proc/{pid}/attach</code></td><td>token + own</td><td>触发 attach (dispatch mode 1/2/3)</td></tr>
+        <tr><td>WS</td><td><code>/proc/{pid}/stream</code></td><td>ticket</td><td>WebSocket 数据流, 见 <a href="wire-ws.html">WebSocket protocol</a></td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="auth-login">POST /auth/login</h2>
+    <pre><code>Request:
+  Content-Type: application/json
+  { "username": "lamarck", "password": "..." }
+
+Response 200:
+  { "token": "BWnX...32B base64url...",
+    "user_id": "usr_abc",
+    "username": "lamarck",
+    "expires_at": 1751199600 }
+
+Response 401:
+  { "error": "invalid_credentials" }
+
+Response 429:
+  { "error": "rate_limited", "retry_after": 60 }</code></pre>
+    <p>限流: 同 IP 5/min. 失败 5 次锁 username 10 分钟 (in-memory, MVP 不入库).</p>
+
+    <h2 id="auth-logout">POST /auth/logout</h2>
+    <pre><code>Headers: Authorization: Bearer &lt;token&gt;
+
+Response 200: { "ok": true }
+
+幂等: token 已失效也返回 200, 不报错.</code></pre>
+
+    <h2 id="programs">GET /programs · GET /programs/{name}</h2>
+    <pre><code>GET /programs
+
+Response 200:
+  { "items": [
+      { "name": "grasp",   "version": "0.1.0", "kind": "application",
+        "description": "读项目, 产出工作心智模型" },
+      { "name": "shape",   "version": "0.2.0", "kind": "application", ... },
+      { "name": "design",  "version": "0.4.0", "kind": "application", ... },
+      { "name": "live-annotate", "version": "0.4.0", "kind": "library", ... },
+      { "name": "state",   "version": "0.3.0", "kind": "library", ... }
+  ]}
+
+GET /programs/grasp
+
+Response 200:
+  { "name": "grasp", "version": "0.1.0", "kind": "application",
+    "description": "读项目, 产出工作心智模型",
+    "entry": "~/.aprog/programs/grasp/SKILL.md" }
+
+Response 404:
+  { "error": "program_not_found" }</code></pre>
+    <p>数据源: 文件系统扫描 <code>~/.aprog/programs/</code>. 不入 DB.</p>
+
+    <h2 id="proc-list">GET /proc</h2>
+    <pre><code>Query:
+  ?all=1  → 含 exited (默认只列 spawned + running)
+
+Response 200:
+  { "items": [
+      { "pid": "260521-x9k4",
+        "program": "grasp",
+        "state": "running",
+        "phase": "concepts",
+        "created_at": 1748549000,
+        "uptime_seconds": 14432,
+        "idle_seconds": 42,
+        "last_attached_at": 1748563000,
+        "last_exited_at": null,
+        "sandbox_id": "sb_xxx" },
+      ...
+  ]}</code></pre>
+    <p>列表只显示当前 user 的 process (按 user_id 过滤).</p>
+
+    <h2 id="proc-spawn">POST /proc</h2>
+    <pre><code>Request:
+  { "program": "grasp" }
+
+Response 200:
+  { "pid": "260521-x9k4",
+    "program": "grasp",
+    "state": "spawned",
+    "created_at": 1748549000,
+    "snapshot_path": "/var/lib/aprog/proc/260521-x9k4/" }
+
+Response 404: { "error": "program_not_found" }
+Response 429: { "error": "quota_exceeded", "limit": 50 }</code></pre>
+    <p>注意 spawn <strong>不</strong>起沙箱, 不烧 compute. 见 <a href="../../cli.html#spawn">CLI spawn</a> / <a href="../../data-model.html#snapshot-lifecycle">快照生命周期</a>.</p>
+
+    <h2 id="proc-attach">POST /proc/{pid}/attach</h2>
+    <pre><code>Response 200:
+  { "mode": 1,                  // 1 / 2 / 3, 由 CP 自动判定
+    "pid": "260521-x9k4",
+    "ws_url": "wss://api.aprog.dev/proc/260521-x9k4/stream?ticket=tk_abc...",
+    "ticket_expires_at": 1748563205 }  // 5s 后过期
+
+Response 404: { "error": "process_not_found" }
+Response 503: { "error": "sandbox_unavailable", "detail": "..." }</code></pre>
+    <p><strong>mode 选择</strong>: CP 根据 process 当前状态自动 dispatch:</p>
+    <ul>
+      <li>sandbox_id NULL + state=spawned → mode 1</li>
+      <li>sandbox_id NULL + state=exited → mode 2</li>
+      <li>sandbox_id != NULL → mode 3</li>
+    </ul>
+    <p>客户端不需要选 mode. response 给 mode 主要让 TUI 展示一个 hint ("starting fresh sandbox..." vs "resuming..." vs "reconnecting...").</p>
+
+    <h2 id="errors">错误一致性</h2>
+    <p>所有错误统一 shape:</p>
+    <pre><code>{ "error": "&lt;machine-readable kebab-case&gt;",
+  "message": "&lt;optional human-readable&gt;",
+  "detail": "&lt;optional extra fields&gt;" }</code></pre>
+
+    <h3>常见错误码</h3>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>code</th><th>含义</th><th>客户端行为</th></tr></thead>
+      <tbody>
+        <tr><td><code>unauthorized</code></td><td>token 缺失 / 失效 / revoked</td><td>清 credentials, 提示 login</td></tr>
+        <tr><td><code>invalid_credentials</code></td><td>login 时 username/password 错</td><td>提示重输</td></tr>
+        <tr><td><code>program_not_found</code></td><td>program name 不存在于文件系统</td><td>报错退出</td></tr>
+        <tr><td><code>process_not_found</code></td><td>pid 不存在或不属于当前 user</td><td>报错退出</td></tr>
+        <tr><td><code>sandbox_unavailable</code></td><td>Daytona 起沙箱失败</td><td>提示稍后重试</td></tr>
+        <tr><td><code>quota_exceeded</code></td><td>per-user 配额超限</td><td>提示并打印 limit</td></tr>
+        <tr><td><code>rate_limited</code></td><td>请求过频</td><td>按 retry_after sleep</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="curl">curl 速查</h2>
+    <pre><code class="lang-bash"># login
+curl -X POST https://api.aprog.dev/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"username":"lamarck","password":"..."}'
+
+# 后续都带 token
+TOKEN=...
+curl -H "authorization: bearer $TOKEN" https://api.aprog.dev/programs
+curl -H "authorization: bearer $TOKEN" https://api.aprog.dev/proc
+
+# spawn
+curl -X POST https://api.aprog.dev/proc \
+  -H "authorization: bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"program":"grasp"}'
+
+# attach (拿 ws_url 后用 websocat 之类连)
+curl -X POST https://api.aprog.dev/proc/260521-x9k4/attach \
+  -H "authorization: bearer $TOKEN"
+</code></pre>
+
+    <p style="margin-top:2rem; color:var(--fg-subtle); font-size:0.85rem">
+      上层: <a href="../control-plane.html">control plane L2</a> · <a href="../index.html">map</a> · 配套: <a href="wire-ws.html">WebSocket protocol</a>
+    </p>
+
+  </main>
+  <footer>aprog tech design L3 · <a href="../index.html">↑ tech design map</a></footer>
+</body>
+</html>

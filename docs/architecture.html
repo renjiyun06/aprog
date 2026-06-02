@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture · aprog docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="index.html">aprog / docs</a></span>
+    <nav>
+      <a href="cli.html">CLI</a>
+      <a href="data-model.html">Data Model</a>
+      <a href="architecture.html">Architecture</a>
+      <a href="tech/index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <div class="page with-toc">
+    <main>
+      <div class="eyebrow">03 · Reference</div>
+      <h1>aprog Platform Architecture</h1>
+      <p class="lead">
+        aprog 的运行时由若干组件协作完成一次 process 的 spawn / attach / detach / exit 生命周期.
+        本文从概念分层、组件清单、部署拓扑、通信、关键决策、代码分层六个角度描述这套架构.
+      </p>
+      <p>数据实体见 <a href="data-model.html">data model</a>. CLI 表面见 <a href="cli.html">CLI reference</a>.</p>
+
+      <h2 id="layers">概念分层</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Program / Engine / Sandbox 三层分层">
+          <!-- Program layer (top, accent) -->
+          <g>
+            <rect x="20" y="20" width="720" height="100" rx="10"
+                  fill="#0969da0d" stroke="#0969da" stroke-width="1.5"/>
+            <text x="42" y="56" font-size="22" font-weight="700" fill="#0969da" class="mono">Program</text>
+            <text x="42" y="84" font-size="14" fill="#1f2328">一段 aprog 程序 · skill 形态 (SKILL.md)</text>
+            <text x="42" y="105" font-size="13" fill="#59636e">不关心下面是谁在执行</text>
+            <g>
+              <rect x="586" y="42" width="132" height="24" rx="12" fill="#0969da" />
+              <text x="652" y="58" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" class="mono" letter-spacing="0.06em">APPLICATION</text>
+            </g>
+          </g>
+
+          <!-- Engine layer -->
+          <g>
+            <rect x="20" y="130" width="720" height="100" rx="10"
+                  fill="#fafbfc" stroke="#d1d9e0"/>
+            <text x="42" y="166" font-size="22" font-weight="700" fill="#1f2328" class="mono">Engine</text>
+            <text x="42" y="194" font-size="14" fill="#1f2328">底层执行引擎 · 类比 "CPU"</text>
+            <text x="42" y="215" font-size="13" fill="#59636e">当前 Claude Agent SDK (TS) · 未来可换 Codex SDK / 其他 LLM agent loop</text>
+            <g>
+              <rect x="640" y="152" width="78" height="24" rx="12" fill="#1f2328" />
+              <text x="679" y="168" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" class="mono" letter-spacing="0.06em">CPU</text>
+            </g>
+          </g>
+
+          <!-- Sandbox layer -->
+          <g>
+            <rect x="20" y="240" width="720" height="100" rx="10"
+                  fill="#fafbfc" stroke="#d1d9e0"/>
+            <text x="42" y="276" font-size="22" font-weight="700" fill="#1f2328" class="mono">Sandbox</text>
+            <text x="42" y="304" font-size="14" fill="#1f2328">环境 · 装工具 + 给 Engine 跑的容器</text>
+            <text x="42" y="325" font-size="13" fill="#59636e">当前 Daytona</text>
+            <g>
+              <rect x="624" y="262" width="94" height="24" rx="12" fill="#1f2328" />
+              <text x="671" y="278" font-size="11" font-weight="700" fill="#fff" text-anchor="middle" class="mono" letter-spacing="0.06em">MACHINE</text>
+            </g>
+          </g>
+
+          <!-- Connector ticks suggesting stack -->
+          <g stroke="#d1d9e0" stroke-width="1" stroke-dasharray="2 3">
+            <line x1="380" y1="120" x2="380" y2="130"/>
+            <line x1="380" y1="230" x2="380" y2="240"/>
+          </g>
+        </svg>
+        <figcaption class="figure-caption">三层互不知情. 接口由 Engine Driver 这一层薄适配粘合 (见<a href="#components">组件清单</a>).</figcaption>
+      </figure>
+      <p>三个抽象互相不知道对方的具体实现. Program 用一套统一的 skill 接口表达自己; Engine 提供 agent loop + 工具调用; Sandbox 提供文件系统 + 进程 + 网络. 它们之间通过 <strong>Engine Driver</strong> 这一层薄适配粘合.</p>
+
+      <h2 id="components">组件清单</h2>
+      <p>aprog 一次活着的 process 涉及如下进程 / 服务:</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>组件</th><th>跑在哪</th><th>生命周期</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td><strong>CLI</strong></td><td>用户本机</td><td>命令期 / TUI 会话期</td><td>用户入口. 跑 <code>aprog</code> 各命令, attach 时维护 TUI</td></tr>
+          <tr><td><strong>Control Plane</strong></td><td>aprog 自家 VM</td><td>长跑 service</td><td>鉴权 / Process 元数据 / 快照磁盘 / 沙箱编排 / 流转代理</td></tr>
+          <tr><td><strong>Bridge</strong></td><td>沙箱内 (Daytona exec 起的)</td><td>一次 attach 期间</td><td>把 Driver 的本地 socket pipe 到 Daytona exec 的 stdio. 短命, 无状态</td></tr>
+          <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>把 Engine 跟 aprog 协议接上. 当前是 <code>claude-driver</code> (TS)</td></tr>
+          <tr><td><strong>Engine</strong></td><td>沙箱内 (Driver 进程里)</td><td>同 Driver</td><td>Claude Agent SDK 的 <code>query()</code> 跑 agent loop</td></tr>
+          <tr><td><strong>Daytona</strong></td><td>外部 cloud</td><td>平台外服务</td><td>提供沙箱 lifecycle + exec API</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>aprog 自己出的代码: CLI, Control Plane, Bridge, Engine Driver(s). Engine 和 Sandbox 都是外部依赖.</p>
+
+      <h2 id="topology">部署拓扑</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="aprog 部署拓扑">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#59636e"/>
+            </marker>
+            <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+            </marker>
+          </defs>
+
+          <!-- Region labels -->
+          <text x="110" y="32" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">用户本机</text>
+          <text x="375" y="32" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">APROG VM</text>
+          <text x="745" y="32" font-size="11" font-weight="700" fill="#818b97" text-anchor="middle" class="mono" letter-spacing="0.1em">外部 · DAYTONA CLOUD</text>
+
+          <!-- Region boundary lines -->
+          <line x1="215" y1="50" x2="215" y2="580" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="4 5"/>
+          <line x1="540" y1="50" x2="540" y2="580" stroke="#d1d9e0" stroke-width="1" stroke-dasharray="4 5"/>
+
+          <!-- CLI -->
+          <g>
+            <rect x="40" y="180" width="150" height="70" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+            <text x="115" y="212" font-size="16" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">CLI</text>
+            <text x="115" y="234" font-size="11" fill="#59636e" text-anchor="middle">用户终端</text>
+          </g>
+
+          <!-- Control Plane -->
+          <g>
+            <rect x="240" y="90" width="280" height="240" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="380" y="120" font-size="15" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">Control Plane</text>
+            <text x="380" y="138" font-size="11" fill="#59636e" text-anchor="middle">长跑 service</text>
+            <g font-size="12" fill="#1f2328" class="mono">
+              <rect x="260" y="158" width="240" height="28" rx="4" fill="#f6f8fa"/>
+              <text x="270" y="176">api</text><text x="490" y="176" text-anchor="end" fill="#59636e">HTTP/WS endpoints</text>
+              <rect x="260" y="192" width="240" height="28" rx="4" fill="#f6f8fa"/>
+              <text x="270" y="210">auth</text><text x="490" y="210" text-anchor="end" fill="#59636e">login / token</text>
+              <rect x="260" y="226" width="240" height="28" rx="4" fill="#f6f8fa"/>
+              <text x="270" y="244">process</text><text x="490" y="244" text-anchor="end" fill="#59636e">spawn/attach/exit</text>
+              <rect x="260" y="260" width="240" height="28" rx="4" fill="#f6f8fa"/>
+              <text x="270" y="278">sandbox</text><text x="490" y="278" text-anchor="end" fill="#59636e">Daytona 编排</text>
+              <rect x="260" y="294" width="240" height="28" rx="4" fill="#f6f8fa"/>
+              <text x="270" y="312">stream</text><text x="490" y="312" text-anchor="end" fill="#59636e">代理 driver 流</text>
+            </g>
+          </g>
+
+          <!-- Snapshot disk (cylinder) -->
+          <g>
+            <ellipse cx="380" cy="400" rx="115" ry="14" fill="#fafbfc" stroke="#d1d9e0"/>
+            <path d="M 265 400 L 265 460 A 115 14 0 0 0 495 460 L 495 400" fill="#fafbfc" stroke="#d1d9e0"/>
+            <ellipse cx="380" cy="400" rx="115" ry="14" fill="none" stroke="#d1d9e0"/>
+            <text x="380" y="440" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle" class="mono">snapshot disk</text>
+            <text x="380" y="458" font-size="11" fill="#59636e" text-anchor="middle" class="mono">/var/lib/aprog/proc/&lt;pid&gt;/</text>
+          </g>
+
+          <!-- Daytona Cloud container -->
+          <g>
+            <rect x="565" y="80" width="375" height="500" rx="12" fill="#fafbfc" stroke="#d1d9e0" stroke-dasharray="6 4"/>
+            <text x="752" y="105" font-size="13" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">Daytona Cloud</text>
+
+            <!-- Sandbox box -->
+            <rect x="585" y="125" width="335" height="440" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="752" y="150" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">Sandbox · per Process</text>
+
+            <!-- claude-driver -->
+            <g>
+              <rect x="605" y="170" width="295" height="110" rx="6" fill="#0969da0d" stroke="#0969da" stroke-width="1.2"/>
+              <text x="618" y="192" font-size="13" font-weight="700" fill="#0969da" class="mono">claude-driver</text>
+              <text x="618" y="212" font-size="11" fill="#1f2328" class="mono">@anthropic-ai/claude-agent-sdk</text>
+              <text x="618" y="232" font-size="11" fill="#1f2328" class="mono">socket: /run/aprog/io.sock</text>
+              <text x="618" y="252" font-size="11" fill="#1f2328" class="mono">events.log (ring buffer)</text>
+              <text x="618" y="270" font-size="10" fill="#59636e">沙箱生命周期长跑</text>
+            </g>
+
+            <!-- bridge -->
+            <g>
+              <rect x="605" y="290" width="295" height="55" rx="6" fill="#fff" stroke="#d1d9e0" stroke-dasharray="3 3"/>
+              <text x="618" y="312" font-size="13" font-weight="700" fill="#1f2328" class="mono">bridge</text>
+              <text x="618" y="332" font-size="11" fill="#59636e">短命 · exec 起灭 · 一次 attach 一个实例</text>
+            </g>
+
+            <!-- /home/aprog -->
+            <g>
+              <rect x="605" y="355" width="295" height="200" rx="6" fill="#fafbfc" stroke="#d1d9e0"/>
+              <text x="618" y="377" font-size="13" font-weight="700" fill="#1f2328" class="mono">/home/aprog/</text>
+              <g font-size="11" fill="#1f2328" class="mono">
+                <text x="630" y="400">meta.yml · input.md</text>
+                <text x="630" y="420">execution-state/</text>
+                <text x="630" y="440">session.jsonl <tspan fill="#59636e">← engine 的 session</tspan></text>
+                <text x="630" y="460">.claude/skills/&lt;program&gt;/</text>
+              </g>
+              <text x="618" y="540" font-size="10" fill="#59636e">沙箱工作目录 · attach 注入快照, /exit 抽出回快照</text>
+            </g>
+          </g>
+
+          <!-- Arrows -->
+          <!-- CLI -> Control Plane -->
+          <line x1="190" y1="215" x2="240" y2="215" stroke="#0969da" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+          <text x="215" y="207" font-size="11" font-weight="600" fill="#0969da" text-anchor="middle" class="mono">HTTP / WS</text>
+
+          <!-- Control Plane -> Snapshot disk -->
+          <line x1="380" y1="330" x2="380" y2="386" stroke="#59636e" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="392" y="365" font-size="10" fill="#59636e" class="mono">disk IO</text>
+
+          <!-- Control Plane -> Sandbox (Daytona SDK / exec) -->
+          <path d="M 520 215 Q 555 215 585 215" fill="none" stroke="#59636e" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arrow)"/>
+          <text x="555" y="205" font-size="11" font-weight="600" fill="#59636e" text-anchor="middle" class="mono">Daytona SDK · exec</text>
+        </svg>
+        <figcaption class="figure-caption">CLI 跨 NAT 只跟 Control Plane 的稳定 endpoint 通信; 沙箱不对外暴露端口, 进沙箱的动作都经 Daytona exec 发起.</figcaption>
+      </figure>
+      <ul>
+        <li>CLI 跨 NAT, 只跟 Control Plane 的一个稳定 endpoint 通信</li>
+        <li>Control Plane 是所有跨沙箱操作的协调点, 是 source of truth for 元数据 + 快照</li>
+        <li>沙箱本身不对外暴露端口; 任何 "进沙箱" 的动作都经 Daytona exec 发起</li>
+      </ul>
+
+      <h2 id="comm">通信架构</h2>
+
+      <h3 id="comm-1">链路 1: CLI ↔ Control Plane</h3>
+      <ul>
+        <li><strong>协议</strong>: HTTP/JSON 一般命令; WebSocket attach 会话流</li>
+        <li><strong>鉴权</strong>: <code>~/.aprog/credentials</code> 里的 token (= AuthSession.id) 每次请求带上</li>
+        <li><strong>流格式</strong> (WS): 行分隔 JSON</li>
+      </ul>
+      <p>下行 (Engine → CLI):</p>
+      <pre><code>{"type":"agent.thinking", "delta":"..."}
+{"type":"agent.message", "delta":"..."}
+{"type":"agent.tool_use", "tool":"Bash", "input":"..."}
+{"type":"agent.tool_result", "ok":true, "output":"..."}
+{"type":"agent.requires_action", "id":"...", "prompt":"..."}</code></pre>
+      <p>上行 (CLI → Engine):</p>
+      <pre><code>{"type":"user.input", "text":"..."}
+{"type":"user.action", "id":"...", "decision":"allow|deny"}</code></pre>
+      <p>事件类型保持 engine-neutral —— <code>agent.thinking</code> / <code>agent.tool_use</code> 等是 aprog 协议层的术语, 不是 Claude Agent SDK 的术语. Driver 负责把 SDK 的 <code>AssistantMessage / SystemMessage / ResultMessage</code> 翻成这套事件.</p>
+
+      <h3 id="comm-2">链路 2: Control Plane ↔ Sandbox</h3>
+      <p>通过 <strong>Daytona exec + Bridge</strong> 实现. 一次 attach 期间:</p>
+      <ol>
+        <li>Control Plane 调 Daytona SDK 起一个 exec: <code>daytona exec &lt;sandbox_id&gt; -- aprog-bridge --from-offset=&lt;N&gt;</code></li>
+        <li><code>aprog-bridge</code> 在沙箱内启动, 连接 Driver 的本地 socket (<code>/run/aprog/io.sock</code>)</li>
+        <li>Bridge 把 socket 的下行字节 pipe 到自己的 stdout (Daytona 把它流回 Control Plane)</li>
+        <li>Bridge 把自己的 stdin 字节 (来自 Control Plane 的 user.input) pipe 到 socket</li>
+        <li>CLI WS 断开 → Control Plane 关 exec → Bridge 退出. Driver 不变, 继续接 Engine 输出写自己的缓冲</li>
+      </ol>
+      <p>为什么要 Bridge 而不是直接 <code>daytona exec</code> driver 启动命令? 因为 Driver 是<strong>沙箱生命周期长跑的</strong>, 不能跟某一次 attach 绑命. Bridge 才是按 attach 起灭的一次性管道.</p>
+
+      <h3 id="comm-3">链路 3: Driver ↔ Engine</h3>
+      <p>进程内. Driver 是 TS, <code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>, 用 streaming-input mode 跑:</p>
+      <pre><code>for await (const message of query({
+  prompt: userInputAsyncIterable,    // 从 socket 来的 user.input
+  options: {
+    cwd: "/home/aprog",
+    settingSources: ["project"],     // 加载 /home/aprog/.claude/skills/
+    resume: existingSessionId,       // mode-2 attach 时用
+    hooks: { UserPromptSubmit: [...], PostToolUse: [...], SessionEnd: [...] },
+  }
+})) {
+  // 翻成 aprog 协议事件 → 写 socket + 写 events.log
+}</code></pre>
+      <p>Engine 自己的 session 持久化是 <code>/home/aprog/session.jsonl</code> (SDK 默认行为).</p>
+
+      <h2 id="adrs">关键决策</h2>
+
+      <section class="adr" id="adr-1">
+        <h3><span class="adr-tag">ADR-1</span> Control Plane 代理沙箱流, 不让 CLI 直连沙箱</h3>
+        <h4>决策</h4>
+        <p>所有 CLI 到沙箱的数据通过 Control Plane 中转, CLI 永远不直接连沙箱端口.</p>
+        <h4>理由</h4>
+        <ul>
+          <li>单一鉴权面: 只有一套 <code>aprog credentials</code> token 模型, 不需要二级 sandbox 凭据</li>
+          <li>Sandbox provider 抽象不漏: 换 Daytona 只动 Control Plane</li>
+          <li>沙箱不暴露公网端口, 攻击面小</li>
+          <li>控制面流量负担可控 (chat 流相对反代是零头), 不是延迟瓶颈</li>
+        </ul>
+        <h4>代价</h4>
+        <p>Control Plane 在每条流的热路径上. 真规模化后需要做反代水平扩展, 但架构不变.</p>
+        <h4>何时重审</h4>
+        <p>当出现单条数据流真的撑不住代理 (例如沙箱里跑的程序要直接接大文件 IO) 时, 开旁路通道, 但主交互流仍走代理.</p>
+      </section>
+
+      <section class="adr" id="adr-2">
+        <h3><span class="adr-tag">ADR-2</span> 沙箱里需要一个常驻 Driver, 不是裸跑 Engine</h3>
+        <h4>决策</h4>
+        <p>沙箱内常驻 <code>claude-driver</code> 进程, 跨 attach/detach 持续活, 兜住 Engine 输出.</p>
+        <h4>理由</h4>
+        <ul>
+          <li>detach 后 CLI 走了, Control Plane → 沙箱的连接也该关 (否则要永远持一根空连接). 但 Engine 还在跑 / 等输入, 产出得有东西兜</li>
+          <li>reattach 时要 "看到 detach 这段时间发生了啥", 需要本地 buffer</li>
+          <li>aprog 协议层的事件翻译 (SDK 消息 → aprog 事件) 必须在某处发生, 在沙箱内做比在 Control Plane 做更对 —— 让 platform 跟 engine 解耦</li>
+        </ul>
+      </section>
+
+      <section class="adr" id="adr-3">
+        <h3><span class="adr-tag">ADR-3</span> Engine 是可替换的, Program 不知道 Engine</h3>
+        <h4>决策</h4>
+        <p>Program (skill) 只表达 "我要做什么", 不调用任何 engine-specific API. Engine 的差异封在 Driver.</p>
+        <h4>理由</h4>
+        <ul>
+          <li>aprog 平台的价值在于 "管 program 的生老病死", 不是绑定某个 LLM 厂商</li>
+          <li>Claude Agent SDK 跟 Codex SDK 的 API 形态不同, 但都是 agent loop + 工具调用, 抽象上对等</li>
+          <li>同一段 program 应该能换 engine 跑, 性价比 / 能力差异留给运维决定</li>
+        </ul>
+        <h4>实现路径</h4>
+        <p>每款 engine 一个 <code>&lt;name&gt;-driver</code> 包. driver 暴露给 aprog 协议的 wire format 固定 (上面的 JSON 事件), 暴露给 platform 的 socket 协议固定. 内部怎么调 SDK 是 driver 的事.</p>
+        <h4>当前 MVP</h4>
+        <p>只实现 <code>claude-driver</code>. <code>codex-driver</code> 等留 stub, 接口先对齐.</p>
+      </section>
+
+      <section class="adr" id="adr-4">
+        <h3><span class="adr-tag">ADR-4</span> Session.jsonl 也是快照的一部分</h3>
+        <h4>决策</h4>
+        <p>Engine 自己的 session 文件 (<code>session.jsonl</code>) 跟 <code>meta.yml / input.md / execution-state/</code> 一样, 包含在快照里, 跟 process 同生命周期.</p>
+        <h4>理由</h4>
+        <ul>
+          <li>Claude Agent SDK 把 session 持久化为 JSONL 在工作目录里, tar-out/in 顺带就带上了, 成本是 0</li>
+          <li>attach mode 2 (exit 后重启) 因此可以 "接着对话继续", 而不是冷启动. 对用户的 UX 影响巨大 —— program state 跟对话上下文在用户脑子里是一体的</li>
+          <li>"harness session 抽象成应用层关心的形态再持久化" 是另一条路, 当前不走 (engine 内置 resume 已经够用)</li>
+        </ul>
+        <h4>修订</h4>
+        <p>替代之前 data-model 里 "harness session 不持久化" 的设定. 见 <a href="data-model.html#principles">data model 的对应修订</a>.</p>
+        <h4>代价</h4>
+        <p>Engine 换种 (Claude → Codex) 时, session.jsonl 不可移植, 那个 process 需要冷启动一次. 可接受 —— 换 engine 是稀有事件.</p>
+      </section>
+
+      <h2 id="code-layers">代码分层 (仓库)</h2>
+      <p>预期的 monorepo 目录结构 (mvp 初步规划):</p>
+      <pre class="diagram">aprog/
+├── cli/              ← CLI 客户端 (Go 或 TS, 待定)
+├── controlplane/     ← 后端服务 + DB 迁移 + 沙箱编排
+│   ├── api/             HTTP/WS endpoints
+│   ├── auth/            login/logout/token
+│   ├── process/         spawn/attach/detach/exit 流程
+│   ├── snapshot/        快照磁盘 IO
+│   ├── sandbox/         Daytona SDK 封装 + bridge 调用
+│   └── stream/          反代 driver 流到 CLI WS
+├── drivers/
+│   ├── claude/          claude-driver (TS), 当前唯一 driver
+│   │   └── 依赖 @anthropic-ai/claude-agent-sdk
+│   └── codex/           占位, MVP 不实现
+├── bridge/           ← 沙箱内 bridge 工具, 跨 driver 共用 (可能就是个 Go binary)
+├── protocol/         ← 协议定义 (event types, socket message schema, 共享给 driver + controlplane)
+├── docs/             ← 本目录
+└── programs/         ← 内置 skills (开发期; 部署形态可能换地方)</pre>
+
+      <h3 id="dep-direction">Dependency 方向 (单向, 无循环)</h3>
+      <figure class="figure">
+        <svg viewBox="0 0 800 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="模块依赖关系图">
+          <defs>
+            <marker id="dep-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
+            </marker>
+            <marker id="dep-arrow-soft" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#818b97"/>
+            </marker>
+          </defs>
+
+          <!-- Row 1 -->
+          <g>
+            <rect x="30" y="70" width="120" height="60" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+            <text x="90" y="98" font-size="14" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">cli</text>
+            <text x="90" y="118" font-size="10" fill="#59636e" text-anchor="middle">用户端</text>
+          </g>
+          <g>
+            <rect x="220" y="70" width="170" height="60" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="305" y="98" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">controlplane</text>
+            <text x="305" y="118" font-size="10" fill="#59636e" text-anchor="middle">后端服务</text>
+          </g>
+          <g>
+            <rect x="450" y="70" width="140" height="60" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="520" y="98" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">drivers/*</text>
+            <text x="520" y="118" font-size="10" fill="#59636e" text-anchor="middle">沙箱内适配层</text>
+          </g>
+          <g>
+            <rect x="640" y="70" width="140" height="60" rx="8" fill="#fafbfc" stroke="#818b97" stroke-dasharray="4 3"/>
+            <text x="710" y="98" font-size="14" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">engine SDK</text>
+            <text x="710" y="118" font-size="10" fill="#818b97" text-anchor="middle">外部依赖</text>
+          </g>
+
+          <!-- Row 2 -->
+          <g>
+            <rect x="30" y="260" width="120" height="60" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="90" y="288" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">bridge</text>
+            <text x="90" y="308" font-size="10" fill="#59636e" text-anchor="middle">沙箱内 pipe</text>
+          </g>
+          <g>
+            <rect x="305" y="260" width="170" height="60" rx="8" fill="#0969da14" stroke="#0969da" stroke-width="1.5"/>
+            <text x="390" y="288" font-size="14" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">protocol</text>
+            <text x="390" y="308" font-size="10" fill="#0969da" text-anchor="middle">共享协议定义</text>
+          </g>
+
+          <!-- Arrows -->
+          <!-- cli -> controlplane -->
+          <line x1="150" y1="100" x2="220" y2="100" stroke="#1f2328" stroke-width="1.5" marker-end="url(#dep-arrow)"/>
+
+          <!-- controlplane -> drivers/* (dashed: image content) -->
+          <line x1="390" y1="100" x2="450" y2="100" stroke="#818b97" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#dep-arrow-soft)"/>
+          <text x="420" y="88" font-size="10" font-weight="600" fill="#818b97" text-anchor="middle" class="mono">镜像内容</text>
+
+          <!-- drivers/* -> engine SDK -->
+          <line x1="590" y1="100" x2="640" y2="100" stroke="#1f2328" stroke-width="1.5" marker-end="url(#dep-arrow)"/>
+
+          <!-- controlplane -> protocol (down-left curve) -->
+          <path d="M 305 130 Q 305 200 365 260" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#dep-arrow)"/>
+
+          <!-- drivers/* -> protocol (down-left curve) -->
+          <path d="M 520 130 Q 520 200 425 260" fill="none" stroke="#1f2328" stroke-width="1.5" marker-end="url(#dep-arrow)"/>
+
+          <!-- bridge -> protocol -->
+          <line x1="150" y1="290" x2="305" y2="290" stroke="#1f2328" stroke-width="1.5" marker-end="url(#dep-arrow)"/>
+
+          <!-- Legend -->
+          <g transform="translate(540, 250)">
+            <line x1="0" y1="14" x2="30" y2="14" stroke="#1f2328" stroke-width="1.5"/>
+            <text x="38" y="18" font-size="11" fill="#59636e">代码依赖</text>
+            <line x1="0" y1="36" x2="30" y2="36" stroke="#818b97" stroke-width="1.5" stroke-dasharray="5 3"/>
+            <text x="38" y="40" font-size="11" fill="#59636e">非代码 (镜像 / 外部)</text>
+          </g>
+        </svg>
+        <figcaption class="figure-caption"><code>controlplane</code> 跟 <code>drivers/*</code> 没有源码依赖 —— driver 跟着 sandbox 镜像一起烘进去, 通过 socket 协议交互. 这保证了 driver 可独立演化.</figcaption>
+      </figure>
+
+      <h3 id="sandbox-image">Sandbox 镜像 (template)</h3>
+      <p>沙箱镜像包含:</p>
+      <ul>
+        <li>基础 OS (Ubuntu) + 常用工具 (git, curl, ...)</li>
+        <li><code>claude-driver</code> binary</li>
+        <li><code>aprog-bridge</code> binary</li>
+        <li>Node.js runtime (跑 driver)</li>
+      </ul>
+      <p>镜像版本随 driver / bridge 一起 bump. spawn 时 Control Plane 选用当前 active 镜像 (硬编码或配置, MVP 不入库).</p>
+
+      <h2 id="flow">跨组件流程示例</h2>
+      <p><strong>一次 attach mode 1 的完整调用链</strong>:</p>
+      <pre><code>1. CLI: aprog attach 260521-x9k4
+   └─► HTTP POST /proc/260521-x9k4/attach (token in header)
+
+2. Control Plane:
+   - 验 token → User
+   - 查 Process(pid=260521-x9k4), 验 user_id 匹配, sandbox_id 为 null → mode 1
+   - 调 Daytona SDK 起新 sandbox (镜像 aprog/base:0.1)
+   - 拿到 sandbox_id, 写 Process.sandbox_id + sandbox_started_at
+   - tar 注入 snapshot_path 内容到沙箱 /home/aprog/
+   - Daytona exec: 启动 claude-driver (后台)
+   - 返回 CLI: 200 OK, 给一个 WS endpoint URL
+
+3. CLI: 升级 WS 连 /proc/.../stream
+
+4. Control Plane (收到 WS 连接):
+   - 调 Daytona exec: aprog-bridge --from-offset=0 (前台, 拿 stdio)
+   - bridge 在沙箱内连上 claude-driver 的 socket
+   - Control Plane 开始: bridge.stdout → parse → WS.send 到 CLI
+   - CLI 输入: WS.recv → bridge.stdin → driver → engine
+
+5. 用户在 TUI 里输入 "do X":
+   {"type":"user.input","text":"do X"} 一路 WS → bridge → driver socket
+   → driver 喂给 query() 的 prompt iterable
+   → Engine 跑 agent loop
+   → 各种消息从 query() async iterator 出来
+   → driver 翻成 aprog 事件 → 写 socket + append events.log
+   → bridge pipe 出去 → Control Plane → CLI WS
+   → TUI 渲染
+
+6. 用户 /detach:
+   CLI 关 WS → Control Plane 关 Daytona exec (bridge 退出)
+   → driver 不动, 继续接 engine 输出写 events.log
+   → Control Plane 更新 Process.last_attached_at</code></pre>
+      <p><strong>reattach (mode 3)</strong>: 跟 step 4-6 一样, 只是 step 2 检查到 sandbox_id 非 null, 跳过沙箱创建 + 注入, bridge 的 <code>--from-offset</code> 用上次记录的 cursor 让 driver 重放间隙事件.</p>
+      <p><strong>/exit</strong>: 见 <a href="data-model.html#snapshot-lifecycle">data model 的快照生命周期表</a>. Driver 收到 SessionEnd → 通知 Control Plane → 后者 tar-out /home/aprog → 销毁沙箱 → Process.sandbox_id=null, state=exited.</p>
+
+      <h2 id="open">后续待定</h2>
+      <ul>
+        <li><strong>Web UI</strong> 形态: 是另一种 CLI 客户端 (WS 协议同), 还是 Control Plane 内置一个 SPA? 暂留待定</li>
+        <li><strong>多 viewer attach</strong> (一个 process 同时被多人看): 协议留口 (bridge 可以多实例), MVP 不做</li>
+        <li><strong>审计日志</strong>: events.log 是否回传 Control Plane 长留. MVP 不做</li>
+        <li><strong>Driver 热升级</strong>: 新版 driver 出来怎么滚动到已经 spawn 的 process? MVP 不考虑 (新 process 用新镜像即可)</li>
+      </ul>
+
+    </main>
+
+    <aside class="toc">
+      <p class="toc-title">On this page</p>
+      <ul>
+        <li><a href="#layers">概念分层</a></li>
+        <li><a href="#components">组件清单</a></li>
+        <li><a href="#topology">部署拓扑</a></li>
+        <li><a href="#comm">通信架构</a></li>
+        <li><a class="h3" href="#comm-1">链路 1: CLI ↔ CP</a></li>
+        <li><a class="h3" href="#comm-2">链路 2: CP ↔ Sandbox</a></li>
+        <li><a class="h3" href="#comm-3">链路 3: Driver ↔ Engine</a></li>
+        <li><a href="#adrs">关键决策</a></li>
+        <li><a class="h3" href="#adr-1">ADR-1 代理 vs 直连</a></li>
+        <li><a class="h3" href="#adr-2">ADR-2 常驻 Driver</a></li>
+        <li><a class="h3" href="#adr-3">ADR-3 Engine 可替换</a></li>
+        <li><a class="h3" href="#adr-4">ADR-4 Session 入快照</a></li>
+        <li><a href="#code-layers">代码分层</a></li>
+        <li><a class="h3" href="#dep-direction">Dependency 方向</a></li>
+        <li><a class="h3" href="#sandbox-image">Sandbox 镜像</a></li>
+        <li><a href="#flow">跨组件流程示例</a></li>
+        <li><a href="#open">后续待定</a></li>
+      </ul>
+    </aside>
+  </div>
+
+  <footer>aprog docs · <a href="index.html">← back to index</a></footer>
+</body>
+</html>

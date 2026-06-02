@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deployment &amp; Ops · Tech Design · aprog</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="../index.html">aprog / docs</a></span>
+    <nav>
+      <a href="../cli.html">CLI</a>
+      <a href="../data-model.html">Data Model</a>
+      <a href="../architecture.html">Architecture</a>
+      <a href="index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="crumb">
+      <a href="../index.html">docs</a>
+      <span class="sep">/</span>
+      <a href="index.html">tech design</a>
+      <span class="sep">/</span>
+      <span class="current">deployment &amp; ops</span>
+    </p>
+
+    <div class="eyebrow">L2 · Operations</div>
+    <h1>Deployment &amp; Ops</h1>
+    <p class="lead">
+      把这套架构跑起来需要的所有东西. 部署形态 / CI / 备份 / 观测 / 安全防线.
+    </p>
+
+    <h2 id="topology">物理拓扑</h2>
+    <figure class="figure">
+      <svg viewBox="0 0 980 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="部署拓扑">
+        <defs>
+          <marker id="dp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#59636e"/>
+          </marker>
+        </defs>
+
+        <!-- VM box -->
+        <rect x="40" y="60" width="600" height="380" rx="14" fill="#fafbfc" stroke="#d1d9e0"/>
+        <text x="60" y="84" font-size="13" font-weight="700" fill="#59636e" class="mono">aprog VM · Ubuntu 24.04</text>
+
+        <!-- nginx -->
+        <g>
+          <rect x="60" y="110" width="560" height="60" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
+          <text x="340" y="140" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">nginx (443) — TLS · WS upgrade · 反向代理</text>
+          <text x="340" y="158" font-size="11" fill="#59636e" text-anchor="middle">/etc/letsencrypt · proxy_pass 127.0.0.1:8080</text>
+        </g>
+
+        <!-- aprog-controlplane systemd -->
+        <a href="control-plane.html">
+          <rect class="node-bg" x="60" y="200" width="280" height="120" rx="8" fill="#0969da14" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="200" y="232" font-size="14" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">aprog-controlplane.service</text>
+          <text class="node-label" x="200" y="252" font-size="11" fill="#1f2328" text-anchor="middle">systemd user service</text>
+          <text class="node-label" x="200" y="270" font-size="11" fill="#1f2328" text-anchor="middle">listen 127.0.0.1:8080</text>
+          <text class="node-label" x="200" y="288" font-size="11" fill="#1f2328" text-anchor="middle">EnvironmentFile /etc/aprog/cp.env</text>
+          <text class="click-hint" x="200" y="312" text-anchor="middle">L2 ↗</text>
+        </a>
+
+        <!-- DB + snapshot disk -->
+        <g>
+          <rect x="360" y="200" width="260" height="120" rx="8" fill="#fff" stroke="#d1d9e0"/>
+          <text x="490" y="232" font-size="13" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">/var/lib/aprog/</text>
+          <g font-size="11" fill="#1f2328" class="mono">
+            <text x="376" y="258">├── aprog.db (SQLite WAL)</text>
+            <text x="376" y="278">└── proc/&lt;pid&gt;/  (snapshots)</text>
+          </g>
+          <text x="490" y="305" font-size="10" fill="#59636e" text-anchor="middle">本地文件系统</text>
+        </g>
+
+        <!-- nightly backup -->
+        <g>
+          <rect x="60" y="350" width="560" height="60" rx="8" fill="#fafbfc" stroke="#d1d9e0" stroke-dasharray="4 3"/>
+          <text x="340" y="378" font-size="13" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">cron + rsync → NAS</text>
+          <text x="340" y="395" font-size="10" fill="#818b97" text-anchor="middle">sqlite .backup daily · snapshot dir hourly</text>
+        </g>
+
+        <!-- External Daytona -->
+        <g>
+          <rect x="680" y="60" width="260" height="180" rx="14" fill="#fafbfc" stroke="#818b97" stroke-dasharray="6 4"/>
+          <text x="810" y="86" font-size="12" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">Daytona Cloud</text>
+          <text x="810" y="108" font-size="11" fill="#818b97" text-anchor="middle">外部 SaaS · per-second 计费</text>
+          <rect x="700" y="130" width="220" height="92" rx="8" fill="#fff" stroke="#d1d9e0"/>
+          <text x="810" y="152" font-size="12" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">Sandbox snapshots</text>
+          <text x="810" y="172" font-size="10" fill="#1f2328" text-anchor="middle">aprog-driver-v1 · v2 · ...</text>
+          <text x="810" y="190" font-size="10" fill="#1f2328" text-anchor="middle">活动沙箱 N (per attach)</text>
+          <text x="810" y="208" font-size="10" fill="#59636e" text-anchor="middle">~$0.067/hr × N</text>
+        </g>
+
+        <!-- Anthropic API external -->
+        <g>
+          <rect x="680" y="260" width="260" height="100" rx="14" fill="#fafbfc" stroke="#818b97" stroke-dasharray="6 4"/>
+          <text x="810" y="288" font-size="12" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">api.anthropic.com</text>
+          <text x="810" y="308" font-size="10" fill="#818b97" text-anchor="middle">沙箱出向 (不经 VM)</text>
+          <text x="810" y="326" font-size="10" fill="#818b97" text-anchor="middle">model 调用 · 按 tokens 计费</text>
+        </g>
+
+        <!-- Arrows -->
+        <line x1="640" y1="150" x2="680" y2="150" stroke="#59636e" stroke-width="1.5" marker-end="url(#dp-arrow)"/>
+        <text x="660" y="140" font-size="10" fill="#59636e" text-anchor="middle" class="mono">SDK</text>
+        <line x1="940" y1="180" x2="940" y2="260" stroke="#59636e" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#dp-arrow)"/>
+
+      </svg>
+      <figcaption class="figure-caption">单 VM 起步. 数据全在本地. Daytona 跟 Anthropic 是外部依赖, 按用量计费.</figcaption>
+    </figure>
+
+    <h2 id="deep-dive">深入</h2>
+    <div class="drilldown">
+
+      <a href="ref/deploy-systemd.html">
+        <div class="head"><span class="name">systemd unit</span><span class="arrow">→</span></div>
+        <p class="blurb">aprog-controlplane.service · 沙盒化 · 重启策略 · EnvironmentFile 处理.</p>
+        <div class="tags"><span class="tag">systemd</span></div>
+      </a>
+
+      <a href="ref/deploy-nginx.html">
+        <div class="head"><span class="name">nginx 反代</span><span class="arrow">→</span></div>
+        <p class="blurb">完整 server block · WebSocket upgrade · 长连接超时 · Let's Encrypt.</p>
+        <div class="tags"><span class="tag">nginx</span><span class="tag">TLS</span></div>
+      </a>
+
+      <a href="ref/deploy-ci.html">
+        <div class="head"><span class="name">CI / Release</span><span class="arrow">→</span></div>
+        <p class="blurb">GitHub Actions 三条流水线: CLI cross-compile · CP .deb · driver snapshot push.</p>
+        <div class="tags"><span class="tag">GitHub Actions</span></div>
+      </a>
+
+      <a href="ref/deploy-backup.html">
+        <div class="head"><span class="name">备份</span><span class="arrow">→</span></div>
+        <p class="blurb">SQLite .backup + rsync · snapshot 增量 · 恢复演练 (Q4).</p>
+        <div class="tags"><span class="tag">rsync</span></div>
+      </a>
+
+      <a href="ref/observability.html">
+        <div class="head"><span class="name">观测</span><span class="arrow">→</span></div>
+        <p class="blurb">slog 字段约定 · /metrics 接口预留 · 关键 4 类指标. 分布式追踪 MVP 跳过.</p>
+        <div class="tags"><span class="tag">slog</span><span class="tag">prometheus</span></div>
+      </a>
+
+      <a href="ref/security.html">
+        <div class="head"><span class="name">安全要点</span><span class="arrow">→</span></div>
+        <p class="blurb">凭据 / API key 注入 / WS ticket · 限流 · 沙箱越权 · 出向 egress policy.</p>
+        <div class="tags"><span class="tag">security</span></div>
+      </a>
+
+    </div>
+
+  </main>
+  <footer>aprog tech design · <a href="index.html">↑ tech design map</a></footer>
+</body>
+</html>

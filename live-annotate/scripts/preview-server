@@ -11,8 +11,8 @@
 //
 // The flow is two-stage:
 //
-//   draft  →  ${EXEC}/state/feedback-draft   (JSONL, mutable)
-//   commit →  ${EXEC}/state/feedback-inbox   (JSONL, append-only, agent reads)
+//   draft  →  ${EXEC}/execution-state/feedback-draft.jsonl   (mutable)
+//   commit →  ${EXEC}/execution-state/feedback-inbox.jsonl   (append-only, agent reads)
 //          +  ${EXEC}/input.md               (new input-NNN entry)
 //
 // Endpoints (annotation flow):
@@ -57,10 +57,10 @@ const overlayPath = join(import.meta.dir, "preview-overlay.js");
 const readOverlay = (): string => readFileSync(overlayPath, "utf-8");
 
 const inputMdPath = join(execDir, "input.md");
-const feedbackInbox = join(execDir, "state", "feedback-inbox");
-const feedbackDraft = join(execDir, "state", "feedback-draft");
+const feedbackInbox = join(execDir, "execution-state", "feedback-inbox.jsonl");
+const feedbackDraft = join(execDir, "execution-state", "feedback-draft.jsonl");
 
-mkdirSync(join(execDir, "state"), { recursive: true });
+mkdirSync(join(execDir, "execution-state"), { recursive: true });
 
 // ---------- mime ----------
 function mimeFor(p: string): string {
@@ -237,12 +237,12 @@ function handleCommit(): Promise<Response> {
     const inputId = appendInputEntry(
       `Live annotations (${rows.length})`,
       `User committed ${rows.length} annotation(s) via the preview overlay. ` +
-        "See `state/feedback-inbox` for the entries — each carries (ts, url, selector, comment). " +
-        "Drain via the `live-annotate` skill's procedure: resolve (url, selector) to the calling " +
-        "application's source-of-truth file (design → the HTML in output-dir; shape → a state/ " +
-        "file + re-run render; other applications define their own resolver), apply the edit, " +
-        "append to `state/feedback-resolved`, remove the consumed line from `feedback-inbox`, and " +
-        "advance the input cursor."
+        "Read the feedback-inbox blob (state.yaml key `feedback-inbox`) for the entries — each " +
+        "carries (ts, url, selector, comment). Drain via the `live-annotate` skill's procedure: " +
+        "resolve (url, selector) to the calling application's source-of-truth (design → the HTML " +
+        "in output-dir; shape → a state.yaml key / by-ref blob, then re-render; other applications " +
+        "define their own resolver), apply the edit, append to feedback-resolved, remove the " +
+        "consumed line from feedback-inbox, and advance the input cursor."
     );
     try { unlinkSync(stage); } catch {}
     return Response.json({ ok: true, accepted: rows.length, input_id: inputId });

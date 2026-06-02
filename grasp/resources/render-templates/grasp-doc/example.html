@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Linchpin · grasp</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg: #fbf7ef;            /* warm paper */
+  --surface: #ffffff;
+  --ink: #1f2328;
+  --muted: #6b7280;
+  --border: #e7e3da;
+
+  /* one accent per chapter — visual landmark */
+  --survey:     #0d9488;    /* teal-600  */
+  --concepts:   #ea580c;    /* orange-600 */
+  --flows:      #7c3aed;    /* violet-600 */
+  --mechanisms: #b91c1c;    /* red-700 */
+
+  --code-bg: #1e293b;
+  --code-ink: #e2e8f0;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+body {
+  font: 400 16px/1.65 ui-sans-serif, "Inter", "Noto Sans SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+code, pre, .mono { font-family: ui-monospace, "JetBrains Mono", "SF Mono", monospace; }
+
+/* Layout shell */
+.shell { display: grid; grid-template-columns: 240px 1fr; max-width: 1280px; margin: 0 auto; }
+aside.toc {
+  position: sticky; top: 0; height: 100vh; padding: 28px 14px 28px 24px;
+  border-right: 1px solid var(--border); overflow-y: auto;
+}
+main { padding: 36px 56px; min-width: 0; }
+
+/* Header */
+header.meta {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding-bottom: 18px; margin-bottom: 40px;
+  border-bottom: 1px solid var(--border);
+}
+header.meta .name { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+header.meta .head-sha {
+  font-family: ui-monospace, monospace; font-size: 13px;
+  color: var(--muted); padding: 3px 8px; background: #f1ede2; border-radius: 4px;
+}
+header.meta .phase {
+  background: var(--mechanisms); color: white;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; letter-spacing: .04em;
+  text-transform: uppercase; font-weight: 600;
+}
+header.meta .grasped { color: var(--muted); font-size: 13px; margin-left: auto; }
+
+/* TOC */
+aside.toc h4 {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--muted); margin: 22px 0 6px 0; font-weight: 600;
+}
+aside.toc h4:first-of-type { margin-top: 0; }
+aside.toc a { display: flex; align-items: center; gap: 8px; padding: 5px 0; color: var(--ink); text-decoration: none; font-size: 14px; }
+aside.toc a:hover { color: var(--accent-current); }
+aside.toc a.sub { padding-left: 14px; color: var(--muted); font-size: 13px; }
+aside.toc .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+aside.toc .dot.survey     { background: var(--survey); }
+aside.toc .dot.concepts   { background: var(--concepts); }
+aside.toc .dot.flows      { background: var(--flows); }
+aside.toc .dot.mechanisms { background: var(--mechanisms); }
+
+/* Sections */
+section.chapter { margin-bottom: 72px; }
+section.chapter h2 {
+  font-size: 26px; font-weight: 700; margin: 0 0 4px 0;
+  display: flex; align-items: center; gap: 12px; letter-spacing: -0.01em;
+}
+section.chapter h2 .marker {
+  width: 6px; height: 26px; border-radius: 3px; display: inline-block;
+}
+section.chapter h2.survey      .marker { background: var(--survey); }
+section.chapter h2.concepts    .marker { background: var(--concepts); }
+section.chapter h2.flows       .marker { background: var(--flows); }
+section.chapter h2.mechanisms  .marker { background: var(--mechanisms); }
+section.chapter .lede {
+  color: var(--muted); margin: 0 0 20px 18px; font-size: 14px;
+}
+
+/* Diagram tile */
+.diagram {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 28px 24px; margin: 16px 0 20px 0; overflow-x: auto;
+}
+.diagram .mermaid { text-align: center; }
+
+/* Annotation chips after a diagram */
+.annot {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px; margin: 8px 0;
+}
+.annot .chip {
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--ink);
+  border-radius: 4px; padding: 10px 12px; font-size: 14px;
+}
+.annot .chip.s   { border-left-color: var(--survey); }
+.annot .chip.c   { border-left-color: var(--concepts); }
+.annot .chip.f   { border-left-color: var(--flows); }
+.annot .chip.m   { border-left-color: var(--mechanisms); }
+.annot .chip b   { font-family: ui-monospace, monospace; font-size: 13px; color: var(--ink); }
+.annot .chip .text { color: var(--muted); display: block; margin-top: 3px; }
+
+/* Concept tiles */
+.concepts-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px; margin-top: 12px;
+}
+.concept-tile {
+  background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--concepts);
+  border-radius: 6px; padding: 14px 14px 12px 14px;
+}
+.concept-tile .glyph {
+  font-size: 22px; line-height: 1; margin-bottom: 4px;
+}
+.concept-tile .term {
+  font-weight: 700; font-size: 15px; margin-bottom: 4px;
+}
+.concept-tile .def {
+  font-size: 13px; color: var(--muted); line-height: 1.5;
+}
+
+/* Mechanism card */
+.mechanism {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--mechanisms);
+  border-radius: 6px; padding: 22px 24px; margin: 16px 0;
+}
+.mechanism > h3 { margin: 0 0 6px 0; font-size: 19px; font-weight: 700; }
+.mechanism .tagline { color: var(--muted); font-size: 13px; margin: 0 0 18px 0; }
+.mechanism .sub h4 {
+  font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--mechanisms); margin: 18px 0 6px 0; font-weight: 700;
+}
+.mechanism .files {
+  display: grid; gap: 4px; font-family: ui-monospace, monospace; font-size: 13px;
+}
+.mechanism .files a, .mechanism .files span { color: var(--ink); padding: 4px 8px; background: #f7f3e8; border-radius: 4px; }
+
+pre {
+  background: var(--code-bg); color: var(--code-ink);
+  padding: 14px 16px; border-radius: 4px;
+  overflow-x: auto; font-size: 13px; line-height: 1.6;
+  margin: 8px 0;
+}
+
+/* Mermaid theming */
+.mermaid { font-family: ui-sans-serif, "Inter", system-ui, sans-serif !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<aside class="toc" data-grasp-node="toc">
+  <h4>Sections</h4>
+  <a href="#survey"><span class="dot survey"></span>Survey</a>
+  <a href="#concepts"><span class="dot concepts"></span>Concepts</a>
+  <a href="#flows"><span class="dot flows"></span>Flows</a>
+  <a href="#mechanisms"><span class="dot mechanisms"></span>Mechanisms</a>
+
+  <h4>Flows</h4>
+  <a href="#flow-hello-session" class="sub">↳ hello-session</a>
+
+  <h4>Mechanisms</h4>
+  <a href="#mech-image-derivation" class="sub">↳ image-derivation</a>
+</aside>
+
+<main>
+
+<header class="meta" data-grasp-node="header">
+  <div class="name">Linchpin</div>
+  <div class="head-sha">@001b1329</div>
+  <div class="phase">mechanisms</div>
+  <div class="grasped">grasped 2026-05-20</div>
+</header>
+
+<!-- ============================= SURVEY ============================= -->
+<section class="chapter" id="survey" data-grasp-node="survey">
+  <h2 class="survey"><span class="marker"></span>Survey · 拓扑全貌</h2>
+  <p class="lede">三个进程 + 一个 Postgres + 多个 per-session container，皆 docker-compose 编排。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+graph TB
+    Client[["🧑 Client / SDK"]]
+    Console[["🖥️ Console<br/>React + Vite"]]
+    subgraph compose["🐳 docker-compose"]
+      API[/"⚙️ linchpin-api<br/>FastAPI · Python 3.12"\]
+      Conn[/"🔌 linchpin-connector<br/>MCP + HTTP"\]
+      PG[("🗄️ Postgres 16<br/>event log · state truth")]
+      subgraph sandboxes["per-session"]
+        C1[/"📦 Container 1"\]
+        C2[/"📦 Container 2"\]
+      end
+    end
+    LLM[(("🧠 LLM Provider<br/>OpenRouter · Ollama"))]
+    MCP[("🛠️ MCP servers")]
+
+    Client -->|"HTTP + SSE"| API
+    Console -->|"HTTP + SSE"| API
+    API -->|"SQL · LISTEN/NOTIFY"| PG
+    API -->|"POST /tools/invoke"| Conn
+    API -->|"docker-py"| C1
+    API -->|"docker-py"| C2
+    API -.->|"HTTP"| LLM
+    Conn -->|"stdio"| MCP
+
+    classDef api fill:#0d9488,color:#fff,stroke:#0f766e
+    classDef cli fill:#fff,stroke:#0d9488,color:#0d9488
+    classDef store fill:#fef3c7,stroke:#ca8a04,color:#854d0e
+    classDef sb fill:#fff7ed,stroke:#ea580c,color:#9a3412
+    classDef ext fill:#f3e8ff,stroke:#7c3aed,color:#5b21b6
+    class API,Conn api
+    class Client,Console cli
+    class PG store
+    class C1,C2 sb
+    class LLM,MCP ext
+    </div>
+  </div>
+
+  <div class="annot">
+    <div class="chip s"><b>Stack</b><span class="text">FastAPI · asyncpg · docker-py · React + Vite · Postgres 16</span></div>
+    <div class="chip s"><b>External</b><span class="text">OpenRouter / Ollama (HTTP, raw httpx) · MCP (stdio)</span></div>
+    <div class="chip s"><b>Networks</b><span class="text">linchpin-{none,open,limited} · 三个预创建 Docker bridge</span></div>
+    <div class="chip s"><b>Entry</b><span class="text">linchpin-api/app/main.py · routes/{agents,environments,sessions,vaults}</span></div>
+  </div>
+</section>
+
+<!-- ============================= CONCEPTS ============================= -->
+<section class="chapter" id="concepts" data-grasp-node="concepts">
+  <h2 class="concepts"><span class="marker"></span>Concepts · 抽象关系</h2>
+  <p class="lede">6 个核心抽象 + 它们之间的引用关系。借用项目原词。</p>
+
+  <div class="diagram">
+    <div class="mermaid">
+graph LR
+    Agent(["🤖 Agent<br/><i>model + prompt + tools</i>"])
+    Env(["📋 Environment<br/><i>image + packages + network</i>"])
+    Vault(["🔐 Vault<br/><i>encrypted creds</i>"])
+    Session{{"🪪 Session<br/><i>agent × env × vault</i>"}}
+    Event[/"📝 Event<br/><i>user / agent / session</i>"/]
+    Sandbox[("📦 Sandbox<br/><i>per-session container</i>")]
+
+    Agent -->|"snapshotted into"| Session
+    Env  -->|"binds to"| Session
+    Vault -->|"projects creds into"| Session
+    Session -->|"owns"| Sandbox
+    Session -->|"emits"| Event
+    Event -.->|"replayed on restart"| Session
+
+    classDef def fill:#fff,stroke:#ea580c,color:#9a3412,stroke-width:2px
+    classDef session fill:#ea580c,color:#fff,stroke:#9a3412,stroke-width:2px
+    classDef store fill:#fef3c7,stroke:#ca8a04,color:#854d0e
+    class Agent,Env,Vault,Sandbox def
+    class Session session
+    class Event store
+    </div>
+  </div>
+
+  <div class="concepts-grid">
+    <div class="concept-tile" data-grasp-node="concepts.agent">
+      <div class="glyph">🤖</div>
+      <div class="term">Agent</div>
+      <div class="def">版本化定义 — model / system prompt / tools / MCP / 权限</div>
+    </div>
+    <div class="concept-tile" data-grasp-node="concepts.environment">
+      <div class="glyph">📋</div>
+      <div class="term">Environment</div>
+      <div class="def">容器模板 + 网络策略 + 各包管理器预装列表</div>
+    </div>
+    <div class="concept-tile" data-grasp-node="concepts.session">
+      <div class="glyph">🪪</div>
+      <div class="term">Session</div>
+      <div class="def">一次运行：绑 agent snapshot × env × vault 与一个 sandbox</div>
+    </div>
+    <div class="concept-tile" data-grasp-node="concepts.event">
+      <div class="glyph">📝</div>
+      <div class="term">Event</div>
+      <div class="def">session log 中追加项 — user / agent / session 三类</div>
+    </div>
+    <div class="concept-tile" data-grasp-node="concepts.vault">
+      <div class="glyph">🔐</div>
+      <div class="term">Vault</div>
+      <div class="def">Fernet 加密凭据库，agent 按名引用</div>
+    </div>
+    <div class="concept-tile" data-grasp-node="concepts.sandbox">
+      <div class="glyph">📦</div>
+      <div class="term">Sandbox</div>
+      <div class="def">每 session 一个 Docker 容器，绑三种网络 mode 之一</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================= FLOWS ============================= -->
+<section class="chapter" id="flows" data-grasp-node="flows">
+  <h2 class="flows"><span class="marker"></span>Flows · 端到端用例</h2>
+  <p class="lede">代表性路径，触发到产出全程。引用形式 <code>file:line</code>。</p>
+
+  <div class="diagram" id="flow-hello-session" data-grasp-node="flows.hello-session">
+    <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant C as 🧑 Client
+    participant A as ⚙️ API<br/>(FastAPI)
+    participant PG as 🗄️ Postgres
+    participant O as 🔄 Orchestrator<br/>(async task)
+    participant S as 📦 Sandbox
+    participant L as 🧠 LLM
+
+    C->>A: POST /v1/sessions<br/>{agent_id, env_id}
+    A->>PG: INSERT sessions (status=running)
+    PG-->>O: NOTIFY sessions_new
+    O->>S: ensure_image + create container
+    C->>A: POST event {type: user.message}
+    A->>PG: INSERT events
+    PG-->>O: NOTIFY events_new
+    O->>L: completion(messages)
+    L-->>O: assistant message
+    O->>PG: INSERT events {agent.message}
+    O->>PG: UPDATE sessions (status=idle)
+    A-->>C: SSE stream<br/>(replay + tail)
+    </div>
+  </div>
+
+  <div class="annot">
+    <div class="chip f"><b>routes/sessions.py:142</b><span class="text">创建 session 行</span></div>
+    <div class="chip f"><b>events.py:88</b><span class="text">LISTEN/NOTIFY 唤醒 orchestrator</span></div>
+    <div class="chip f"><b>orchestrator.py:201</b><span class="text">ensure_image + sandbox.create</span></div>
+    <div class="chip f"><b>streaming.py:57</b><span class="text">SSE replay-then-tail</span></div>
+  </div>
+</section>
+
+<!-- ============================= MECHANISMS ============================= -->
+<section class="chapter" id="mechanisms" data-grasp-node="mechanisms">
+  <h2 class="mechanisms"><span class="marker"></span>Mechanisms · 关键机制深入</h2>
+  <p class="lede">按问出现的顺序累积。每条独立、有 file:line 锚定。</p>
+
+  <article class="mechanism" id="mech-image-derivation" data-grasp-node="mechanisms.image-derivation">
+    <h3>image-derivation · 镜像派生</h3>
+    <p class="tagline">声明式 packages → 内容寻址派生镜像 → 跨环境自动 dedup。</p>
+
+    <div class="sub">
+      <h4>How it works</h4>
+      <div class="diagram" style="margin: 8px 0 0 0;">
+        <div class="mermaid">
+flowchart LR
+    P[["📋 env.packages<br/>{apt, pip, npm,<br/>cargo, gem, go}"]]
+    Q{is_empty?}
+    Base[[/"base image<br/>linchpinhq/sandbox:v0.2.0"\]]
+    Hash[/"derived_image_tag()<br/>= sha12(normalized)"\]
+    Tag{{"sandbox-env:&lt;sha12&gt;"}}
+    Cached{images.get?}
+    Reuse([🎯 reuse layer<br/>zero cost])
+    Gen[\"_generate_dockerfile()"/]
+    Build([🔨 docker build])
+
+    P --> Q
+    Q -- "yes" --> Base
+    Q -- "no" --> Hash
+    Hash --> Tag
+    Tag --> Cached
+    Cached -- "yes" --> Reuse
+    Cached -- "no" --> Gen --> Build
+    Build --> Reuse
+
+    classDef in    fill:#fff7ed,stroke:#ea580c,color:#9a3412
+    classDef key   fill:#b91c1c,color:#fff,stroke:#7f1d1d
+    classDef good  fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef build fill:#1e293b,color:#e2e8f0,stroke:#0f172a
+    class P,Q,Cached in
+    class Hash,Tag key
+    class Base,Reuse good
+    class Gen,Build build
+        </div>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h4>Generated Dockerfile (single-stage, 6 RUNs)</h4>
+      <div class="diagram" style="margin: 8px 0 0 0; padding: 18px;">
+        <div class="mermaid">
+flowchart TB
+    F[["FROM linchpinhq/sandbox:v0.2.0"]]
+    R1["🟢 RUN apt-get update && install &lt;apt&gt;<br/>+ rm /var/lib/apt/lists/*"]
+    R2["🟡 RUN pip install --break-system-packages &lt;pip&gt;"]
+    R3["🟠 RUN npm install -g &lt;npm&gt;"]
+    R4["🔵 RUN cargo install --locked &lt;cargo&gt;"]
+    R5["🟣 RUN gem install --no-document &lt;gem&gt;"]
+    R6["⚫ RUN go install &lt;pkg1&gt;<br/>(one per go pkg)"]
+
+    F --> R1 --> R2 --> R3 --> R4 --> R5 --> R6
+    R6 --> OUT([["📦 sandbox-env:&lt;sha12&gt;"]])
+
+    classDef base fill:#fef3c7,stroke:#ca8a04,color:#854d0e
+    classDef out  fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class F base
+    class OUT out
+        </div>
+      </div>
+      <p style="margin: 12px 0 0 0; font-size: 14px; color: var(--muted);">
+      每个包管理器各一层 → 改 npm 不重装 apt。Apt 层尾部 <code>rm /var/lib/apt/lists/*</code> 保持轻量。
+      </p>
+    </div>
+
+    <div class="sub">
+      <h4>Where</h4>
+      <div class="files">
+        <span>linchpin-api/app/sandbox.py:177 — <code>DockerSandbox.ensure_image</code></span>
+        <span>linchpin-api/app/sandbox.py:225 — <code>_generate_dockerfile</code></span>
+        <span>linchpin-api/app/models.py:446 — <code>EnvironmentPackages</code> + 名称正则白名单</span>
+      </div>
+    </div>
+
+    <div class="sub">
+      <h4>Caveats</h4>
+      <ul style="margin: 4px 0 0 0; padding-left: 18px; font-size: 14px;">
+        <li><code>--break-system-packages</code> 是 Debian trixie PEP 668 必需，sandbox 内安全。</li>
+        <li>每个 go pkg 单独 RUN，一个失败不污染其他。</li>
+        <li>缓存在 Docker daemon 本地。多 host 需要 registry 共享派生镜像。</li>
+      </ul>
+    </div>
+  </article>
+</section>
+
+</main>
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'base',
+  themeVariables: {
+    fontFamily: 'ui-sans-serif, Inter, system-ui, sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbf7ef',
+    primaryTextColor: '#1f2328',
+    primaryBorderColor: '#d4cdb8',
+    lineColor: '#6b7280',
+    secondaryColor: '#fef3c7',
+    tertiaryColor: '#ffffff',
+  },
+  flowchart: { curve: 'basis', useMaxWidth: true },
+  sequence: { actorMargin: 60, boxMargin: 10, mirrorActors: false }
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control Plane · Tech Design · aprog</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="../index.html">aprog / docs</a></span>
+    <nav>
+      <a href="../cli.html">CLI</a>
+      <a href="../data-model.html">Data Model</a>
+      <a href="../architecture.html">Architecture</a>
+      <a href="index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="crumb">
+      <a href="../index.html">docs</a>
+      <span class="sep">/</span>
+      <a href="index.html">tech design</a>
+      <span class="sep">/</span>
+      <span class="current">control plane</span>
+    </p>
+
+    <div class="eyebrow">L2 · Component focus</div>
+    <h1>Control Plane</h1>
+    <p class="lead">
+      aprog 后端服务. 鉴权 / Process 元数据 / 快照磁盘 / Daytona 编排 / 流转代理 五大职责.
+      所有 CLI 行为最终都进它. 沙箱里发生的事也都经它的代理回传.
+    </p>
+
+    <div class="pills">
+      <span class="pill">Go 1.22+</span>
+      <span class="pill">chi v5</span>
+      <span class="pill">coder/websocket</span>
+      <span class="pill">sqlc</span>
+      <span class="pill">SQLite WAL</span>
+      <span class="pill">goose</span>
+      <span class="pill">argon2id</span>
+      <span class="pill">slog</span>
+      <span class="pill">daytona-go-sdk</span>
+    </div>
+
+    <h2 id="modules">内部模块</h2>
+    <p style="color:var(--fg-muted)">五个子模块. 每个 box 可点击进入 L3 实现细节.</p>
+
+    <figure class="figure">
+      <svg viewBox="0 0 980 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Control plane 内部模块">
+        <defs>
+          <marker id="cp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#59636e"/>
+          </marker>
+        </defs>
+
+        <!-- Outer service border -->
+        <rect x="20" y="40" width="940" height="460" rx="14" fill="#fafbfc" stroke="#d1d9e0"/>
+        <text x="42" y="64" font-size="12" font-weight="700" fill="#59636e" class="mono">aprog-controlplane (Go binary)</text>
+
+        <!-- Top edge: external surface (HTTP/WS) -->
+        <g>
+          <rect x="60" y="80" width="320" height="50" rx="8" fill="#0969da14" stroke="#0969da"/>
+          <text x="220" y="105" font-size="13" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">chi router · HTTP + WS</text>
+          <text x="220" y="122" font-size="10" fill="#59636e" text-anchor="middle">入口 / 路由 / 中间件链</text>
+        </g>
+
+        <!-- Auth (clickable) -->
+        <a href="ref/cp-auth.html">
+          <rect class="node-bg" x="60" y="170" width="180" height="120" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="150" y="200" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">auth</text>
+          <g font-size="11" class="mono" fill="#1f2328">
+            <text class="node-label" x="75" y="222">login / logout</text>
+            <text class="node-label" x="75" y="240">argon2id verify</text>
+            <text class="node-label" x="75" y="258">token gen (32B)</text>
+            <text class="node-label" x="75" y="276">token middleware</text>
+          </g>
+          <text class="click-hint" x="150" y="285" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- Process (clickable) -->
+        <a href="ref/cp-process.html">
+          <rect class="node-bg" x="260" y="170" width="180" height="120" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="350" y="200" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">process</text>
+          <g font-size="11" class="mono" fill="#1f2328">
+            <text class="node-label" x="275" y="222">spawn / ps</text>
+            <text class="node-label" x="275" y="240">attach dispatcher</text>
+            <text class="node-label" x="275" y="258">/exit · /detach</text>
+            <text class="node-label" x="275" y="276">DB 状态迁移</text>
+          </g>
+          <text class="click-hint" x="350" y="285" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- Snapshot (clickable) -->
+        <a href="ref/snapshot-disk.html">
+          <rect class="node-bg" x="460" y="170" width="180" height="120" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="550" y="200" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">snapshot</text>
+          <g font-size="11" class="mono" fill="#1f2328">
+            <text class="node-label" x="475" y="222">Init (骨架)</text>
+            <text class="node-label" x="475" y="240">TarReader 流</text>
+            <text class="node-label" x="475" y="258">Overwrite (原子)</text>
+            <text class="node-label" x="475" y="276">本地 FS · 0755</text>
+          </g>
+          <text class="click-hint" x="550" y="285" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- Sandbox (Daytona) (clickable) -->
+        <a href="ref/cp-sandbox-adapter.html">
+          <rect class="node-bg" x="660" y="170" width="180" height="120" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="750" y="200" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">sandbox</text>
+          <g font-size="11" class="mono" fill="#1f2328">
+            <text class="node-label" x="675" y="222">Create / Destroy</text>
+            <text class="node-label" x="675" y="240">UploadTar</text>
+            <text class="node-label" x="675" y="258">StartLongRunning</text>
+            <text class="node-label" x="675" y="276">SendStdin · Logs</text>
+          </g>
+          <text class="click-hint" x="750" y="285" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- Stream proxy (clickable, wider, sits at bottom) -->
+        <a href="ref/cp-stream.html">
+          <rect class="node-bg" x="60" y="320" width="780" height="80" rx="8" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="450" y="350" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">stream</text>
+          <text class="node-label" x="450" y="370" font-size="11" fill="#1f2328" text-anchor="middle">CLI WS ⇄ Daytona logs WS · 反向代理双向, errgroup 双 goroutine</text>
+          <text class="click-hint" x="450" y="392" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- DB (right side, clickable) -->
+        <a href="ref/db-schema.html">
+          <ellipse class="node-bg" cx="900" cy="200" rx="50" ry="10" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <path class="node-bg" d="M 850 200 L 850 250 A 50 10 0 0 0 950 250 L 950 200" fill="#fff" stroke="#0969da" stroke-width="1.5"/>
+          <ellipse cx="900" cy="200" rx="50" ry="10" fill="none" stroke="#0969da" stroke-width="1.5"/>
+          <text class="node-label" x="900" y="232" font-size="12" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">SQLite</text>
+          <text class="click-hint" x="900" y="280" text-anchor="middle">L3 ↗</text>
+        </a>
+
+        <!-- Bottom: external dependencies -->
+        <g>
+          <rect x="60" y="430" width="380" height="50" rx="8" fill="#fafbfc" stroke="#818b97" stroke-dasharray="4 3"/>
+          <text x="250" y="453" font-size="12" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">Daytona Cloud API</text>
+          <text x="250" y="470" font-size="10" fill="#818b97" text-anchor="middle">外部, 走 daytona-go-sdk</text>
+
+          <rect x="460" y="430" width="380" height="50" rx="8" fill="#fafbfc" stroke="#818b97" stroke-dasharray="4 3"/>
+          <text x="650" y="453" font-size="12" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">本地文件系统</text>
+          <text x="650" y="470" font-size="10" fill="#818b97" text-anchor="middle">/var/lib/aprog/ · 快照磁盘 + aprog.db</text>
+        </g>
+
+        <!-- Arrows from router into modules -->
+        <g stroke="#59636e" stroke-width="1.3" stroke-dasharray="3 3">
+          <line x1="150" y1="130" x2="150" y2="170"/>
+          <line x1="280" y1="130" x2="320" y2="170"/>
+        </g>
+
+        <!-- Arrows from modules into stream -->
+        <line x1="350" y1="290" x2="350" y2="320" stroke="#59636e" stroke-width="1.3" stroke-dasharray="3 3"/>
+        <line x1="550" y1="290" x2="550" y2="320" stroke="#59636e" stroke-width="1.3" stroke-dasharray="3 3"/>
+        <line x1="750" y1="290" x2="750" y2="320" stroke="#59636e" stroke-width="1.3" stroke-dasharray="3 3"/>
+
+        <!-- Arrows to external -->
+        <line x1="750" y1="400" x2="250" y2="430" stroke="#59636e" stroke-width="1.3" marker-end="url(#cp-arrow)"/>
+        <line x1="550" y1="290" x2="650" y2="430" stroke="#59636e" stroke-width="1.3" marker-end="url(#cp-arrow)"/>
+
+        <!-- Auth → DB / Process → DB arrows -->
+        <path d="M 240 230 Q 800 230 850 230" fill="none" stroke="#59636e" stroke-width="1" stroke-dasharray="3 3" opacity="0.5"/>
+
+      </svg>
+      <figcaption class="figure-caption">router 路由到不同模块; auth/process/snapshot/sandbox 共同支撑 attach 流程; stream 作为 attach 期间的常驻代理. 每个模块可点击查看代码骨架.</figcaption>
+    </figure>
+
+    <h2 id="deep-dive">深入</h2>
+    <div class="drilldown">
+
+      <a href="ref/cp-auth.html">
+        <div class="head">
+          <span class="name">auth</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">argon2id 哈希参数 · 32B random token · sliding expire · token middleware 实现.</p>
+        <div class="tags">
+          <span class="tag">argon2id</span>
+          <span class="tag">crypto/rand</span>
+          <span class="tag">middleware</span>
+        </div>
+      </a>
+
+      <a href="ref/cp-process.html">
+        <div class="head">
+          <span class="name">process lifecycle</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">spawn / attach (3-mode dispatcher) / detach / exit 的 Go 业务代码骨架. 状态迁移由 sqlc 查询封装.</p>
+        <div class="tags">
+          <span class="tag">sqlc</span>
+          <span class="tag">nanoid</span>
+        </div>
+      </a>
+
+      <a href="ref/snapshot-disk.html">
+        <div class="head">
+          <span class="name">snapshot 磁盘层</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">骨架初始化 · tar 流式 reader · rename-into-place 原子 overwrite · 备份策略.</p>
+        <div class="tags">
+          <span class="tag">archive/tar</span>
+          <span class="tag">os.Rename</span>
+        </div>
+      </a>
+
+      <a href="ref/cp-sandbox-adapter.html">
+        <div class="head">
+          <span class="name">Daytona adapter</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">把 daytona-go-sdk 收敛到一个内部接口. Create / UploadTar / StartLongRunning / LogsWSURL / SendStdin / Destroy.</p>
+        <div class="tags">
+          <span class="tag">daytona-go-sdk</span>
+          <span class="tag">adapter</span>
+        </div>
+      </a>
+
+      <a href="ref/cp-stream.html">
+        <div class="head">
+          <span class="name">stream 反代</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">CLI WS ⇄ Daytona logs WS 双向桥. errgroup 双 goroutine, 一边 scan-by-line 一边 HTTP POST stdin.</p>
+        <div class="tags">
+          <span class="tag">errgroup</span>
+          <span class="tag">coder/websocket</span>
+        </div>
+      </a>
+
+      <a href="ref/db-schema.html">
+        <div class="head">
+          <span class="name">DB schema</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">完整 SQLite DDL · 索引 · 迁移文件 · sqlc 用法.</p>
+        <div class="tags">
+          <span class="tag">SQLite</span>
+          <span class="tag">goose</span>
+        </div>
+      </a>
+
+      <a href="ref/wire-http.html">
+        <div class="head">
+          <span class="name">HTTP API 表面</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">所有 endpoint · request/response shape · 状态码语义.</p>
+        <div class="tags">
+          <span class="tag">REST</span>
+        </div>
+      </a>
+
+      <a href="ref/wire-ws.html">
+        <div class="head">
+          <span class="name">WebSocket 协议</span>
+          <span class="arrow">→</span>
+        </div>
+        <p class="blurb">上行 / 下行 JSON 事件全集. CP 不解析 payload, 主要做透传 + 鉴权.</p>
+        <div class="tags">
+          <span class="tag">JSON lines</span>
+        </div>
+      </a>
+
+    </div>
+
+    <h2 id="design-notes">设计要点</h2>
+    <ul>
+      <li><strong>无状态 service</strong>: CP 自己不缓存什么. 所有持久状态在 SQLite + 快照磁盘. 重启即可恢复任何在跑的 attach (沙箱还在, 重新 stream proxy).</li>
+      <li><strong>单一鉴权面</strong>: 所有 endpoint 走同一个 token middleware (除 <code>/auth/login</code>). 见 <a href="../architecture.html#adr-1">ADR-1</a>.</li>
+      <li><strong>Daytona adapter 是抽象边界</strong>: 换 sandbox provider 只动这一处 (sandbox.go). 见 <a href="../architecture.html#adr-3">ADR-3</a>.</li>
+      <li><strong>流不入 DB</strong>: WS 事件实时透传, CP 不存. 历史靠快照里的 input.md + session.jsonl (那是 driver 自己写的). 见 <a href="../architecture.html#adr-4">ADR-4</a>.</li>
+    </ul>
+
+  </main>
+
+  <footer>aprog tech design · <a href="index.html">↑ tech design map</a></footer>
+</body>
+</html>

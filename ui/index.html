@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aprog · UI mockup library</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="is-index">
+
+<main class="idx-page" data-od-id="idx-page">
+
+  <header data-od-id="idx-masthead">
+    <div class="idx-mast">
+      <span class="brand">aprog</span>
+      <span class="sep">·</span>
+      <span class="id">execution 260601-os01 · r3 · 完全模拟 Windows 11 Fluent (dark)</span>
+    </div>
+    <h1 class="idx-title">桌面 OS 形态的 Web 前端</h1>
+    <p class="idx-lede">
+      aprog 平台是一台「AI 程序运行的虚拟 OS」, 这里是它的 shell —— 跟 Windows 11 桌面非常接近, 只是 kernel 不同.
+      浏览器是这台远端 OS 的客户端, 换设备登录看到的是同一张桌面.
+      下面每个卡片是一张 mockup 截图; 点进去看高保真渲染.
+    </p>
+  </header>
+
+  <section data-od-id="screens-live">
+    <h2 class="idx-section-title">/ 已就绪</h2>
+    <div class="idx-grid">
+
+      <a href="desktop.html" class="idx-card" data-od-id="card-desktop">
+        <div class="row1">
+          <span class="name">桌面 (空状态)</span>
+          <span class="path">desktop.html</span>
+        </div>
+        <p class="desc">登录后第一屏 — Win11 Bloom 暗色 wallpaper + 底部居中 taskbar (Start + 搜索 + 任务视图 + pinned apps) + 系统托盘 (沙箱池 / 设备 / CH / 网络声音电池 cluster / 双行时钟 / 通知). 没有窗口的"OS 揭示"状态.</p>
+        <div class="tags">
+          <span class="idx-tag">taskbar</span>
+          <span class="idx-tag">system-tray</span>
+          <span class="idx-tag">SVG-glyph 图标</span>
+          <span class="idx-tag">Mica</span>
+        </div>
+      </a>
+
+      <a href="program-window.html" class="idx-card" data-od-id="card-program-window">
+        <div class="row1">
+          <span class="name">程序窗口 (attached)</span>
+          <span class="path">program-window.html</span>
+        </div>
+        <p class="desc">打开 codereviewer 程序后看到的窗口. Win11 title bar (tab strip + 右上 ─ ☐ ×, close hover 红); 左 Acrylic sidebar = 该 program 的 8 个 procs (6 种状态); 主区 chat 流覆盖 5 种事件类型. Taskbar 上 codereviewer 显示 focused (加长 accent 指示线).</p>
+        <div class="tags">
+          <span class="idx-tag">titlebar</span>
+          <span class="idx-tag">tab-strip</span>
+          <span class="idx-tag">Acrylic 侧栏</span>
+          <span class="idx-tag">chat-stream</span>
+          <span class="idx-tag">composer</span>
+        </div>
+      </a>
+
+    </div>
+  </section>
+
+  <section data-od-id="screens-planned">
+    <h2 class="idx-section-title">/ 计划中 (按反馈优先级出)</h2>
+    <div class="idx-grid">
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">多窗口桌面</span><span class="path">multi-window.html</span></div>
+        <p class="desc">同时打开 3-4 个 program 窗口, 验证窗口管理 + 焦点 + 重叠 + 阴影层级. 桌面隐喻的爽点.</p>
+        <div class="tags"><span class="idx-tag">window-management</span><span class="idx-tag">focus</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Activity Monitor</span><span class="path">activity-monitor.html</span></div>
+        <p class="desc">系统级 app, 跨所有 program 的全局 ps. 表格视图 + 列排序 + 状态筛选 + CPU/sandbox 列.</p>
+        <div class="tags"><span class="idx-tag">system-app</span><span class="idx-tag">global-ps</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Files (进程目录浏览器)</span><span class="path">file-browser.html</span></div>
+        <p class="desc">Finder 形态浏览 ~/.aprog/&lt;pid&gt;/ 树 — meta.yml / input.md / execution-state/ / session.jsonl / artifacts/.</p>
+        <div class="tags"><span class="idx-tag">system-app</span><span class="idx-tag">file-tree</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Terminal</span><span class="path">terminal.html</span></div>
+        <p class="desc">系统级常驻 shell. 跑 `aprog` CLI 命令 (spawn / ps / attach / detach / hibernate / wake / kill).</p>
+        <div class="tags"><span class="idx-tag">system-app</span><span class="idx-tag">cli</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Chat 5 种状态</span><span class="path">chat-states.html</span></div>
+        <p class="desc">同一个 chat 容器在 loading / empty / error / populated / edge (超长 tool 输出 / 缺少 tool 名 / 网络中断) 的渲染. 满足 state-coverage 强约束.</p>
+        <div class="tags"><span class="idx-tag is-state-loading">loading</span><span class="idx-tag is-state-empty">empty</span><span class="idx-tag is-state-error">error</span><span class="idx-tag is-state-edge">edge</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Spawn 对话框</span><span class="path">spawn-dialog.html</span></div>
+        <p class="desc">从 dock / Launchpad / CLI 触发 — 选 program + 输入初始 prompt + 选 sandbox profile, 然后 spawn 一个新进程.</p>
+        <div class="tags"><span class="idx-tag">modal</span><span class="idx-tag">form</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Login</span><span class="path">login.html</span></div>
+        <p class="desc">进入桌面前的登录 — 极简, 一个 user/pass + SSO. 桌面 OS 的"开机"瞬间.</p>
+        <div class="tags"><span class="idx-tag">auth</span></div>
+      </div>
+
+      <div class="idx-card is-coming">
+        <div class="row1"><span class="name">Program Store</span><span class="path">program-store.html</span></div>
+        <p class="desc">装新 program 的地方. App Store 形态 — 卡片网格 + 分类 + 详情页 + 安装按钮.</p>
+        <div class="tags"><span class="idx-tag">system-app</span><span class="idx-tag">marketplace</span></div>
+      </div>
+
+    </div>
+  </section>
+
+  <section data-od-id="meta" class="idx-meta-grid">
+    <div class="idx-meta-row"><span class="k">approach</span><span class="v">完全模拟 Win11 Fluent dark</span></div>
+    <div class="idx-meta-row"><span class="k">taskbar</span><span class="v">底部居中 Mica + 双行时钟 + 系统托盘</span></div>
+    <div class="idx-meta-row"><span class="k">window</span><span class="v">Edge-tab title + ─ ☐ ×, close 红</span></div>
+    <div class="idx-meta-row"><span class="k">scrollbar</span><span class="v">Fluent 细 thumb 全局 (webkit + FF)</span></div>
+    <div class="idx-meta-row"><span class="k">font</span><span class="v">Segoe UI Variable / Cascadia Code</span></div>
+    <div class="idx-meta-row"><span class="k">accent</span><span class="v">Win11 蓝 #4cc2ff (dark mode)</span></div>
+  </section>
+
+</main>
+
+</body>
+</html>

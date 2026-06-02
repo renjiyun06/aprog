@@ -1,0 +1,26 @@
+{
+  "name": "mica",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/solid-virtual": "^3.13.26",
+    "highlight.js": "^11.11.1",
+    "idb-keyval": "^6.2.4",
+    "markdown-it": "^14.2.0",
+    "solid-js": "^1.9.12"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.12.3",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}

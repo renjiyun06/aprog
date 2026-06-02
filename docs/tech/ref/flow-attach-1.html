@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attach mode 1 · L3 · aprog</title>
+  <link rel="stylesheet" href="../../style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand"><a href="../../index.html">aprog / docs</a></span>
+    <nav>
+      <a href="../../cli.html">CLI</a>
+      <a href="../../data-model.html">Data Model</a>
+      <a href="../../architecture.html">Architecture</a>
+      <a href="../index.html">Tech Design</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="crumb">
+      <a href="../../index.html">docs</a>
+      <span class="sep">/</span>
+      <a href="../index.html">tech design</a>
+      <span class="sep">/</span>
+      <a href="../flows.html">flows</a>
+      <span class="sep">/</span>
+      <span class="current">attach · mode 1</span>
+    </p>
+
+    <div class="eyebrow">L3 · Flow detail</div>
+    <h1>attach · mode 1 (首次)</h1>
+    <p class="lead">
+      用户第一次进入一个 process. 沙箱不存在, 需要起 + 注入快照 + 启 driver + 打通 IO 流.
+      所有后续 attach 都是这个流程的子集.
+    </p>
+
+    <h2 id="diagram">完整时序</h2>
+
+    <figure class="figure">
+      <svg viewBox="0 0 920 760" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Attach mode 1 完整时序图">
+        <defs>
+          <marker id="m1-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
+          </marker>
+          <marker id="m1-arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+          </marker>
+        </defs>
+
+        <!-- Actor headers -->
+        <g font-size="13" font-weight="700" text-anchor="middle">
+          <rect x="30"  y="20" width="100" height="36" rx="6" fill="#0969da14" stroke="#0969da"/>
+          <text x="80"  y="44" fill="#0969da" class="mono">CLI</text>
+
+          <rect x="200" y="20" width="140" height="36" rx="6" fill="#fff" stroke="#1f2328"/>
+          <text x="270" y="44" fill="#1f2328" class="mono">Control Plane</text>
+
+          <rect x="400" y="20" width="80" height="36" rx="6" fill="#fafbfc" stroke="#d1d9e0"/>
+          <text x="440" y="44" fill="#1f2328" class="mono">DB</text>
+
+          <rect x="540" y="20" width="120" height="36" rx="6" fill="#fafbfc" stroke="#818b97" stroke-dasharray="4 3"/>
+          <text x="600" y="44" fill="#59636e" class="mono">Daytona</text>
+
+          <rect x="720" y="20" width="170" height="36" rx="6" fill="#0969da0d" stroke="#0969da"/>
+          <text x="805" y="44" fill="#0969da" class="mono">claude-driver</text>
+        </g>
+
+        <!-- Lifelines -->
+        <g stroke="#d1d9e0" stroke-width="1" stroke-dasharray="3 4">
+          <line x1="80" y1="60" x2="80" y2="740"/>
+          <line x1="270" y1="60" x2="270" y2="740"/>
+          <line x1="440" y1="60" x2="440" y2="740"/>
+          <line x1="600" y1="60" x2="600" y2="740"/>
+          <line x1="805" y1="60" x2="805" y2="740"/>
+        </g>
+
+        <!-- Messages -->
+        <g font-size="11" fill="#1f2328" class="mono">
+
+          <line x1="80" y1="90" x2="265" y2="90" stroke="#0969da" stroke-width="1.4" marker-end="url(#m1-arrow-blue)"/>
+          <text x="175" y="82" text-anchor="middle" fill="#0969da">1. POST /proc/&lt;pid&gt;/attach</text>
+
+          <line x1="270" y1="115" x2="435" y2="115" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="352" y="108" text-anchor="middle">2. SELECT process WHERE pid=? AND user_id=?</text>
+          <line x1="440" y1="135" x2="275" y2="135" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#m1-arrow)"/>
+          <text x="352" y="128" text-anchor="middle" fill="#59636e">→ sandbox_id=NULL, state=spawned ⇒ mode 1</text>
+
+          <line x1="270" y1="170" x2="595" y2="170" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="162" text-anchor="middle">3. Daytona Create(snapshot=aprog-driver-v1)</text>
+          <line x1="600" y1="190" x2="275" y2="190" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="183" text-anchor="middle" fill="#59636e">→ sandbox_id=sb_xxx</text>
+
+          <line x1="270" y1="220" x2="435" y2="220" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="352" y="213" text-anchor="middle">4. UPDATE processes SET sandbox_id, state='running'</text>
+
+          <line x1="270" y1="255" x2="595" y2="255" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="247" text-anchor="middle">5. FileSystem.UploadFileStream(snap.tar)</text>
+
+          <line x1="270" y1="285" x2="595" y2="285" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="277" text-anchor="middle">6. ExecuteCommand: tar -xf /tmp/snap.tar -C /home/aprog</text>
+
+          <line x1="270" y1="320" x2="595" y2="320" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="313" text-anchor="middle">7. Process.CreateSession(sid=aprog-&lt;pid&gt;)</text>
+
+          <line x1="270" y1="355" x2="595" y2="355" stroke="#0969da" stroke-width="1.4" marker-end="url(#m1-arrow-blue)"/>
+          <text x="430" y="347" text-anchor="middle" fill="#0969da">8. ExecuteSessionCommand(cmd=aprog-driver, runAsync=true)</text>
+
+          <line x1="600" y1="385" x2="790" y2="385" stroke="#0969da" stroke-width="1.4" marker-end="url(#m1-arrow-blue)"/>
+          <text x="695" y="378" text-anchor="middle" fill="#0969da">9. fork()</text>
+
+          <line x1="600" y1="412" x2="275" y2="412" stroke="#1f2328" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="405" text-anchor="middle" fill="#59636e">10. → command_id=cmd_yyy</text>
+
+          <line x1="265" y1="442" x2="85" y2="442" stroke="#0969da" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#m1-arrow-blue)"/>
+          <text x="175" y="435" text-anchor="middle" fill="#0969da">11. 200 OK {ws_url, ticket}</text>
+
+          <line x1="80" y1="475" x2="265" y2="475" stroke="#0969da" stroke-width="1.4" marker-end="url(#m1-arrow-blue)"/>
+          <text x="175" y="467" text-anchor="middle" fill="#0969da">12. WS Upgrade /proc/&lt;pid&gt;/stream?ticket=...</text>
+
+          <line x1="270" y1="510" x2="595" y2="510" stroke="#0969da" stroke-width="1.4" marker-end="url(#m1-arrow-blue)"/>
+          <text x="430" y="502" text-anchor="middle" fill="#0969da">13. WS wss://.../command/cmd_yyy/logs</text>
+
+          <line x1="790" y1="545" x2="605" y2="545" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="695" y="538" text-anchor="middle">14. stdout: session.ready</text>
+
+          <line x1="600" y1="572" x2="275" y2="572" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="565" text-anchor="middle">15. WS bytes</text>
+
+          <line x1="265" y1="600" x2="85" y2="600" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="175" y="592" text-anchor="middle">16. WS forward</text>
+
+          <line x1="80" y1="638" x2="265" y2="638" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="175" y="630" text-anchor="middle">17. {type:"user.input", text:"..."}</text>
+
+          <line x1="270" y1="668" x2="595" y2="668" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="660" text-anchor="middle">18. SendSessionCommandInput (HTTP)</text>
+
+          <line x1="600" y1="694" x2="790" y2="694" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="695" y="686" text-anchor="middle">19. stdin → SDK query() prompt iter</text>
+
+          <line x1="790" y1="724" x2="85" y2="724" stroke="#1f2328" stroke-width="1.2" marker-end="url(#m1-arrow)"/>
+          <text x="430" y="716" text-anchor="middle">20. agent.thinking / message / tool_use 流式回</text>
+        </g>
+      </svg>
+      <figcaption class="figure-caption">蓝色箭头是关键转折. step 8 driver 真正起来; step 13 流通; step 14 起所有事件按 stdout → Daytona WS → CP WS → CLI WS 一路下行.</figcaption>
+    </figure>
+
+    <h2 id="phases">阶段拆解</h2>
+
+    <h3>① 鉴权 + dispatch (step 1-2)</h3>
+    <p>CP 收到 POST 进入 attach handler. 标准的 token middleware 验完之后, 走 sqlc 查询 <code>GetProcessForUser</code> (同时验 ownership). 根据 <code>sandbox_id</code> + <code>state</code> 自动判定 mode. mode 1 因为 sandbox_id 是 NULL 且 state 是 spawned.</p>
+
+    <h3>② 起沙箱 (step 3-4)</h3>
+    <p>Daytona <code>Create</code> 用现成的 snapshot (<code>aprog-driver-v1</code>). 这一步约 1.3 秒 (memory: Daytona 冷启 1.27s). 拿到 sandbox_id 后 <em>立即</em> UPDATE DB —— 万一后面注入失败, CP 重启也能从 DB 找到这个孤儿沙箱来清理.</p>
+
+    <h3>③ 注入快照 (step 5-6)</h3>
+    <p>两步: 先上传 tar 文件, 再在沙箱内 tar -xf. 为什么不直接 <code>FileSystem.UploadFiles</code> 多文件? 因为快照文件多 (尤其 execution-state/blobs 可能几十个), 一次 tar 是一个 HTTP 请求, 文件多是 N 个. 总时间差几秒.</p>
+
+    <h3>④ 启 driver (step 7-10)</h3>
+    <p>这是 architecture 修订后的核心简化: <strong>没有 bridge binary, 直接 ExecuteSessionCommand 起 driver</strong>. <code>runAsync: true</code> 让 Daytona 立即返回 command_id, driver 在后台跑.</p>
+    <p>同一个 sandbox 只创建一个 session (sid 用 <code>aprog-&lt;pid&gt;</code>), 这个 session 持续整个沙箱生命周期. 后续每次 attach 都用同一个 sid + 同一个 cmd.</p>
+
+    <h3>⑤ 打通 IO 流 (step 11-16)</h3>
+    <p>CP response 给 CLI 一个 <code>ws_url</code> + 一次性 5s ticket. CLI 立即升级 WS. CP 在 WS upgrade handler 里再开一条到 Daytona 的 logs WS, 然后启两个 goroutine:</p>
+    <ul>
+      <li><strong>下行</strong>: bufio.Scanner 按行扫 Daytona WS, 一行就 send 给 CLI WS</li>
+      <li><strong>上行</strong>: 读 CLI WS, 每个 JSON 一次 HTTP POST 到 <code>SendSessionCommandInput</code></li>
+    </ul>
+
+    <h3>⑥ 第一次用户输入 (step 17-20)</h3>
+    <p>到这里整个 attach 就 "活" 了. 用户敲字符串发回 driver, driver 喂给 SDK query() 的 prompt iterable, SDK 跑 agent loop, 流式吐 message, driver translate 后 stdout, 一路回到 CLI.</p>
+
+    <h2 id="errors">错误处理</h2>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>错在哪一步</th><th>CP 怎么处理</th><th>用户看到</th></tr></thead>
+      <tbody>
+        <tr><td>step 3 Daytona 起不来</td><td>UPDATE state 回 spawned (没起来不算 running); 返回 503</td><td><code>sandbox_unavailable</code> 提示</td></tr>
+        <tr><td>step 5/6 注入快照失败</td><td>调 Daytona Destroy 销毁孤儿沙箱; UPDATE state 回 spawned, sandbox_id=NULL; 返回 500</td><td><code>internal_error</code></td></tr>
+        <tr><td>step 8 driver 起不来</td><td>同上, 销毁沙箱回滚</td><td><code>internal_error</code></td></tr>
+        <tr><td>step 13 Daytona WS 连不上</td><td>关 CLI WS, 返回 close code 1011</td><td>"无法连接 driver stream, 重试 attach"</td></tr>
+        <tr><td>step 14+ driver 中途 crash</td><td>下行 EOF, CP 发 <code>{type:"fatal"}</code>, 关 WS, UPDATE state 回 spawned, destroy 沙箱</td><td>红色 fatal 错误, 提示重 attach</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="related">相关</h2>
+    <ul>
+      <li><a href="flow-attach-2.html">attach mode 2</a> — exit 后冷启动. 流程一致, step 5 注入的快照含 <code>session.jsonl</code>, step 8 命令加 <code>--resume</code></li>
+      <li><a href="flow-attach-3.html">attach mode 3</a> — re-attach. 跳过 step 3-10 (沙箱已存在), 只做 step 11-20, 加个 replay 补 detach 间隙</li>
+      <li><a href="flow-exit.html">/exit</a> — 把上面整个反过来: tar-out → destroy → state=exited</li>
+      <li><a href="cp-process.html">process 业务代码</a> · <a href="cp-sandbox-adapter.html">Daytona adapter</a> · <a href="cp-stream.html">stream 反代</a></li>
+    </ul>
+
+    <p style="margin-top:2rem; color:var(--fg-subtle); font-size:0.85rem">
+      上层: <a href="../flows.html">flows L2</a> · <a href="../index.html">map</a>
+    </p>
+
+  </main>
+  <footer>aprog tech design L3 · <a href="../index.html">↑ tech design map</a></footer>
+</body>
+</html>

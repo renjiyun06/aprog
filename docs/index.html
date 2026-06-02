@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aprog · docs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">aprog / docs</span>
+    <nav></nav>
+  </header>
+
+  <main>
+    <div class="eyebrow">aprog platform</div>
+    <h1>Documentation</h1>
+    <p class="lead">
+      aprog 是一台 "AI 程序运行的虚拟 OS" —— agent 是引擎, program 是软件, sandbox 是环境.
+      这里收集平台的命令表面 / 数据模型 / 架构形态三份核心规约, 按序读完可建立完整心智模型.
+    </p>
+
+    <div class="doc-list">
+
+      <a class="doc-card" href="cli.html">
+        <div class="doc-card-title">
+          <span class="doc-card-num">01 ·</span>
+          <span class="doc-card-name">CLI Reference</span>
+        </div>
+        <p class="doc-card-blurb">
+          aprog 平台的命令行入口. <code>login</code> / <code>logout</code> /
+          <code>programs</code> / <code>ps</code> / <code>spawn</code> /
+          <code>attach</code>, 加上 TUI 内的 <code>/detach</code> 和 <code>/exit</code>.
+          smart attach 根据沙箱是否存在自动 dispatch 三种内部 mode.
+        </p>
+      </a>
+
+      <a class="doc-card" href="data-model.html">
+        <div class="doc-card-title">
+          <span class="doc-card-num">02 ·</span>
+          <span class="doc-card-name">Data Model</span>
+        </div>
+        <p class="doc-card-blurb">
+          User / AuthSession / Program / Process 四个实体, 字段表 + 关系图 + 状态机.
+          快照模型: 沙箱在时工作副本权威, 沙箱不在时平台快照权威. 状态永不删除.
+        </p>
+      </a>
+
+      <a class="doc-card" href="architecture.html">
+        <div class="doc-card-title">
+          <span class="doc-card-num">03 ·</span>
+          <span class="doc-card-name">Architecture</span>
+        </div>
+        <p class="doc-card-blurb">
+          Program / Engine / Sandbox 三层抽象. 组件 / 通信链路 / 部署拓扑 / 代码分层,
+          以及 4 条 ADR 锁定 load-bearing 的设计决策 (代理 vs 直连, 沙箱内常驻 driver,
+          engine 可替换, session.jsonl 入快照).
+        </p>
+      </a>
+
+      <a class="doc-card" href="tech/index.html">
+        <div class="doc-card-title">
+          <span class="doc-card-num">04 ·</span>
+          <span class="doc-card-name">Technical Design  <span style="font-size:0.7em;color:var(--fg-subtle);">(map)</span></span>
+        </div>
+        <p class="doc-card-blurb">
+          架构落地到具体技术栈, 分三层呈现. <strong>L1 地图</strong>: 视觉系统全景, 组件可点击.
+          <strong>L2 组件聚焦</strong>: 一个组件一页, 内部模块图 + 子模块卡片.
+          <strong>L3 参考</strong>: 完整 DDL / wire protocol / 时序图 / Dockerfile / 代码骨架.
+          Go (CLI + control plane) + TypeScript (claude-driver) + Daytona.
+        </p>
+      </a>
+
+    </div>
+
+  </main>
+
+  <footer>
+    aprog docs · <code>main</code>
+  </footer>
+</body>
+</html>
