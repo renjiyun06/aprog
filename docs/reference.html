@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>参考 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="reference">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">参考</div>
+        <h1>参考</h1>
+        <p class="lead">
+          速查附录：wire 协议（HTTP / WebSocket）、会话事件 schema、以及已弱化为可选客户端的 CLI。
+        </p>
+
+        <h2 id="http">HTTP 端点</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>方法 / 路径</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /auth/login</code></td><td>用户名密码换 token</td></tr>
+            <tr><td><code>POST /auth/logout</code></td><td>失效当前 token</td></tr>
+            <tr><td><code>GET  /programs</code></td><td>列出可 spawn 的程序</td></tr>
+            <tr><td><code>GET  /proc</code></td><td>列出当前用户的进程（ps）</td></tr>
+            <tr><td><code>POST /proc</code></td><td>spawn 新进程</td></tr>
+            <tr><td><code>POST /proc/&lt;pid&gt;/attach</code></td><td>关联沙箱（首次/唤醒/重连自动 dispatch）</td></tr>
+            <tr><td><code>POST /proc/&lt;pid&gt;/hibernate</code></td><td>释放沙箱（休眠）</td></tr>
+            <tr><td><code>GET  /proc/&lt;pid&gt;/fs?path=…</code></td><td>只读读取进程目录文件</td></tr>
+          </tbody>
+        </table></div>
+        <p>所有请求在 header 带 token；失败返回 401。</p>
+
+        <h2 id="ws">WebSocket 流</h2>
+        <p>端点 <code>/proc/&lt;pid&gt;/stream</code>，行分隔 JSON。下行（引擎 → 前端）：</p>
+        <pre><code>{"type":"agent.thinking",    "id":"e8",  "delta":"…"}
+{"type":"agent.tool_use",    "id":"e9",  "tool":"Bash", "input":"…"}
+{"type":"agent.tool_result", "id":"e9",  "ok":true, "output":"…"}
+{"type":"agent.message",     "id":"e10", "delta":"…"}</code></pre>
+        <p>上行（前端 → 引擎）：</p>
+        <pre><code>{"type":"user.input", "text":"…"}</code></pre>
+        <p>聚合规则（按 <code>id</code> 追加、tool_use↔tool_result 配对）见 <a href="protocol.html#aggregation">流式聚合</a>。</p>
+
+        <h2 id="session-schema">会话记录 schema</h2>
+        <p>持久化在进程目录 <code>session.aprog.jsonl</code> 的<strong>合并后</strong>事件（非 wire delta）。每行一条：</p>
+        <pre><code>{"id":"e8",  "ts":"…", "turn":3, "kind":"thinking", "text":"…", "dur":"2.4s"}
+{"id":"e9",  "ts":"…", "turn":3, "kind":"tool", "name":"bash", "arg":"rg \"foo\"", "result":"…"}
+{"id":"e10", "ts":"…", "turn":3, "kind":"reply", "text":"…"}
+{"id":"u11", "ts":"…", "turn":4, "kind":"user", "text":"…"}</code></pre>
+        <p>它是 engine-neutral 的逐字记录，给前端重放与审计用，不参与 resume。详见 <a href="protocol.html#storage">会话存储</a>。</p>
+
+        <h2 id="db">DB schema 概要</h2>
+        <p>Control Plane 持久化的实体（字段详见 <a href="data-model.html">数据模型</a>）：</p>
+        <pre><code>users         (id, username, password_hash, created_at, last_login_at)
+auth_sessions (id/token, user_id, created_at, last_used_at, expires_at, revoked_at)
+processes     (pid, program, user_id, state, phase, snapshot_path,
+               sandbox_id, sandbox_started_at, created_at,
+               last_attached_at, last_exited_at)</code></pre>
+        <p>Program 不入库——由文件系统扫描得到。</p>
+
+        <h2 id="cli">CLI（附录，已弱化）</h2>
+        <div class="note">
+          <span class="note-label">已弱化</span>
+          产品当前以 <a href="window.html">Web 前端</a>为主入口。CLI 作为同协议的另一种客户端保留，命令表面如下，便于脚本化与调试。
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>命令</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>aprog login / logout</code></td><td>登录 / 登出</td></tr>
+            <tr><td><code>aprog programs</code></td><td>列出程序</td></tr>
+            <tr><td><code>aprog ps</code></td><td>列出进程</td></tr>
+            <tr><td><code>aprog spawn &lt;program&gt;</code></td><td>新建进程</td></tr>
+            <tr><td><code>aprog attach &lt;pid&gt;</code></td><td>连上进程（TUI）；smart attach 自动 dispatch 首次/唤醒/重连</td></tr>
+            <tr><td>TUI 内 <code>/detach</code> / <code>/exit</code></td><td>离开 / 归档</td></tr>
+          </tbody>
+        </table></div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

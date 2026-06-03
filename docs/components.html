@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>组件清单 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="components">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>组件清单</h1>
+        <p class="lead">
+          “系统由哪些东西构成”——一次活着的进程，背后牵动着哪些进程和服务。
+          这里逐个说明：它跑在哪、活多久、负责什么，以及哪些是 aprog 自己出的代码、哪些是外部依赖。
+        </p>
+
+        <h2 id="overview">全景</h2>
+        <div class="dgm">
+          <div class="dgm-cols" style="align-items:flex-start;flex-wrap:nowrap">
+            <a class="node c-frontend" href="#frontend" style="min-width:130px">
+              <span class="nt">🖥 Web 前端</span><span class="nd">浏览器 · mica</span>
+            </a>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">HTTP / WS</span><span class="gly">→</span></div>
+            <div class="dgm-group g-vm">
+              <span class="glabel">aprog 自家 VM</span>
+              <div class="dgm-col">
+                <a class="node c-cp" href="#control-plane"><span class="nt">🧭 Control Plane</span><span class="nd">协调 · 反代 · 编排</span></a>
+                <div class="ar down"><span class="albl">快照 IO ▼</span><span class="gly">↓</span></div>
+                <a class="node c-muted" href="state.html#snapshot"><span class="nt">💽 平台快照</span></a>
+              </div>
+            </div>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">Daytona SDK</span><span class="gly">→</span></div>
+            <div class="dgm-group g-sandbox">
+              <span class="glabel">外部 cloud · 沙箱 (1/进程)</span>
+              <div class="dgm-col">
+                <a class="node c-driver" href="#driver"><span class="nt">🔌 Driver + Engine</span><span class="tag">常驻</span></a>
+                <a class="node c-bridge" href="#bridge"><span class="nt">🪢 Bridge</span><span class="tag">短命</span></a>
+                <a class="node c-state" href="state.html"><span class="nt">📂 /home/aprog/</span><span class="nd">进程目录</span></a>
+              </div>
+            </div>
+          </div>
+          <div class="dgm-cap">点任一组件跳到下方说明。<b>前端只跟 Control Plane 通信</b>，永不直连沙箱。</div>
+        </div>
+        <p>
+          一句话：<strong>前端</strong>只跟 <strong>Control Plane</strong> 通信；Control Plane 通过 Daytona 把数据流接进
+          <strong>沙箱</strong>；沙箱里常驻一个 <strong>Driver</strong>（内含 <strong>Engine</strong>），
+          每次连接时再起一个短命的 <strong>Bridge</strong> 做管道。
+        </p>
+
+        <h2 id="table">组件一览</h2>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>组件</th><th>跑在哪</th><th>生命周期</th><th>职责</th><th>谁出的</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Web 前端</strong> (mica)</td><td>用户浏览器</td><td>会话期</td><td>用户入口：进程列表、对话区、目录区。发指令、看事件流、只读浏览文件</td><td>aprog</td></tr>
+              <tr><td><strong>Control Plane</strong></td><td>aprog VM</td><td>长跑 service</td><td>鉴权 / 进程元数据 / 快照磁盘 / 沙箱编排 / 流转代理</td><td>aprog</td></tr>
+              <tr><td><strong>Bridge</strong></td><td>沙箱内</td><td>一次 attach</td><td>把 Driver 的本地 socket pipe 到 Daytona exec 的 stdio。短命、无状态</td><td>aprog</td></tr>
+              <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>把 Engine 接上 aprog 协议。当前是 <code>claude-driver</code>（TS）</td><td>aprog</td></tr>
+              <tr><td><strong>Engine</strong></td><td>沙箱内（Driver 进程里）</td><td>同 Driver</td><td>Claude Agent SDK 的 <code>query()</code> 跑 agent loop</td><td>外部依赖</td></tr>
+              <tr><td><strong>Sandbox</strong> (Daytona)</td><td>外部 cloud</td><td>per-process</td><td>提供文件系统 + 进程 + 网络 + exec API</td><td>外部依赖</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>aprog 自己出的代码是：<strong>前端、Control Plane、Driver、Bridge</strong>，外加一个共享的 <strong>protocol</strong> 包。Engine 和 Sandbox 都是外部依赖。</p>
+
+        <h2 id="frontend">Web 前端 (mica)</h2>
+        <p>
+          用户真正面对的界面。一个程序打开是一个窗口，窗口分三区：左边<strong>进程列表</strong>、中间<strong>对话区</strong>、右边<strong>目录区</strong>。
+          它跨 NAT，只跟 Control Plane 的一个稳定 endpoint 通信，永不直连沙箱。详见 <a href="window.html">工作窗口</a>。
+        </p>
+        <div class="note">
+          <span class="note-label">关于 CLI</span>
+          早期版本以 CLI（<code>aprog ps / attach …</code>）为主入口。现已转为 <strong>Web 前端为主</strong>；
+          CLI 作为同协议的另一种客户端保留为附录，见 <a href="reference.html">参考</a>。
+        </div>
+
+        <h2 id="control-plane">Control Plane</h2>
+        <p>
+          平台的中枢，跑在 aprog 自家 VM 上，是所有跨沙箱操作的<strong>协调点</strong>和元数据/快照的<strong>事实源</strong>。它内部分几块：
+        </p>
+        <div class="cards">
+          <div class="card"><div class="k">api</div><div class="t">HTTP / WS 端点</div><p class="d">前端的所有请求入口；attach 升级为 WebSocket 流</p></div>
+          <div class="card"><div class="k">auth</div><div class="t">鉴权</div><p class="d">login / logout / token，单一鉴权面</p></div>
+          <div class="card"><div class="k">process</div><div class="t">进程编排</div><p class="d">spawn / attach / detach / hibernate / wake / exit 的流程</p></div>
+          <div class="card"><div class="k">snapshot</div><div class="t">快照磁盘 IO</div><p class="d">进程目录 tar-in / tar-out，平台侧持久化</p></div>
+          <div class="card"><div class="k">sandbox</div><div class="t">沙箱封装</div><p class="d">Daytona SDK 封装 + Bridge 调用</p></div>
+          <div class="card"><div class="k">stream</div><div class="t">流反代</div><p class="d">把 Driver 的事件流反代给前端 WS</p></div>
+        </div>
+        <p>
+          为什么所有流量都过 Control Plane、不让前端直连沙箱？单一鉴权面、沙箱不暴露公网端口、provider 抽象不外漏。
+          这是一条 load-bearing 决策，见 <a href="architecture.html#adr">架构 · 关键决策</a>。
+        </p>
+
+        <h2 id="driver">Engine Driver</h2>
+        <p>
+          沙箱内<strong>常驻</strong>的进程，跨 attach/detach 持续活着。它做两件事：
+        </p>
+        <ol>
+          <li>跑 Engine：在自己进程里 <code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，以 streaming-input 模式驱动 agent loop。</li>
+          <li>翻译协议：把 SDK 私有的 <code>AssistantMessage / SystemMessage / ResultMessage</code> 翻成 <strong>engine-neutral 的 aprog 事件</strong>，写本地缓冲、并 append 进进程目录的会话记录。</li>
+        </ol>
+        <p>
+          为什么要一个常驻 Driver、而不是裸跑 Engine？因为 detach 后前端走了、Control Plane 到沙箱的连接也该关，
+          但 Engine 可能还在跑或在等输入，它的产出得有东西兜住；reattach 时还要能看到“离开这段时间发生了啥”。
+          “SDK 消息 → aprog 事件”的翻译放在沙箱内做，让平台与引擎彻底解耦。每款引擎一个 <code>&lt;name&gt;-driver</code> 包，
+          对外的 wire 协议固定，内部怎么调 SDK 是 driver 自己的事。
+        </p>
+
+        <h2 id="bridge">Bridge</h2>
+        <p>
+          一次 attach 期间才存在的<strong>短命管道</strong>，无状态。Control Plane 通过 <code>daytona exec</code> 在沙箱里把它拉起来，
+          它连上 Driver 的本地 socket（<code>/run/aprog/io.sock</code>），把下行字节 pipe 到自己的 stdout（Daytona 流回 Control Plane），
+          把上行的用户输入 pipe 回 socket。前端断开 → Control Plane 关 exec → Bridge 退出；Driver 不受影响继续兜 Engine 输出。
+        </p>
+        <p>
+          为什么不直接 <code>daytona exec</code> 启动 Driver？因为 Driver 是沙箱生命周期级别的长跑进程，不能跟某一次 attach 绑命。
+          Bridge 才是按 attach 起灭的一次性管道。
+        </p>
+
+        <h2 id="engine">Engine</h2>
+        <p>
+          实际的 agent loop，当前是 Claude Agent SDK。它跑在 Driver 进程里，吃 Driver 喂来的用户输入（async iterable），
+          产出消息流。它自己的会话持久化（<code>session.jsonl</code>）是 SDK 默认行为，但<strong>对 aprog 不权威</strong>——
+          那只是沙箱生命周期内的临时缓存，沙箱一销毁就没了。详见 <a href="state.html">进程目录与状态</a>。
+        </p>
+
+        <h2 id="sandbox">Sandbox（Daytona）</h2>
+        <p>
+          per-process 的容器，外部 cloud 服务，提供文件系统、进程空间、网络和 exec API。沙箱镜像（template）里烘进了：
+          基础 OS + 常用工具、<code>claude-driver</code>、<code>aprog-bridge</code>、Node.js 运行时。spawn/wake 时 Control Plane 选用当前 active 镜像起一个新沙箱，
+          把进程目录注入 <code>/home/aprog/</code>。沙箱本身不对外暴露端口；任何“进沙箱”的动作都经 Daytona exec 发起。
+        </p>
+
+        <h2 id="deps">依赖方向</h2>
+        <p>单向，无循环：</p>
+        <div class="dgm">
+          <div class="dgm-stack tight" style="gap:8px">
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#0969da"></span>controlplane.api</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>controlplane</span><span style="color:var(--fg-subtle)">┈┈►</span><span class="chip"><span class="cdot" style="background:#8250df"></span>drivers/*</span><span class="nd" style="font-size:11.5px">作为镜像内容，<strong>不是源码依赖</strong></span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>controlplane</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>drivers/*</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>drivers/*</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#bc4c00"></span>engine SDK</span><span class="nd" style="font-size:11.5px">各自的</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#bf3989"></span>bridge</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span><span class="nd" style="font-size:11.5px">只做 transport，不解析 payload</span></div>
+          </div>
+          <div class="dgm-cap"><b>┈┈►</b> 镜像内容依赖（非源码）　·　<b>───►</b> 源码依赖。单向无环，driver 可独立演化。</div>
+        </div>
+        <p>
+          <code>controlplane</code> 和 <code>drivers/*</code> <strong>没有源码依赖</strong>——driver 跟着沙箱镜像一起烘进去，
+          通过固定的 socket 协议交互。这保证 driver 可以独立演化、独立换引擎。
+        </p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

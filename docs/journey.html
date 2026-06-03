@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>运行全景 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="journey">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">入门</div>
+        <h1>运行全景</h1>
+        <p class="lead">
+          从用户视角走一遍：<strong>装程序 → 启动进程 → 对话 → 休眠 → 唤醒</strong>。
+          上层只讲「你看到什么、做什么」；每一步都能<strong>点进底层</strong>看平台幕后怎么运作。
+          这一页既是使用说明，也是把需求与技术细节串起来的总入口。
+        </p>
+        <div class="note">
+          <span class="note-label">两个altitude</span>
+          每个阶段卡片：上半是<strong>用户视角</strong>，下半是<strong>幕后一句话</strong> + 「深入 →」链接。
+          想看机制就顺着链接往下钻——调用链在 <a href="flows.html">生命周期流程</a>，事件流在
+          <a href="protocol.html">事件流协议</a>，沙箱与镜像在 <a href="sandbox.html">沙箱与镜像</a>，状态在 <a href="state.html">进程目录与状态</a>。
+        </div>
+
+        <h2 id="install">① 安装程序</h2>
+        <div class="dgm">
+          <div class="node c-program">
+            <span class="nt">🛍 用户视角：在<strong>程序商店</strong>挑程序，点「安装」加到桌面</span>
+            <span class="nd">
+              桌面/任务栏只显示你装过的程序。<strong>卸载</strong>只是从桌面移除——进程和数据都留着，
+              重新安装打开还在。安装 = 整理你自己的桌面。
+            </span>
+            <ul class="acts">
+              <li>幕后：程序本就是一个 <code>SKILL.md</code> 技能包，已 publish 在平台的版本化 store 里；
+                  「安装」只在数据库写一条<strong>归属(ownership)</strong>+ 该程序声明的 capability 授权，<strong>不搬文件</strong></li>
+            </ul>
+            <div class="legend">
+              <a class="chip" href="concepts.html">深入 · 程序=技能(skill) →</a>
+              <a class="chip" href="components.html#control-plane">深入 · 目录与归属(DB) →</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="ar down"><span class="gly">↓</span></div>
+
+        <h2 id="spawn">② 启动进程</h2>
+        <div class="dgm">
+          <div class="node c-cp">
+            <span class="nt">▶ 用户视角：打开程序、给这次运行起个名，进程就跑起来了</span>
+            <span class="nd">
+              一个程序可以同时跑多个<strong>进程</strong>（各自独立的一次运行）。进程列表里每行显示它跑的
+              <strong>程序版本号</strong>（focus/选中时浮现）；点标题栏 <strong>?</strong> 看程序说明。
+            </span>
+            <ul class="acts">
+              <li>建<strong>进程目录</strong> <code>~/.aprog/&lt;pid&gt;/</code>（meta.yml + input.md + execution-state/）</li>
+              <li>DB 记一行 <code>process</code>，<strong>钉死</strong> <code>skill@version</code> + 依赖闭包（不同进程可跑不同版本）</li>
+              <li>起一个<strong>沙箱</strong>（driver+引擎+capability 已烘在镜像里），注入程序闭包 + 进程目录</li>
+            </ul>
+            <div class="legend">
+              <a class="chip" href="flows.html#spawn">深入 · spawn 调用链 →</a>
+              <a class="chip" href="sandbox.html#image">深入 · 镜像里烘了什么 →</a>
+              <a class="chip" href="state.html#dir">深入 · 进程目录 →</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="ar down"><span class="gly">↓</span></div>
+
+        <h2 id="talk">③ 对话</h2>
+        <div class="dgm">
+          <div class="node c-driver">
+            <span class="nt">💬 用户视角：输入指令，看思考 / 工具调用 / 回复实时流出</span>
+            <span class="nd">
+              你回车后，消息不是本地直接画上去——它先提交到沙箱，再<strong>顺着同一条事件流</strong>回到界面才显示。
+              界面只有「流」这一个真相源，多设备/多标签天然一致。
+            </span>
+            <ul class="acts">
+              <li>引擎跑程序(技能)，产出经 <a href="components.html#driver">Driver</a> 翻成 <strong>engine-neutral 的 aprog 事件</strong>入流</li>
+              <li>工具调用可命中 <strong>capability</strong>（PATH 上的 CLI / MCP，用注入的受限 token）</li>
+              <li>程序按 <code>input.md</code> 推进自己的阶段(FSM)，更新 execution-state</li>
+            </ul>
+            <div class="legend">
+              <a class="chip" href="protocol.html">深入 · 事件流协议 →</a>
+              <a class="chip" href="protocol.html#echo">深入 · 用户输入 echo-from-stream →</a>
+              <a class="chip" href="harness.html">深入 · 引擎如何映射 →</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="ar down"><span class="gly">↓</span></div>
+
+        <h2 id="hibernate">④ 休眠</h2>
+        <div class="dgm">
+          <div class="node c-muted">
+            <span class="nt">⏾ 用户视角：点「休眠」，释放算力；进程还在、对话区收起，目录仍可浏览</span>
+            <span class="nd">
+              休眠的进程<strong>不占沙箱</strong>。它在列表里照常显示（含版本号），随时能唤醒。<strong>状态永不删</strong>。
+            </span>
+            <ul class="acts">
+              <li>把进程目录存成平台侧快照、销毁沙箱（有内存快照的厂商则直接内存级挂起）</li>
+              <li>DB 置 <code>state=hibernating</code>；事件流留在平台侧（不丢）</li>
+            </ul>
+            <div class="legend">
+              <a class="chip" href="flows.html#hibernate">深入 · hibernate 调用链 →</a>
+              <a class="chip" href="sandbox.html#hibernate">深入 · 两态休眠 →</a>
+              <a class="chip" href="state.html#snapshot">深入 · 快照与生命周期 →</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="ar down"><span class="gly">↓</span></div>
+
+        <h2 id="wake">⑤ 唤醒（再次打开）</h2>
+        <div class="dgm">
+          <div class="node c-sandbox">
+            <span class="nt">⏻ 用户视角：点「唤醒」，进程接着上次干；历史对话照常铺出</span>
+            <span class="nd">
+              对你来说是连续的。但底层是一个<strong>全新沙箱、引擎冷启动、空上下文</strong>——它怎么知道做到哪了？
+            </span>
+            <ul class="acts">
+              <li>起新沙箱 + 注入<strong>钉死版本</strong>的程序闭包 + tar-in 进程目录快照</li>
+              <li>程序按 <a href="state.html#resume">resume 协议</a>读状态文件接着干，<strong>绝不反向重建引擎对话上下文</strong></li>
+              <li>前端重连，按事件流游标补齐缺口 + 续 live —— 历史对话完整呈现</li>
+            </ul>
+            <div class="legend">
+              <a class="chip" href="flows.html#wake">深入 · wake 调用链 →</a>
+              <a class="chip" href="state.html#resume">深入 · 唤醒靠状态不靠对话 →</a>
+            </div>
+          </div>
+        </div>
+
+        <h2 id="invariants">贯穿全程的两条铁律</h2>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap">
+            <div class="node c-state" style="flex:1">
+              <span class="nt">状态 ≠ 对话</span>
+              <span class="nd"><strong>进程目录</strong>是 resume 的唯一权威；<strong>事件流</strong>只服务界面与审计。
+                换引擎、丢对话都不影响进程接着干。</span>
+            </div>
+            <div class="node c-data" style="flex:1">
+              <span class="nt">版本钉死</span>
+              <span class="nd">进程在 spawn 时钉死 <code>程序@版本</code> 及其依赖闭包；改程序发新版<strong>不影响在跑/休眠的进程</strong>，
+                它唤醒后仍跑原版。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">这两条让「休眠→唤醒」「程序持续演进」「厂商可替换」三件事互不打架——也是整套设计自洽的支点。</div>
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

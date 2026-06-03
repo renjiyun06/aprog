@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生命周期流程 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="flows">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">流程</div>
+        <h1>生命周期流程</h1>
+        <p class="lead">
+          把组件串起来看一次进程的生老病死：spawn → attach → detach → hibernate → wake → exit。
+          每一步谁调用谁、沙箱与快照如何变化。
+        </p>
+
+        <h2 id="spawn">spawn · 新建进程</h2>
+        <p>用户在窗口里点 ＋ 填个名字。Control Plane 在 <code>snapshot_path</code> 写入骨架并不起沙箱：</p>
+        <div class="dgm">
+          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">POST /proc {program, name}</span></div>
+          <div class="ar down"><span class="gly">↓</span></div>
+          <div class="node c-cp">
+            <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a></span>
+            <ul class="acts">
+              <li>验 token → User</li>
+              <li>生成 <code>pid</code>（yyMMdd-nanoid）</li>
+              <li>写快照骨架：<code>meta.yml</code> + 空 <code>input.md</code> + 空 <code>execution-state/</code></li>
+              <li>DB 插入 <code>Process(state=spawned, sandbox_id=null)</code></li>
+              <li>返回 <code>pid</code></li>
+            </ul>
+          </div>
+        </div>
+        <p>此时进程<strong>休眠</strong>（没有沙箱）。状态：<span class="pill hib">spawned</span>。</p>
+
+        <h2 id="attach">attach · 关联沙箱并连上对话</h2>
+        <p>第一次 attach（或从休眠 wake）会创建沙箱、注入快照、启动 Driver+Engine，再建立流：</p>
+        <div class="dgm">
+          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">POST /proc/&lt;pid&gt;/attach</span></div>
+          <div class="ar down"><span class="gly">↓</span></div>
+          <div class="node c-cp">
+            <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a> · 起沙箱</span>
+            <ul class="acts">
+              <li>验 token + owner</li>
+              <li><code>sandbox_id</code> 为 null → 起新 <a href="components.html#sandbox">Daytona 沙箱</a>（镜像 aprog/base）</li>
+              <li>写 <code>sandbox_id + sandbox_started_at</code>（state→running）</li>
+              <li>tar 注入 <code>snapshot_path</code> → 沙箱 <code>/home/aprog/</code></li>
+              <li>daytona exec：后台启动 <a href="components.html#driver">claude-driver</a></li>
+              <li>返回 WS endpoint</li>
+            </ul>
+          </div>
+          <div class="ar down"><span class="albl">升级 WS · /proc/&lt;pid&gt;/stream ▼</span><span class="gly">↓</span></div>
+          <div class="node c-bridge">
+            <span class="nt">🪢 建立流（<a href="components.html#bridge">Bridge</a> 管道）</span>
+            <ul class="acts">
+              <li>daytona exec：<code>aprog-bridge --from-offset=0</code></li>
+              <li>bridge 连上 driver socket</li>
+              <li>下行：bridge.stdout → parse → WS.send</li>
+              <li>上行：WS.recv → bridge.stdin → driver → engine</li>
+            </ul>
+          </div>
+        </div>
+        <p>之后用户每输入一句，走 WS → Bridge → Driver socket → 喂给 <code>query()</code>，引擎跑 agent loop，
+        消息出 iterator → Driver 翻成 aprog 事件 → 写会话记录 + 回流前端渲染。详见 <a href="protocol.html">事件协议与会话</a>。</p>
+
+        <h2 id="detach">detach · 离开但保留沙箱</h2>
+        <p>用户离开会话（关窗口/断网）。前端关 WS：</p>
+        <div class="dgm">
+          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">关闭 WS</span></div>
+          <div class="ar down"><span class="gly">↓</span></div>
+          <div class="node c-cp">
+            <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a> 关 Daytona exec <span class="tag">bridge 退出</span></span>
+            <ul class="acts">
+              <li><a href="components.html#driver">driver</a> 不动，继续接 engine 输出写本地缓冲</li>
+              <li>更新 <code>Process.last_attached_at</code></li>
+            </ul>
+          </div>
+        </div>
+        <p>沙箱<strong>还在</strong>，引擎可能还在跑。重新连上就是 reattach：跳过沙箱创建，<code>--from-offset</code> 用上次游标补回间隙事件。</p>
+
+        <h2 id="hibernate">hibernate · 释放沙箱</h2>
+        <p>用户在进程行点“休眠”按钮，显式释放沙箱：</p>
+        <div class="dgm">
+          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">POST /proc/&lt;pid&gt;/hibernate</span></div>
+          <div class="ar down"><span class="gly">↓</span></div>
+          <div class="node c-cp">
+            <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a> 释放沙箱</span>
+            <ul class="acts">
+              <li>tar-out 沙箱 <code>/home/aprog</code> → 覆盖 <a href="state.html#snapshot"><code>snapshot_path</code></a>（回收最新状态）</li>
+              <li>destroy 沙箱</li>
+              <li><code>sandbox_id = null</code> → 语义上的 <span class="pill hib">休眠</span></li>
+            </ul>
+          </div>
+        </div>
+        <p>进程目录与会话记录完整保留在平台快照里。状态：<span class="pill hib">休眠</span>。引擎私有的 <code>session.jsonl</code> 随沙箱一起消失——无所谓，它不权威。</p>
+
+        <h2 id="wake">wake · 重新关联沙箱</h2>
+        <p>用户在休眠进程点“唤醒”按钮。等同于一次 attach：起新沙箱、注入快照、起 Driver。</p>
+        <div class="note">
+          <span class="note-label">冷启动靠状态</span>
+          新沙箱里引擎是空上下文。它读进程目录的状态文件（meta.yml 的 phase/cursor、input.md、execution-state）重建工作记忆，
+          <strong>不重放历史对话</strong>。前端则照常铺出完整历史对话（读会话记录），对用户连续。原因见
+          <a href="state.html#resume">唤醒靠状态，不靠对话</a>。
+        </div>
+
+        <h2 id="exit">exit · 归档</h2>
+        <p>程序执行完毕，Driver 收到 SessionEnd：</p>
+        <div class="dgm">
+          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#8250df"></span>Driver</span><span class="mono">SessionEnd</span></div>
+          <div class="ar down"><span class="gly">↓</span></div>
+          <div class="node c-cp">
+            <span class="nt">通知 <a href="components.html#control-plane">🧭 Control Plane</a> 归档</span>
+            <ul class="acts">
+              <li>tar-out <code>/home/aprog</code> → 覆盖 <a href="state.html#snapshot"><code>snapshot_path</code></a></li>
+              <li>destroy 沙箱</li>
+              <li><code>sandbox_id = null, state = exited, last_exited_at = now</code></li>
+            </ul>
+          </div>
+        </div>
+        <p>
+          <strong>exited 不等于删除</strong>——只是没有沙箱关联。目录、产物、会话记录都还在，新输入到来还能重新 attach 回 running。
+          快照生命周期的事实源归属见 <a href="data-model.html#snapshot">数据模型 · 快照</a>。
+        </p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

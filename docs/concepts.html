@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>核心概念 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="concepts">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">入门</div>
+        <h1>核心概念</h1>
+        <p class="lead">
+          aprog 只有四个一级名词：程序、进程、引擎、沙箱。理解它们之间的关系，
+          就理解了整个平台。它们刻意互相解耦——谁都不知道对方的具体实现。
+        </p>
+
+        <h2 id="program">程序 Program</h2>
+        <p>
+          一段以 <strong>skill 形态</strong>存在的能力，载体是一份 <code>SKILL.md</code>（外加它带的资源、脚本）。
+          程序是<strong>静态实体</strong>：它只声明“要做什么、分几个阶段、读写哪些状态”，不关心由谁来执行、跑在哪台机器上。
+        </p>
+        <p>
+          在界面上，每个程序是桌面/任务栏上的一个图标——“UI 设计”“需求分析”“代码库分析”都是程序。
+          打开它，看到的是这个程序的若干个<strong>进程</strong>。
+        </p>
+
+        <h2 id="process">进程 Process</h2>
+        <p>
+          程序的<strong>一次运行</strong>，完全类比操作系统进程：有 PID，有自己的工作目录，可被休眠（hibernate）和唤醒（wake）。
+          同一个程序可以并行跑多个进程——“UI 设计”可以同时有“官网重设计”和“后台改版”两个互不相干的进程。
+        </p>
+        <p>
+          进程的<strong>真正状态</strong>落在它的目录 <code>~/.aprog/&lt;pid&gt;/</code> 里（类比 <code>/proc/&lt;pid&gt;/</code>），
+          挂在持久卷上。这个目录就是进程，详见 <a href="state.html">进程目录与状态</a>。
+        </p>
+        <div class="note">
+          <span class="note-label">两种状态</span>
+          进程对用户只有两态：<span class="pill run">运行</span>（当前关联着沙箱）与
+          <span class="pill hib">休眠</span>（没有关联沙箱）。休眠进程没有正在进行的对话，但它的目录与状态完整保留，随时可唤醒。
+        </div>
+
+        <h2 id="engine">引擎 Engine</h2>
+        <p>
+          底层的执行引擎，类比 <strong>CPU</strong>。它提供 agent loop —— 给模型喂上下文、跑工具调用、产出思考与回复。
+          当前实现是 <strong>Claude Agent SDK</strong>；未来可替换为 Codex SDK 或其他 agent loop。
+        </p>
+        <p>
+          程序<strong>不知道</strong>引擎是谁。引擎的差异封装在一层薄薄的 <strong>Driver</strong> 里
+          （见 <a href="components.html">组件清单</a>）。这让同一段程序能换引擎跑，性价比和能力差异留给运维决定。
+        </p>
+
+        <h2 id="sandbox">沙箱 Sandbox</h2>
+        <p>
+          per-process 的<strong>容器</strong>：装着工具（git、curl、运行时…），给引擎一个文件系统、进程空间和网络去跑。
+          当前由 <strong>Daytona</strong> 云提供 lifecycle 与 exec 能力。
+        </p>
+        <p>
+          沙箱是<strong>临时算力</strong>，本身无权威状态——它随时可以销毁重建。进程休眠就是释放沙箱，唤醒就是重新分配一个沙箱并把进程目录注入进去。
+          所有“要紧的东西”都在进程目录里，不在沙箱里。
+        </p>
+
+        <h2 id="decoupling">三层抽象，互不知情</h2>
+        <div class="dgm">
+          <div class="dgm-stack">
+            <a class="node c-program" href="#program">
+              <span class="nt">📦 程序 Program <span class="tag">静态 · SKILL.md</span></span>
+              <span class="nd">一段 aprog 程序，只表达“做什么”，不知道下面是谁</span>
+            </a>
+            <div class="ar down"><span class="albl">skill 接口 ▼</span><span class="gly">↓</span></div>
+            <a class="node c-engine" href="components.html#engine">
+              <span class="nt">⚙️ 引擎 Engine <span class="tag">类比 CPU</span></span>
+              <span class="nd">底层 agent loop，当前 Claude Agent SDK，可替换为 Codex 等</span>
+            </a>
+            <div class="ar down"><span class="albl">跑在 ▼</span><span class="gly">↓</span></div>
+            <a class="node c-sandbox" href="components.html#sandbox">
+              <span class="nt">🧊 沙箱 Sandbox <span class="tag">环境</span></span>
+              <span class="nd">装工具 + 给引擎跑的容器，当前由 Daytona 提供</span>
+            </a>
+          </div>
+          <div class="dgm-cap">三者互不知情，通过一层薄适配 <a href="components.html#driver"><b>Engine Driver</b></a> 粘合。</div>
+          <div class="legend">
+            <span class="li"><span class="sw" style="border-color:#8957e5;background:#8957e50f"></span>Program</span>
+            <span class="li"><span class="sw" style="border-color:#e38733;background:#e387330f"></span>Engine</span>
+            <span class="li"><span class="sw" style="border-color:#2da44e;background:#2da44e0f"></span>Sandbox</span>
+          </div>
+        </div>
+        <p>
+          这种解耦是平台价值所在：aprog 管的是“程序的生老病死”，而不是绑定某一个 LLM 厂商或某一种容器。
+          详细的架构展开见 <a href="architecture.html">三层抽象</a>。
+        </p>
+
+        <h2 id="lifecycle">一次执行的生命周期</h2>
+        <p>从用户在界面里新建一个进程，到它跑完归档，会经历这样一条链：</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <a class="node c-muted" href="flows.html#spawn">
+              <span class="nt">spawn <span class="tag"><span class="pill hib">休眠</span></span></span>
+              <span class="nd">创建进程目录（<code>meta.yml</code> / <code>input.md</code>），尚未分配沙箱</span>
+            </a>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <a class="node c-sandbox" href="flows.html#attach">
+              <span class="nt">attach / wake <span class="tag"><span class="pill run">运行</span></span></span>
+              <span class="nd">分配沙箱、注入进程目录、启动 Driver + Engine</span>
+            </a>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-frontend">
+              <span class="nt">▶ 运行中：对话循环</span>
+              <span class="nd">用户输入 → 引擎跑 agent loop → 思考流 / 工具调用 / 回复 → <a href="window.html#conversation">对话区</a>。
+                事件同时被 Driver 翻译、落进进程目录的 <a href="state.html#layers">会话记录</a>。</span>
+            </div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <a class="node c-muted" href="flows.html#detach">
+              <span class="nt">detach</span>
+              <span class="nd">用户离开；沙箱可保留，引擎继续跑</span>
+            </a>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <a class="node c-muted" href="flows.html#hibernate">
+              <span class="nt">hibernate <span class="tag"><span class="pill hib">休眠</span></span></span>
+              <span class="nd">释放沙箱；目录与状态完整保留在平台快照里</span>
+            </a>
+            <div class="ar down"><span class="albl">↺ 可反复 wake / hibernate</span><span class="gly">↓</span></div>
+            <a class="node c-sandbox" href="state.html#resume">
+              <span class="nt">wake <span class="tag"><span class="pill run">运行</span></span></span>
+              <span class="nd">重新分配沙箱，引擎<strong>冷启动</strong>，靠状态文件重建工作记忆——<strong>不重放对话</strong></span>
+            </a>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <a class="node c-bad" href="flows.html#exit">
+              <span class="nt">exit <span class="tag">已退出</span></span>
+              <span class="nd">快照进程目录、销毁沙箱。状态<strong>永不删除</strong>，新输入可再 attach 回来</span>
+            </a>
+          </div>
+        </div>
+        <p>
+          关键一点：<strong>唤醒不依赖对话上下文</strong>。引擎冷启动后，是靠读进程目录里的状态文件
+          （阶段、输入游标、execution-state）来知道“做到哪了”，而不是把历史对话重新喂回去。
+          这条设计贯穿全文，详见 <a href="state.html">进程目录与状态</a>。
+        </p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

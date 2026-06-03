@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>事件流协议 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="protocol">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">协议与会话</div>
+        <h1>事件流协议</h1>
+        <p class="lead">
+          一次会话就是一条 append-only 的事件流：底层引擎吐的每一片思考/工具/回复、以及用户的每次输入，
+          都是流上一个带顺序号的事件。这条流是<strong>唯一数据源</strong>，实时推送、断线恢复、持久存档
+          全部由它统一承载。引擎是可替换的，所以这套协议是 engine-neutral 的——各家引擎怎么映射进来见
+          <a href="harness.html">Harness 适配</a>。
+        </p>
+
+        <h2 id="stream">会话即一条事件流</h2>
+        <p>
+          每个进程一条事件流。流上每个事件由 <a href="components.html#driver">Driver</a> 盖两个标识：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
+            <div class="node c-cp" style="min-width:150px">
+              <span class="nt"># seq <span class="tag">位置</span></span>
+              <span class="nd">单调递增，每个事件（含用户输入）都有。<strong>游标单位</strong>，回答“落后多少 / 补哪些”。</span>
+            </div>
+            <div class="ar"><span class="gly">+</span></div>
+            <div class="node c-driver" style="min-width:150px">
+              <span class="nt">id <span class="tag">身份</span></span>
+              <span class="nd">逻辑分组，流一开始就定。把属于同一条消息的 delta 折叠成一条。回答“是不是同一条”。</span>
+            </div>
+          </div>
+          <div class="dgm-cap"><b>seq</b> 管重放到哪、<b>id</b> 管哪些折成一条。两者都由 Driver 赋予——底层引擎大多不提供（见 <a href="harness.html#seq">Harness 适配 · seq</a>）。</div>
+        </div>
+
+        <h2 id="kinds">事件种类</h2>
+        <p>协议把任何引擎的产出归一成下面几类（harness-neutral）。一个“项(item)”= 一条思考 / 一条回复 / 一次工具调用 / 一次命令执行……它有 <code>start → delta* → end</code> 的生命周期：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>事件</th><th>含义</th><th>关键字段</th></tr></thead>
+          <tbody>
+            <tr><td><code>turn.start</code></td><td>一个 agent 回合开始（用户提交后引擎开干）</td><td>turn</td></tr>
+            <tr><td><code>user</code></td><td>用户输入（完整，非流式；由 Driver 回显进流）</td><td>id, content</td></tr>
+            <tr><td><code>item.start</code></td><td>一个项开始</td><td>id, item_type ∈ thinking / reply / tool / command / file_change …</td></tr>
+            <tr><td><code>item.delta</code></td><td>项的增量</td><td>id, patch（text / args / output…）</td></tr>
+            <tr><td><code>item.end</code></td><td>项完成，带 coalesced 全量</td><td>id, value</td></tr>
+            <tr><td><code>turn.end</code></td><td>回合结束</td><td>turn, usage?</td></tr>
+            <tr><td><code>error</code></td><td>错误</td><td>message</td></tr>
+          </tbody>
+        </table></div>
+        <p>线上每条事件的信封：</p>
+        <pre><code>{"seq":182, "ts":"…", "kind":"item.delta", "id":"msg_B:1", "patch":{"text":"找到了"}}
+{"seq":183, "ts":"…", "kind":"item.end",   "id":"msg_B:1", "value":{"item":"reply","text":"找到了，是 join 写错"}}</code></pre>
+        <div class="note">
+          <span class="note-label">不做授权</span>
+          产品形态<strong>自动批准</strong>引擎的所有操作，所以协议里没有 allow/deny 事件——审批由 Driver 自动应答、不进流（Codex 那种审批往返见 <a href="harness.html#approvals">Harness 适配</a>）。
+        </div>
+
+        <h2 id="one-stream">实时与持久是同一条流</h2>
+        <p>
+          这条流上既有 <strong>delta</strong>（细粒度，供“正在打字”的实时感），也有 <strong>item.end</strong>（coalesced 的完整条目）。
+          所以<strong>不需要两套通道</strong>：
+        </p>
+        <ul>
+          <li><strong>实时</strong> = tail 流的末尾，delta 即推；</li>
+          <li><strong>持久</strong> = 流本身就是存档；老段做<strong>压实(compaction)</strong>——项完成后把它的 delta 折叠进 <code>item.end</code>、丢掉碎 delta。</li>
+        </ul>
+        <div class="note ok">
+          <span class="note-label">session.aprog.jsonl = 流的投影</span>
+          那个“干净的会话记录”不是第二份数据源，而是这条流<strong>压实后的样子</strong>（把同 id 的 delta 折叠成完整条目）。它可由流随时重建，留它只是为了给人/agent 省去每次折叠的开销。删了不丢信息。详见 <a href="state.html#layers">三层数据</a>。
+        </div>
+
+        <h2 id="recover">断线恢复</h2>
+        <p>客户端只记一个数：<strong>已渲染到的最后一条事件的 <code>seq</code></strong>（游标）。重连时报上去，服务端在<strong>同一条订阅</strong>上：</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-frontend"><span class="nt">前端 重连</span><span class="nd">subscribe { from: 游标 seq }</span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-driver">
+              <span class="nt">Driver 在一条流上依次回放</span>
+              <ul class="acts">
+                <li><code>seq &gt; 游标</code> 的事件：落在<strong>已压实段</strong>→给折叠后的 <code>item.end</code>；落在<strong>尾部</strong>→给原始 delta</li>
+                <li>紧接着续 <strong>live delta</strong>（同管交接，原子无缝，不漏不重）</li>
+              </ul>
+            </div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-frontend"><span class="nt">前端 按 id 合并</span><span class="nd">delta 追加、item.end 定稿、快照整条替换——全按 <code>id</code> 幂等，多收也不出错</span></div>
+          </div>
+          <div class="dgm-cap">“落后多少”由 seq 差精确回答；那条<strong>正打到一半</strong>的事件，重放尾部 delta 自然补全——不需要单独的快照机制。投递 <b>at-least-once</b>，前端按 id 去重。</div>
+        </div>
+        <div class="note warn">
+          <span class="note-label">一个陷阱</span>
+          resync 与 live 必须走<strong>同一条有序订阅</strong>：服务端先吐“游标后的事件”、紧接着吐 live delta。别拆成“HTTP 拿全量 + 另开 WS 收增量”两次调用——那中间会漏/重。
+        </div>
+
+        <h2 id="echo">用户输入：echo-from-stream</h2>
+        <p>
+          用户回车后，前端<strong>不</strong>乐观地把消息画上去。它只是把输入提交到沙箱（Driver）；Driver 接受后，作为一个带 <code>seq</code> 的
+          <code>user</code> 事件<strong>注入流</strong>，再顺着流回到所有 viewer——前端这时才显示它。
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
+            <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">回车 → 提交，不本地渲染</span></div>
+            <div class="ar accent"><span class="albl">submit</span><span class="gly">→</span></div>
+            <div class="node c-driver" style="min-width:130px"><span class="nt">Driver</span><span class="nd">接受 → 注入 <code>user</code> 事件(带 seq)</span></div>
+            <div class="ar accent"><span class="albl">stream</span><span class="gly">→</span></div>
+            <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">从流里收到 → 才显示</span></div>
+          </div>
+          <div class="dgm-cap">界面只有<strong>“流”这一个真相源</strong>。代价是用户输入看着略有延迟，但逻辑彻底统一：用户消息和引擎产出走同一条流、同一套 seq/id/恢复语义，多设备/多 viewer 天然一致。</div>
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

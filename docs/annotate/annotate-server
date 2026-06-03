@@ -1,0 +1,141 @@
+#!/usr/bin/env bun
+//
+// annotate-server [--port=N]
+//
+// A tiny self-contained annotation layer for the aprog docs site. It:
+//   - serves the docs/ directory over HTTP,
+//   - injects annotate-overlay.js into every HTML page,
+//   - exposes a small comment API backed by a flat JSONL file.
+//
+// Comment data lives in docs/.comments/comments.jsonl which is GIT-IGNORED —
+// the data is per-machine discussion scratch, only these scripts are tracked.
+// This is deliberately decoupled from the aprog EXEC/state contract that
+// live-annotate uses; the docs site is a standalone static site, not an
+// execution, so a flat store is enough.
+//
+// Comment shape (one JSON object per line):
+//   { id, ts, page, anchor, quote, body, author, resolved }
+//
+//   page   — pathname of the doc page, e.g. "/components.html"
+//   anchor — a CSS selector the overlay computed for the clicked block
+//   quote  — a short text snippet of the clicked block (resilience / display)
+//   body   — the comment text
+//
+// Endpoints:
+//   GET    /api/comments                → { comments: [...] }            (all)
+//   POST   /api/comments                → { ok, comment }                (add)
+//   DELETE /api/comments/:id            → { ok }                         (remove)
+//   POST   /api/comments/:id/resolve    → { ok, resolved }               (toggle)
+
+import { join, normalize, extname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from 'node:fs';
+
+const SCRIPT_DIR = import.meta.dir;                 // …/docs/annotate
+const ROOT = normalize(join(SCRIPT_DIR, '..'));      // …/docs
+const DATA_DIR = join(ROOT, '.comments');
+const STORE = join(DATA_DIR, 'comments.jsonl');
+
+const portArg = process.argv.find((a) => a.startsWith('--port='));
+const PORT = portArg ? Number(portArg.split('=')[1]) : 8094;
+
+if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+if (!existsSync(STORE)) writeFileSync(STORE, '');
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2', '.ico': 'image/x-icon',
+};
+
+// ── comment store ───────────────────────────────────────────────────
+function readComments() {
+  const txt = readFileSync(STORE, 'utf8');
+  return txt.split('\n').filter(Boolean).map((l) => {
+    try { return JSON.parse(l); } catch { return null; }
+  }).filter(Boolean);
+}
+function rewrite(list) {
+  writeFileSync(STORE, list.map((c) => JSON.stringify(c)).join('\n') + (list.length ? '\n' : ''));
+}
+function newId() {
+  return 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// dev server: never let the browser cache anything, so doc/overlay edits
+// show up on a plain refresh (no hard-refresh needed).
+const NOCACHE = { 'cache-control': 'no-store, max-age=0' };
+
+const json = (obj, status = 200) =>
+  new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...NOCACHE } });
+
+// cache-bust query for injected scripts, keyed on file mtime
+function ver(rel) {
+  try { return String(Math.floor(statSync(join(ROOT, rel)).mtimeMs)); } catch { return '0'; }
+}
+
+// ── server ──────────────────────────────────────────────────────────
+Bun.serve({
+  port: PORT,
+  hostname: '0.0.0.0',
+  async fetch(req) {
+    const url = new URL(req.url);
+    let path = decodeURIComponent(url.pathname);
+
+    // ── comment API ──
+    if (path === '/api/comments' && req.method === 'GET') {
+      return json({ comments: readComments() });
+    }
+    if (path === '/api/comments' && req.method === 'POST') {
+      const b = await req.json().catch(() => null);
+      if (!b || !b.body || !b.page) return json({ error: 'page and body required' }, 400);
+      const c = {
+        id: newId(), ts: new Date().toISOString(),
+        page: String(b.page), anchor: String(b.anchor || ''),
+        quote: String(b.quote || '').slice(0, 200), body: String(b.body).slice(0, 4000),
+        author: String(b.author || '').slice(0, 60), resolved: false,
+      };
+      appendFileSync(STORE, JSON.stringify(c) + '\n');
+      return json({ ok: true, comment: c });
+    }
+    const mDel = path.match(/^\/api\/comments\/([^/]+)$/);
+    if (mDel && req.method === 'DELETE') {
+      const list = readComments();
+      rewrite(list.filter((c) => c.id !== mDel[1]));
+      return json({ ok: true });
+    }
+    const mRes = path.match(/^\/api\/comments\/([^/]+)\/resolve$/);
+    if (mRes && req.method === 'POST') {
+      const list = readComments();
+      let resolved = null;
+      for (const c of list) if (c.id === mRes[1]) { c.resolved = !c.resolved; resolved = c.resolved; }
+      rewrite(list);
+      return json({ ok: true, resolved });
+    }
+
+    // ── static files ──
+    if (path === '/') path = '/index.html';
+    const safe = normalize(join(ROOT, path));
+    if (!safe.startsWith(ROOT)) return new Response('forbidden', { status: 403 });
+    const file = Bun.file(safe);
+    if (!(await file.exists())) return new Response('not found', { status: 404 });
+
+    const ext = extname(safe).toLowerCase();
+    const type = MIME[ext] || 'application/octet-stream';
+
+    // inject the overlay into HTML pages (cache-busted by mtime)
+    if (ext === '.html') {
+      let html = await file.text();
+      const tag = `<script src="/annotate/annotate-overlay.js?v=${ver('annotate/annotate-overlay.js')}" defer></script>`;
+      html = html.includes('</body>') ? html.replace('</body>', tag + '\n</body>') : html + tag;
+      return new Response(html, { headers: { 'content-type': type, ...NOCACHE } });
+    }
+    return new Response(file, { headers: { 'content-type': type, ...NOCACHE } });
+  },
+});
+
+console.log(`annotate-server  ·  root=${ROOT}`);
+console.log(`  store: ${STORE}  (git-ignored)`);
+console.log(`  http://0.0.0.0:${PORT}/`);

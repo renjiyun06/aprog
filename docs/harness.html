@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Harness 适配 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="harness">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">协议与会话</div>
+        <h1>Harness 适配</h1>
+        <p class="lead">
+          <a href="protocol.html">事件流协议</a>是 engine-neutral 的——它不长得像任何一家引擎。每款底层 harness
+          由一个 <code>&lt;name&gt;-driver</code> 把它私有的消息<strong>翻译</strong>成 aprog 事件流。本页给出协议要求 Driver 做的事，
+          以及 <strong>Claude Agent SDK</strong> 和 <strong>Codex</strong> 两套具体映射。换 harness 只换 Driver，协议与前端不动。
+        </p>
+
+        <h2 id="duties">Driver 要做的四件事</h2>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-driver"><span class="nt">① 翻译</span><span class="nd">把引擎私有消息 → aprog 事件（<code>turn.* / item.* / user / error</code>）</span></div>
+            <div class="node c-driver"><span class="nt">② 盖 seq</span><span class="nd">给每个事件一个单调递增 <code>seq</code>——<strong>两家 CLI 都不提供</strong>，Driver 用计数器合成</span></div>
+            <div class="node c-driver"><span class="nt">③ 映射 id</span><span class="nd">把引擎的 item / call 标识归一成稳定 <code>id</code>，让 delta 能折叠、重连能按 id 替换</span></div>
+            <div class="node c-driver"><span class="nt">④ 兜策略</span><span class="nd">自动应答审批（不进流）、回显 <code>user</code> 事件、内存持有“在飞项”供恢复</span></div>
+          </div>
+          <div class="dgm-cap">目标事件种类见 <a href="protocol.html#kinds">事件流协议 · 事件种类</a>。下面两张表是 ① 的具体落法。</div>
+        </div>
+
+        <h2 id="claude">Claude Agent SDK → aprog</h2>
+        <p>
+          开 <code>includePartialMessages: true</code> 后，<code>query()</code> 同时吐 <code>stream_event</code>（裹原生
+          Anthropic 流事件）与最终 <code>assistant</code>（coalesced）。映射：
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>aprog 事件</th><th>Claude SDK 来源</th></tr></thead>
+          <tbody>
+            <tr><td><code>turn.start</code></td><td><code>system</code>(init) 或首个 <code>message_start</code></td></tr>
+            <tr><td><code>user</code></td><td><strong>Driver 合成</strong>（SDK 流式输入模式<strong>不回显</strong>用户消息）</td></tr>
+            <tr><td><code>item.start</code> thinking</td><td><code>content_block_start</code>, type=<code>thinking</code></td></tr>
+            <tr><td><code>item.delta</code> thinking</td><td><code>content_block_delta</code>, <code>thinking_delta</code>（另有 <code>signature_delta</code> 完整性签名）</td></tr>
+            <tr><td><code>item.start</code> reply</td><td><code>content_block_start</code>, type=<code>text</code></td></tr>
+            <tr><td><code>item.delta</code> reply</td><td><code>content_block_delta</code>, <code>text_delta</code></td></tr>
+            <tr><td><code>item.start</code> tool</td><td><code>content_block_start</code>, type=<code>tool_use</code>（带 <code>id</code>, <code>name</code>）</td></tr>
+            <tr><td><code>item.delta</code> tool(args)</td><td><code>content_block_delta</code>, <code>input_json_delta</code>(<code>partial_json</code>)</td></tr>
+            <tr><td><code>item.end</code></td><td><code>content_block_stop</code> + 最终 <code>assistant</code> 消息对应 block（<strong>权威 coalesced</strong>）</td></tr>
+            <tr><td><code>item.end</code> tool.result</td><td>随后的 <code>user</code> 消息里的 <code>tool_use_result</code>（按 <code>tool_use_id</code> 回挂）</td></tr>
+            <tr><td><code>turn.end</code></td><td><code>result</code>(SDKResultMessage：num_turns / total_cost_usd / usage)</td></tr>
+            <tr><td><code>id</code></td><td><code>message.id : block_index</code>（工具用 <code>tool_use.id</code>）</td></tr>
+            <tr><td><code>seq</code></td><td>Driver 合成</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">Claude 侧三个要点</span>
+          1) <strong>工具结果是另一条 <code>user</code> 消息</strong>（带 <code>tool_use_result</code>），Driver 按 <code>tool_use_id</code> 把它挂回同一 aprog tool 项；内置工具(Bash/Read/Edit)同理。
+          2) <strong>完成边界</strong>：<code>content_block_stop</code>（单块）/ <code>message_stop</code>（整条）；落库用最终 <code>assistant</code> 消息，不靠拼 delta。
+          3) <code>message.id</code> 在 partials 和最终消息间稳定——这是把 delta 与定稿绑定的身份锚。
+        </div>
+
+        <h2 id="codex">Codex → aprog</h2>
+        <p>
+          Codex 有<strong>三套并存的事件词汇</strong>，适配时要选一条道。推荐对接 <strong>v2「thread/turn/item」</strong>流（<code>codex exec --json</code> 或 app-server，OpenAI 主推）；
+          下表同时列出 legacy <code>EventMsg</code>（<code>codex proto</code>/rollout）与底层 Responses API 以便对照。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>aprog 事件</th><th>Codex v2（推荐）</th><th>Codex legacy EventMsg</th><th>底层 Responses API</th></tr></thead>
+          <tbody>
+            <tr><td><code>turn.start</code></td><td><code>turn.started</code>（+<code>thread.started</code>）</td><td><code>task_started</code>（+<code>session_configured</code>）</td><td><code>response.created</code></td></tr>
+            <tr><td><code>user</code></td><td><code>userMessage</code> item</td><td><code>user_message</code>（原生回显）</td><td>(客户端提供)</td></tr>
+            <tr><td><code>item.start</code></td><td><code>item.started</code></td><td><code>*_begin</code> / <code>item_started</code></td><td><code>output_item.added</code></td></tr>
+            <tr><td><code>item.delta</code> reply</td><td><code>item/agentMessage/delta</code></td><td><code>agent_message_content_delta</code></td><td><code>output_text.delta</code></td></tr>
+            <tr><td><code>item.delta</code> thinking</td><td><code>item/reasoning/delta</code></td><td><code>reasoning_content_delta</code> / <code>reasoning_raw_content_delta</code></td><td><code>reasoning_summary_text.delta</code> / <code>reasoning_text.delta</code></td></tr>
+            <tr><td><code>item.delta</code> command 输出</td><td><code>item/commandExecution/outputDelta</code></td><td><code>exec_command_output_delta</code>(stdout/stderr)</td><td>—（无）</td></tr>
+            <tr><td><code>item.delta</code> tool(args)</td><td>(args 在 completed 整体给)</td><td>—（无）</td><td><code>function_call_arguments.delta</code></td></tr>
+            <tr><td><code>item.end</code></td><td><code>item.completed</code></td><td><code>agent_message</code> / <code>exec_command_end</code> / <code>mcp_tool_call_end</code> …</td><td><code>output_item.done</code></td></tr>
+            <tr><td><code>turn.end</code></td><td><code>turn.completed</code>(usage)</td><td><code>task_complete</code></td><td><code>response.completed</code>(usage)</td></tr>
+            <tr><td><code>error</code></td><td><code>error</code> / <code>turn.failed</code> / <code>item.failed</code></td><td><code>error</code> / <code>stream_error</code></td><td><code>response.failed</code> / <code>error</code></td></tr>
+            <tr><td><code>id</code></td><td><code>itemId</code> / <code>call_id</code></td><td><code>item_id</code> / <code>call_id</code></td><td><code>item_id</code> / <code>call_id</code></td></tr>
+            <tr><td><code>seq</code></td><td><strong>无 → 合成</strong></td><td><strong>无 → 合成</strong></td><td><code>sequence_number</code>(原生)</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">Codex 侧要点</span>
+          1) <strong>命令执行是三段</strong>：<code>begin → output_delta* → end</code>(exit_code)，映射成 aprog <code>command</code> 项。坑：<code>--json</code> 下最终 <code>aggregatedOutput</code> 可能为空，命令输出须从 <code>outputDelta</code> 重建（issue #10141）。
+          2) <strong>reasoning 是并行多段</strong>（<code>summary_index</code> 摘要分段 + 原始 CoT 的 <code>content_index</code>）；扁平成 thinking 时要带 part 序，否则会交错。
+          3) <strong>文件 patch</strong>(<code>patch_apply_*</code>) 与回合级累计 <code>turn_diff</code> 是 Codex 独有 → 映射成 aprog <code>file_change</code> 项 + 回合级 artifact。
+          4) <strong>原生回显</strong> <code>user_message</code>——但为统一，aprog 以 Driver 自发的 <code>user</code> 事件为准，去重引擎回显。
+        </div>
+
+        <h2 id="reconcile">跨 harness 的难点与裁决</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>问题</th><th>Claude</th><th>Codex</th><th>aprog 裁决</th></tr></thead>
+          <tbody>
+            <tr><td id="seq"><strong>全局顺序号</strong></td><td>无</td><td>CLI 无（Responses API 有）</td><td>Driver <strong>统一合成 <code>seq</code></strong>——这正是适配层存在的核心理由</td></tr>
+            <tr><td><strong>用户回显</strong></td><td>不回显</td><td>原生回显</td><td>一律由 <strong>Driver 发 <code>user</code> 事件</strong>（echo-from-stream），去重引擎自带回显</td></tr>
+            <tr><td><strong>工具 / 命令</strong></td><td>tool_use + 单独 tool_result 消息</td><td>命令三段 + 结构化结果</td><td>统一为 aprog <code>tool</code>/<code>command</code> 项：start → (args/output delta) → end(result)</td></tr>
+            <tr><td><strong>思考 / 推理</strong></td><td>单流 thinking + 签名</td><td>并行摘要分段 + 原始 CoT</td><td><code>thinking</code> 项；需要时 delta 带 part 序保持不交错</td></tr>
+            <tr><td id="approvals"><strong>审批</strong></td><td>（默认放行）</td><td>审批往返(需回 Op)</td><td>自动批准：Driver <strong>自动应答</strong>，审批<strong>不进流</strong></td></tr>
+            <tr><td><strong>引擎私有会话</strong></td><td><code>~/.claude/.../&lt;id&gt;.jsonl</code> + resume</td><td>rollout JSONL + <code>codex resume</code></td><td>都是<strong>引擎私有缓存</strong>：不权威、不进快照（见 <a href="state.html#layers">三层数据</a>）</td></tr>
+          </tbody>
+        </table></div>
+        <p>
+          所以 aprog 协议覆盖多家 harness 的关键，就是把它们的差异全部吸收进 Driver：<strong>顺序号合成、身份归一、用户回显、审批自动、引擎私有会话忽略</strong>。
+          前端只认 aprog 事件流，永远不知道下面是 Claude 还是 Codex。
+        </p>
+
+        <h2 id="sources">资料来源</h2>
+        <p style="font-size:13px;color:var(--fg-muted)">基于对官方文档/源码的调研（2026-06）：</p>
+        <ul style="font-size:12.5px;color:var(--fg-muted)">
+          <li>Claude Agent SDK：<code>code.claude.com/docs/en/agent-sdk/streaming-output</code> · <code>/typescript</code> · <code>/sessions</code>；Anthropic Messages 流事件 <code>platform.claude.com/docs/en/build-with-claude/streaming</code></li>
+          <li>Codex：<code>github.com/openai/codex</code> 的 <code>codex-rs/protocol/src/protocol.rs</code>（EventMsg）与 <code>app-server/README.md</code>（v2 item.*）；<code>developers.openai.com/codex/noninteractive</code>（<code>exec --json</code>）；Responses API 流事件 <code>platform.openai.com/docs/api-reference/responses-streaming</code></li>
+        </ul>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

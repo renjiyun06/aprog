@@ -1,0 +1,14 @@
+{
+  "name": "@aprog/driver",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "engine driver —— 常驻沙箱，把底层 harness(Claude Agent SDK / Codex) 翻译成 @aprog/protocol 事件流。",
+  "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aprog/protocol": "workspace:*"
+  }
+}

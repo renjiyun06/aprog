@@ -1,0 +1,12 @@
+{
+  "name": "@aprog/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aprog 事件流协议：会话即一条带 seq/id 的 append-only 流。engine-neutral，前端/后端/driver 共用此契约。",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

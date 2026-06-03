@@ -3,416 +3,202 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Data Model · aprog docs</title>
+  <title>数据模型 · aprog 文档</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
-  <header class="topbar">
-    <span class="brand"><a href="index.html">aprog / docs</a></span>
-    <nav>
-      <a href="cli.html">CLI</a>
-      <a href="data-model.html">Data Model</a>
-      <a href="architecture.html">Architecture</a>
-      <a href="tech/index.html">Tech Design</a>
-    </nav>
+<body data-page="data-model">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
   </header>
 
-  <div class="page with-toc">
-    <main>
-      <div class="eyebrow">02 · Reference</div>
-      <h1>aprog Platform Data Model</h1>
-      <p class="lead">
-        aprog 平台需要一个 <strong>控制面 (control-plane)</strong> 来管理 process 元数据.
-        这份文档描述实体、字段、关系, 以及 source of truth 归属.
-      </p>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">状态与持久化</div>
+        <h1>数据模型</h1>
+        <p class="lead">
+          Control Plane 管理平台要存三类数据，存储介质按一条铁律分开：<strong>关系管理数据进数据库（SQLite）</strong>、
+          <strong>进程工作态与技能包进文件系统</strong>、<strong>密钥进 vault（库里只存引用）</strong>。
+          这页讲实体、字段与事实源归属；进程目录内部结构见 <a href="state.html">进程目录与状态</a>，镜像/沙箱见 <a href="sandbox.html">沙箱与镜像</a>。
+        </p>
 
-      <div class="callout">
-        <p>组件 / 通信 / 部署形态见 <a href="architecture.html">architecture</a>. 本文只关心数据.</p>
-        <p><strong>术语</strong>: "沙箱" 指 Daytona 提供的环境容器, 里面跑
-          <strong>engine driver</strong> + <strong>engine</strong> (当前 Claude Agent SDK TS) +
-          program 工作目录. engine 是可替换的 "执行引擎", 类似 CPU; sandbox 是其运行环境.</p>
-      </div>
+        <h2 id="split">三处存储的分界</h2>
+        <p>为什么这样分：沙箱里的 harness 只有文件工具、没有 SQL，且跨引擎中立要求「文件即状态」；而用户/归属/进程索引是要<strong>查询的关系事实</strong>，归数据库。密钥不进任何快照。</p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+            <div class="node c-cp" style="flex:1">
+              <span class="nt">🗄 SQLite <span class="tag">关系管理</span></span>
+              <span class="nd">User / AuthSession / Skill / SkillVersion / Installation / CapabilityGrant / Process / Snapshot。可查询，存<strong>指针 + 关系事实</strong>，不存重内容。</span>
+            </div>
+            <div class="node c-state" style="flex:1">
+              <span class="nt">📁 文件系统 <span class="tag">权威内容</span></span>
+              <span class="nd"><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;ver&gt;/</code>（版本化技能包）、<code>/var/lib/aprog/proc/&lt;pid&gt;/</code>（进程目录快照）、事件流。</span>
+            </div>
+            <div class="node c-bad" style="flex:1">
+              <span class="nt">🔐 Vault <span class="tag">密钥</span></span>
+              <span class="nd">capability 用的 token/secret 值。DB 只存<strong>引用</strong>，spawn 时按授权注入沙箱，永不烘进镜像/快照。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">DB 行里的 <code>state/phase</code> 是<strong>快查投影</strong>；进程目录的 <code>meta.yml</code> 才是 resume 权威（冲突以目录为准）。见 <a href="state.html#layers">三层数据</a>。</div>
+        </div>
 
-      <h2 id="principles">核心原则</h2>
-      <ul>
-        <li><strong>平台快照 + 沙箱工作副本</strong>: 进程的状态文件 (<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code>) 在平台上以<strong>快照</strong>形态存在; 在沙箱里以<strong>工作副本</strong>形态存在. 同一时刻只有一份是 authoritative —— 沙箱在跑时是工作副本; 沙箱不在时是平台快照.</li>
-        <li><strong>状态穿越沙箱生死</strong>: spawn 时初始化快照; 首次 attach 把快照注入沙箱; <code>/exit</code> 把沙箱里的工作副本打包回平台覆盖快照. 沙箱反复销毁重建, 快照永存.</li>
-        <li><strong>engine session 也在快照里</strong>: engine (当前 Claude Agent SDK) 自己的会话以 <code>session.jsonl</code> 形态躺在工作目录, 跟 program state 一起 tar 进出. attach mode 2 (exit 后重启) 因此可以让对话上下文延续, 不是冷启动. 换 engine 时 session 不可移植, 那次冷启动一下, 可接受.</li>
-        <li><strong>状态永不删除</strong>: 进程一旦 spawn, 它的快照就在那里. 没有 delete / kill 概念.</li>
-      </ul>
+        <h2 id="entities">实体（SQLite）</h2>
 
-      <h2 id="entities">实体</h2>
+        <h3 id="user">User</h3>
+        <p>人类用户，现阶段由管理员 out-of-band 创建（无 self-signup）。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>id</td><td>string</td><td>唯一标识</td></tr>
+            <tr><td>username</td><td>string</td><td>唯一，登录用</td></tr>
+            <tr><td>password_hash</td><td>string</td><td>argon2 / bcrypt</td></tr>
+            <tr><td>created_at / last_login_at</td><td>timestamp</td><td></td></tr>
+          </tbody>
+        </table></div>
 
-      <h3 id="user">User</h3>
-      <p>aprog 的人类用户. 现阶段假设由管理员 out-of-band 创建 (无 self-signup, 无 <code>aprog user create</code> 命令).</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
-        <tbody>
-          <tr><td>id</td><td>string</td><td>唯一标识</td></tr>
-          <tr><td>username</td><td>string</td><td>唯一, 登录时输入</td></tr>
-          <tr><td>password_hash</td><td>string</td><td>argon2 / bcrypt, 不出库</td></tr>
-          <tr><td>created_at</td><td>timestamp</td><td></td></tr>
-          <tr><td>last_login_at</td><td>timestamp?</td><td></td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p><strong>Authoritative</strong>: control-plane DB.</p>
+        <h3 id="authsession">AuthSession</h3>
+        <p>登录创建、登出失效。一个 User 可同时持有多个（多设备各一个）。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>id (= token)</td><td>string</td><td>客户端持有的不透明串</td></tr>
+            <tr><td>user_id</td><td>string</td><td>User.id</td></tr>
+            <tr><td>created_at / last_used_at / expires_at</td><td>timestamp</td><td>默认 TTL 30 天</td></tr>
+            <tr><td>revoked_at</td><td>timestamp?</td><td>登出时填</td></tr>
+          </tbody>
+        </table></div>
+        <p>验证：<code>revoked_at IS NULL AND expires_at &gt; now()</code>，否则 401。</p>
 
-      <h3 id="authsession">AuthSession</h3>
-      <p><code>aprog login</code> 创建; <code>aprog logout</code> 失效. 一个 User 可以同时持有多个 (多设备一设备一个).</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
-        <tbody>
-          <tr><td>id (= token)</td><td>string</td><td>客户端持有的不透明字符串, 每次请求带上</td></tr>
-          <tr><td>user_id</td><td>string</td><td>User.id 引用</td></tr>
-          <tr><td>created_at</td><td>timestamp</td><td>login 时刻</td></tr>
-          <tr><td>last_used_at</td><td>timestamp</td><td>每次命令验证时更新</td></tr>
-          <tr><td>expires_at</td><td>timestamp</td><td>到期时刻, 之后拒绝 (即使未 revoke). 默认 TTL <strong>30 天</strong></td></tr>
-          <tr><td>revoked_at</td><td>timestamp?</td><td>logout 时填; 之后此 token 拒绝</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p>token 验证: <code>revoked_at IS NULL AND expires_at &gt; now()</code>. 任一失败 → 401, 客户端应清掉本地 credentials 并提示 <code>aprog login</code> 重新登录.</p>
-      <p><strong>Authoritative</strong>:</p>
-      <ul>
-        <li>服务端记录 → control-plane DB</li>
-        <li>客户端 token 缓存 → <code>~/.aprog/credentials</code> (mode 0600)</li>
-      </ul>
+        <h3 id="skill">Skill <span class="tag">程序 / 库</span></h3>
+        <p>一个技能包的<strong>身份</strong>。程序(<code>application</code>) 和库(<code>library</code>) 都是 Skill，靠 <code>kind</code> 区分——对底层 harness 它们都是 skill，「程序/库」是平台层角色（见 <a href="journey.html">运行全景</a>）。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>name (= id)</td><td>string</td><td><strong>全局唯一</strong>的技能名，如 <code>design</code>。即 harness 里的 skill 名，必须唯一——故直接作 id，不加命名空间。publish 时强制唯一</td></tr>
+            <tr><td>kind</td><td>enum</td><td><code>application</code>（可 spawn）/ <code>library</code>（只被依赖）</td></tr>
+            <tr><td>source</td><td>enum</td><td><code>builtin</code>（源在 repo）/ <code>user</code>（用户上传）。同形，仅来源不同</td></tr>
+            <tr><td>owner_id</td><td>string?</td><td>作者；builtin 为平台</td></tr>
+            <tr><td>latest_version</td><td>semver</td><td>指向最新的 SkillVersion</td></tr>
+          </tbody>
+        </table></div>
 
-      <h3 id="program">Program</h3>
-      <p>可被 spawn 的程序 (= 一个 skill). 静态实体, 不在 control-plane 持久化, 由文件系统扫描得到. <strong>全平台共享, 不按 user 隔离</strong> —— 任何登录用户看到同一份 program catalog.</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
-        <tbody>
-          <tr><td>name</td><td>string</td><td>唯一标识, 如 <code>grasp</code></td></tr>
-          <tr><td>version</td><td>semver</td><td>程序版本</td></tr>
-          <tr><td>kind</td><td>enum {application, library}</td><td>application 可直接 spawn; library 只被依赖</td></tr>
-          <tr><td>description</td><td>string</td><td>一行说明</td></tr>
-          <tr><td>entry</td><td>path</td><td>程序在文件系统中的位置 (<code>~/.aprog/programs/&lt;name&gt;/SKILL.md</code>)</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p><strong>Authoritative</strong>: 文件系统 (<code>~/.aprog/programs/</code>).</p>
+        <h3 id="skillversion">SkillVersion <span class="tag">不可变</span></h3>
+        <p>一个技能的某个版本，<strong>发布后不可变</strong>。进程钉死的就是它。描述/依赖随版本走。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>skill_name + version</td><td>string + semver</td><td>主键，如 <code>design@0.4.0</code></td></tr>
+            <tr><td>description</td><td>string</td><td>简介（界面 <strong>?</strong> 与程序商店展示）</td></tr>
+            <tr><td>depends_lock</td><td>json</td><td><strong>依赖闭包锁</strong>：解析后的库版本，如 <code>{state@0.3.0, live-annotate@0.4.0}</code>。保证闭包可复现</td></tr>
+            <tr><td>capabilities</td><td>json</td><td>声明需要的 capability + scope（spawn 时据此授权）</td></tr>
+            <tr><td>store_path</td><td>path</td><td><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;version&gt;/</code>（只读副本，publish 时拷入）</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">源 → publish → 副本</span>
+          repo 的 <code>programs/</code> 是<strong>编写源</strong>；一次 publish 把目录拷成版本化只读副本并写 SkillVersion 行。
+          Control Plane <strong>只从副本注入</strong>，不读可编辑的源——所以改程序发新版不影响钉旧版的进程。
+        </div>
 
-      <h3 id="process">Process</h3>
-      <p>一次 program 执行的实例. 主 noun.</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
-        <tbody>
-          <tr><td>pid</td><td>string</td><td><code>yyMMdd-&lt;4-char nanoid&gt;</code>, 如 <code>260521-x9k4</code></td></tr>
-          <tr><td>program</td><td>string</td><td>Program.name 引用</td></tr>
-          <tr><td>user_id</td><td>string</td><td>User.id 引用 (= owner)</td></tr>
-          <tr><td>state</td><td>enum</td><td><code>spawned / running / exited</code> (见状态机)</td></tr>
-          <tr><td>phase</td><td>string?</td><td>program 内部的语义阶段 (如 grasp 的 <code>concepts / mechanisms / flows</code>), 由 program 自己写, 平台只读</td></tr>
-          <tr><td>snapshot_path</td><td>path</td><td>控制面上的快照目录, 如 <code>/var/lib/aprog/proc/&lt;pid&gt;/</code></td></tr>
-          <tr><td>sandbox_id</td><td>string?</td><td>当前 Daytona sandbox ID, 没沙箱时 null. 是控制面访问沙箱的桥.</td></tr>
-          <tr><td>sandbox_started_at</td><td>timestamp?</td><td>当前沙箱起来的时刻 (= 上次 attach mode 1/2 时刻)</td></tr>
-          <tr><td>created_at</td><td>timestamp</td><td>spawn 时刻</td></tr>
-          <tr><td>last_attached_at</td><td>timestamp?</td><td>最近一次 attach</td></tr>
-          <tr><td>last_exited_at</td><td>timestamp?</td><td>最近一次 exit</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p><strong>Authoritative</strong>: control-plane DB (元数据); <code>snapshot_path</code> 指向的目录 (内容, 详见下节).</p>
+        <h3 id="installation">Installation <span class="tag">安装 / 归属</span></h3>
+        <p>用户把某 Skill 装到自己桌面。<strong>安装 = 桌面整理</strong>：装则上桌面/任务栏，卸载只删此行、<strong>进程与数据全留</strong>，重装即恢复。库不单独安装，随程序依赖闭包透明带入。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>user_id + skill_name</td><td>string</td><td>主键</td></tr>
+            <tr><td>pinned_version</td><td>semver?</td><td>留空=跟 latest；填了=锁定某版本启动</td></tr>
+            <tr><td>installed_at</td><td>timestamp</td><td></td></tr>
+          </tbody>
+        </table></div>
 
-      <p><strong>关于沙箱</strong>: 没有独立 Sandbox 实体, 沙箱信息全在 Process 这一行 (<code>sandbox_id</code> + <code>sandbox_started_at</code> 两个字段). 沙箱实际生命由 Daytona authoritative, 控制面只持 <code>sandbox_id</code> 做反查. 沙箱镜像现阶段固定 (<code>aprog/base:0.1</code>), 代码硬编码, 不入表.</p>
+        <h3 id="capability">Capability &amp; CapabilityGrant</h3>
+        <p>capability = 给 harness 调的工具（CLI / MCP），<strong>全量烘在沙箱镜像里</strong>；按 program 差异化在 spawn 时控制暴露面。详见 <a href="sandbox.html">沙箱与镜像</a>。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>实体 / 字段</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Capability</strong>（name, kind=cli|mcp, version）</td><td>能力目录；binary 在镜像 <code>/opt/aprog/bin</code></td></tr>
+            <tr><td><strong>CapabilityGrant</strong>（user_id + skill_name → capability + scopes, secret_ref）</td><td>谁的哪个程序获准用哪个 capability、什么 scope、用 vault 里哪个 secret。spawn 时据此注 PATH/MCP/token/egress</td></tr>
+          </tbody>
+        </table></div>
 
-      <p><code>sandbox_id</code> 的 null-ness 完全对应 "有没有沙箱":</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>状态转换</th><th>sandbox_id 变化</th></tr></thead>
-        <tbody>
-          <tr><td>spawn</td><td>创建时 = null</td></tr>
-          <tr><td>attach mode 1/2</td><td>null → 新 ID</td></tr>
-          <tr><td>/detach</td><td>不变 (沙箱还在)</td></tr>
-          <tr><td>/exit</td><td>→ null (沙箱销毁)</td></tr>
-          <tr><td>attach mode 3</td><td>不变</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p>代价: 丢失沙箱历史 (一个 process 一生可能起过 N 个沙箱, 只留当前那个). MVP 不需要; 真要审计 / 算 compute 账可以后加 <code>sandbox_history</code> 表.</p>
+        <h3 id="process">Process</h3>
+        <p>一次 program 执行的实例，主 noun。版本在 spawn 时<strong>钉死</strong>，一生不变（升级是显式迁移）。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>pid</td><td>string</td><td>uuid 取前几位，如 <code>a3f9c2d1</code></td></tr>
+            <tr><td>user_id</td><td>string</td><td>owner</td></tr>
+            <tr><td>skill_name</td><td>string</td><td><strong>钉死</strong>的程序名，如 <code>design</code></td></tr>
+            <tr><td>skill_version</td><td>semver</td><td><strong>钉死</strong>的版本；依赖闭包由该 SkillVersion 的 <code>depends_lock</code> 推出（不同进程可钉不同版本）</td></tr>
+            <tr><td>state</td><td>enum</td><td><code>running</code>（有沙箱）/ <code>hibernating</code>（无沙箱）</td></tr>
+            <tr><td>provider</td><td>enum</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）</td></tr>
+            <tr><td>sandbox_id</td><td>string?</td><td>当前沙箱 ID，无沙箱时 null</td></tr>
+            <tr><td>snapshot_ref</td><td>string?</td><td>休眠态的引用：导出的进程目录路径，或厂商内存快照 id（见 <a href="sandbox.html#hibernate">两态休眠</a>）</td></tr>
+            <tr><td>created_at / last_active_at</td><td>timestamp</td><td></td></tr>
+          </tbody>
+        </table></div>
+        <p>事实源：DB（关系元数据）+ <code>snapshot_ref</code> / 沙箱里的进程目录（内容，resume 权威）。</p>
 
-      <h2 id="snapshot">Process Snapshot</h2>
-      <p>进程的状态文件目录, 跟随 Process 终身. 不是独立实体, 是 Process 的 <code>snapshot_path</code> 字段指向的目录.</p>
+        <h3 id="snapshot-entity">Snapshot <span class="tag">镜像注册</span></h3>
+        <p>沙箱镜像（capability + 引擎 + driver 烘成）。一个镜像起 N 个沙箱。Daytona 等无内置不可变 tag，故<strong>自算 content-hash 作名</strong>。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>id (= content_hash)</td><td><code>aprog-sandbox:&lt;sha12&gt;</code>，capability 集合的内容哈希</td></tr>
+            <tr><td>provider + provider_ref</td><td>厂商及其侧的 snapshot 名/id</td></tr>
+            <tr><td>resources</td><td>cpu/mem/disk（Daytona 烘进 snapshot）</td></tr>
+            <tr><td>status</td><td>building / active / failed</td></tr>
+          </tbody>
+        </table></div>
 
-      <h3 id="snapshot-layout">目录结构</h3>
-      <pre class="diagram">&lt;snapshot_path&gt;/        (e.g. /var/lib/aprog/proc/260521-x9k4/)
-├── meta.yml            ← 标准化元数据 + state_schema 声明 (state skill 协议)
-├── input.md            ← append-only 用户输入流 (state skill 协议)
-├── execution-state/    ← 程序私有数据 (state skill 协议)
-│   ├── state.yaml      ← KV 索引, 大值 $file 引用
-│   └── blobs/
-└── session.jsonl       ← engine 自己的会话日志 (engine 写; aprog 只搬运)</pre>
-      <p>前三项 (meta + input + execution-state) 由 <a href="../state/SKILL.md">state skill</a> 定义, 是 aprog 协议层的内容. <code>session.jsonl</code> 是 engine 自己的, aprog 不解释, 只随 tar 进出.</p>
-      <div class="callout warn">
-        <p><strong>实时事件流 (driver 缓冲的 events.log) 不属于快照</strong> —— 那是沙箱活着时给 reattach 兜底的环形 buffer, 跟沙箱一起死, 不外传. 详见 <a href="architecture.html">architecture</a>.</p>
-      </div>
+        <h2 id="relations">关系一览</h2>
+        <div class="dgm">
+          <div class="dgm-stack tight" style="gap:6px">
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; Installation &gt;──</span><span class="chip">Skill</span><span class="nd">桌面装了哪些程序</span></div>
+            <div class="dgm-row"><span class="chip">Skill</span><span style="color:var(--fg-subtle)">──&lt; has &gt;──</span><span class="chip">SkillVersion</span><span class="nd">不可变版本 + depends_lock</span></div>
+            <div class="dgm-row"><span class="chip">User×Skill</span><span style="color:var(--fg-subtle)">──&lt; CapabilityGrant &gt;──</span><span class="chip">Capability</span><span class="nd">每程序的能力授权 + scope</span></div>
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; runs &gt;──</span><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 钉 →</span><span class="chip">SkillVersion</span></div>
+            <div class="dgm-row"><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 跑在 →</span><span class="chip">Snapshot</span><span class="nd">某镜像起的沙箱</span></div>
+          </div>
+        </div>
 
-      <h3 id="snapshot-lifecycle">快照生命周期</h3>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>时机</th><th>动作</th><th>source of truth</th></tr></thead>
-        <tbody>
-          <tr><td><code>aprog spawn</code></td><td>控制面在 <code>snapshot_path</code> 写入骨架 (<code>meta.yml</code> + 空 <code>input.md</code> + 空 <code>execution-state/</code>)</td><td>平台快照</td></tr>
-          <tr><td><code>aprog attach</code> mode 1/2</td><td>控制面起沙箱, 把 <code>snapshot_path</code> 内容 tar 进沙箱解开到 <code>/home/aprog</code></td><td><strong>沙箱工作副本</strong> (开始演化)</td></tr>
-          <tr><td>沙箱跑期间</td><td>engine 读写 <code>/home/aprog</code> 下文件. 控制面快照不变, 滞后.</td><td>沙箱工作副本</td></tr>
-          <tr><td><code>/detach</code></td><td>沙箱继续跑, 不同步. 平台快照保持 attach 前的状态.</td><td>沙箱工作副本</td></tr>
-          <tr><td><code>aprog attach</code> mode 3</td><td>重连, 沙箱内的工作副本不变</td><td>沙箱工作副本</td></tr>
-          <tr><td><code>/exit</code></td><td>控制面从沙箱 tar 出 <code>/home/aprog</code> 内容, 覆盖 <code>snapshot_path</code>. destroy 沙箱.</td><td>平台快照 (回收)</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p>外部 (CLI / TUI 浏览器) 读文件的 dispatch:</p>
-      <ul>
-        <li>沙箱在 (running) → 通过 Daytona exec 读沙箱里的新鲜版本</li>
-        <li>沙箱不在 (spawned / exited) → 直接读 <code>snapshot_path</code> 下的快照</li>
-      </ul>
-      <p>写默认拒绝 —— 只有 spawn / engine 自己 / exit 流程可以 mutate. MVP 不开放外部修改.</p>
+        <h2 id="states">两个状态</h2>
+        <p>Process 只有两个状态，由「有没有沙箱」驱动：</p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
+            <div class="node c-sandbox" style="min-width:150px">
+              <span class="nt">running <span class="tag"><span class="pill run">运行</span></span></span>
+              <span class="nd"><code>sandbox_id</code> 非空，有 live 对话</span>
+            </div>
+            <div class="ar accent"><span class="albl">hibernate ⇄ wake</span><span class="gly">⇄</span></div>
+            <div class="node c-muted" style="min-width:150px">
+              <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
+              <span class="nd"><code>sandbox_id=null</code>，留 <code>snapshot_ref</code></span>
+            </div>
+          </div>
+          <div class="dgm-cap">休眠态：交互区收起、目录仍可浏览（见 <a href="window.html#states">工作窗口</a>）。<strong>状态永不删除</strong>——程序跑完也只是处于休眠、随时可再唤醒。</div>
+        </div>
 
-      <h2 id="relations">关系</h2>
-      <figure class="figure">
-        <svg viewBox="0 0 820 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="实体关系图">
-          <defs>
-            <marker id="er-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
-            </marker>
-            <marker id="er-arrow-soft" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="#818b97"/>
-            </marker>
-          </defs>
+        <h2 id="snapshot">快照与事实源</h2>
+        <p>
+          进程状态两种形态：沙箱里的<strong>工作副本</strong>、平台上的<strong>快照</strong>。同一时刻只有一份权威——
+          沙箱在跑时是工作副本；沙箱不在时是平台快照（或厂商内存快照）。状态穿越沙箱生死，<strong>永不删除</strong>。
+        </p>
+        <div class="note bad">
+          <span class="note-label">不变量</span>
+          引擎私有的 <code>session.jsonl</code> <strong>不进快照、不权威</strong>，resume 靠进程目录的状态文件而非对话。
+          详见 <a href="state.html#layers">三层数据</a> 与 <a href="state.html#resume">唤醒靠状态不靠对话</a>。
+        </div>
 
-          <!-- User -->
-          <g>
-            <rect x="320" y="30" width="180" height="80" rx="8" fill="#0969da14" stroke="#0969da" stroke-width="1.5"/>
-            <text x="410" y="58" font-size="15" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">User</text>
-            <text x="410" y="78" font-size="11" fill="#59636e" text-anchor="middle">id · username · password_hash</text>
-            <text x="410" y="96" font-size="10" fill="#818b97" text-anchor="middle">所有 process 的 owner</text>
-          </g>
-
-          <!-- AuthSession -->
-          <g>
-            <rect x="580" y="30" width="200" height="80" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.2"/>
-            <text x="680" y="58" font-size="15" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">AuthSession</text>
-            <text x="680" y="78" font-size="11" fill="#59636e" text-anchor="middle">id (= token) · expires_at</text>
-            <text x="680" y="96" font-size="10" fill="#818b97" text-anchor="middle">login 每设备一个</text>
-          </g>
-
-          <!-- Process -->
-          <g>
-            <rect x="320" y="230" width="180" height="100" rx="8" fill="#fff" stroke="#1f2328" stroke-width="1.5"/>
-            <text x="410" y="258" font-size="15" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">Process</text>
-            <text x="410" y="278" font-size="11" fill="#59636e" text-anchor="middle">pid · state · phase</text>
-            <text x="410" y="294" font-size="11" fill="#59636e" text-anchor="middle">snapshot_path · sandbox_id</text>
-            <text x="410" y="316" font-size="10" fill="#818b97" text-anchor="middle">主 noun · 一次 program 执行</text>
-          </g>
-
-          <!-- snapshot_path (disk cylinder) -->
-          <g>
-            <ellipse cx="680" cy="245" rx="80" ry="11" fill="#fafbfc" stroke="#d1d9e0"/>
-            <path d="M 600 245 L 600 305 A 80 11 0 0 0 760 305 L 760 245" fill="#fafbfc" stroke="#d1d9e0"/>
-            <ellipse cx="680" cy="245" rx="80" ry="11" fill="none" stroke="#d1d9e0"/>
-            <text x="680" y="282" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle" class="mono">snapshot_path</text>
-            <text x="680" y="300" font-size="10" fill="#59636e" text-anchor="middle">控制面磁盘目录</text>
-          </g>
-
-          <!-- Daytona sandbox (external, dashed) -->
-          <g>
-            <rect x="320" y="430" width="180" height="80" rx="8" fill="#fafbfc" stroke="#818b97" stroke-width="1.2" stroke-dasharray="5 3"/>
-            <text x="410" y="458" font-size="15" font-weight="700" fill="#59636e" text-anchor="middle" class="mono">Daytona sandbox</text>
-            <text x="410" y="478" font-size="11" fill="#59636e" text-anchor="middle">ephemeral · 外部 · null 时无</text>
-            <text x="410" y="498" font-size="10" fill="#818b97" text-anchor="middle">不是 aprog 实体</text>
-          </g>
-
-          <!-- Program (catalog) -->
-          <g>
-            <rect x="40" y="230" width="180" height="100" rx="8" fill="#fafbfc" stroke="#d1d9e0" stroke-width="1.2"/>
-            <text x="130" y="258" font-size="15" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">Program</text>
-            <text x="130" y="278" font-size="11" fill="#59636e" text-anchor="middle">name · version · kind</text>
-            <text x="130" y="294" font-size="10" fill="#818b97" text-anchor="middle">文件系统扫描</text>
-            <text x="130" y="312" font-size="10" fill="#818b97" text-anchor="middle">全平台共享 catalog</text>
-          </g>
-
-          <!-- Relations -->
-          <!-- User -> AuthSession (1:N) -->
-          <line x1="500" y1="70" x2="580" y2="70" stroke="#1f2328" stroke-width="1.5" marker-end="url(#er-arrow)"/>
-          <text x="540" y="60" font-size="11" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">1:N</text>
-
-          <!-- User -> Process (1:N) -->
-          <line x1="410" y1="110" x2="410" y2="230" stroke="#1f2328" stroke-width="1.5" marker-end="url(#er-arrow)"/>
-          <text x="430" y="172" font-size="11" font-weight="700" fill="#0969da" class="mono">1:N</text>
-
-          <!-- Process -> snapshot_path (1:1) -->
-          <line x1="500" y1="270" x2="600" y2="270" stroke="#1f2328" stroke-width="1.5" marker-end="url(#er-arrow)"/>
-          <text x="550" y="262" font-size="11" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">1:1</text>
-
-          <!-- Process -> Daytona sandbox (sandbox_id, dashed) -->
-          <line x1="410" y1="330" x2="410" y2="430" stroke="#818b97" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#er-arrow-soft)"/>
-          <text x="488" y="380" font-size="11" font-weight="600" fill="#818b97" class="mono">sandbox_id</text>
-          <text x="488" y="394" font-size="10" fill="#818b97" text-anchor="start">(0..1, nullable)</text>
-
-          <!-- Process -> Program (name ref, soft) -->
-          <line x1="320" y1="290" x2="220" y2="290" stroke="#818b97" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#er-arrow-soft)"/>
-          <text x="270" y="282" font-size="10" font-weight="600" fill="#818b97" text-anchor="middle" class="mono">name 软引用</text>
-
-          <!-- Legend -->
-          <g transform="translate(40, 460)">
-            <text x="0" y="0" font-size="11" font-weight="700" fill="#59636e" class="mono">图例</text>
-            <line x1="0" y1="18" x2="30" y2="18" stroke="#1f2328" stroke-width="1.5"/>
-            <text x="38" y="22" font-size="11" fill="#59636e">强引用 (FK)</text>
-            <line x1="0" y1="38" x2="30" y2="38" stroke="#818b97" stroke-width="1.5" stroke-dasharray="5 3"/>
-            <text x="38" y="42" font-size="11" fill="#59636e">软引用 / 外部</text>
-          </g>
-        </svg>
-        <figcaption class="figure-caption">4 个实体 + 1 个 1:1 跟随 Process 的快照目录 + Daytona 沙箱作为外部引用. Program 是 catalog, 不入 DB.</figcaption>
-      </figure>
-
-      <h2 id="state-machine">Process 状态机</h2>
-      <figure class="figure">
-        <svg viewBox="0 0 800 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Process 状态机">
-          <defs>
-            <marker id="sm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="#1f2328"/>
-            </marker>
-            <marker id="sm-arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
-            </marker>
-          </defs>
-
-          <!-- Start node -->
-          <circle cx="140" cy="40" r="10" fill="#1f2328"/>
-          <text x="158" y="45" font-size="11" fill="#59636e" class="mono">start</text>
-
-          <!-- States: spawned · running · exited -->
-          <g>
-            <rect x="60" y="180" width="160" height="90" rx="10" fill="#fafbfc" stroke="#1f2328" stroke-width="1.5"/>
-            <text x="140" y="212" font-size="18" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">spawned</text>
-            <text x="140" y="234" font-size="11" fill="#59636e" text-anchor="middle">已注册 + 快照骨架</text>
-            <text x="140" y="250" font-size="11" fill="#59636e" text-anchor="middle">未起过沙箱</text>
-            <text x="140" y="266" font-size="10" fill="#0969da" text-anchor="middle" class="mono">不烧 compute</text>
-          </g>
-
-          <g>
-            <rect x="320" y="180" width="160" height="90" rx="10" fill="#0969da14" stroke="#0969da" stroke-width="2"/>
-            <text x="400" y="212" font-size="18" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">running</text>
-            <text x="400" y="234" font-size="11" fill="#1f2328" text-anchor="middle">沙箱在跑</text>
-            <text x="400" y="250" font-size="10" fill="#59636e" text-anchor="middle">子状态: attached / detached</text>
-            <text x="400" y="266" font-size="10" fill="#0969da" text-anchor="middle" class="mono">占 compute</text>
-          </g>
-
-          <g>
-            <rect x="580" y="180" width="160" height="90" rx="10" fill="#fafbfc" stroke="#1f2328" stroke-width="1.5"/>
-            <text x="660" y="212" font-size="18" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">exited</text>
-            <text x="660" y="234" font-size="11" fill="#59636e" text-anchor="middle">沙箱已销毁</text>
-            <text x="660" y="250" font-size="11" fill="#59636e" text-anchor="middle">快照已回收</text>
-            <text x="660" y="266" font-size="10" fill="#0969da" text-anchor="middle" class="mono">不烧 compute</text>
-          </g>
-
-          <!-- start -> spawned -->
-          <line x1="140" y1="50" x2="140" y2="180" stroke="#1f2328" stroke-width="1.5" marker-end="url(#sm-arrow)"/>
-          <text x="152" y="120" font-size="11" font-weight="600" fill="#1f2328" class="mono">spawn</text>
-
-          <!-- spawned -> running: attach mode 1 -->
-          <line x1="220" y1="225" x2="320" y2="225" stroke="#0969da" stroke-width="1.8" marker-end="url(#sm-arrow-accent)"/>
-          <text x="270" y="216" font-size="11" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">attach mode 1</text>
-          <text x="270" y="244" font-size="10" fill="#59636e" text-anchor="middle">起沙箱 + 注入</text>
-
-          <!-- running -> exited: /exit -->
-          <line x1="480" y1="225" x2="580" y2="225" stroke="#1f2328" stroke-width="1.8" marker-end="url(#sm-arrow)"/>
-          <text x="530" y="216" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">/exit</text>
-          <text x="530" y="244" font-size="10" fill="#59636e" text-anchor="middle">tar-out + destroy</text>
-
-          <!-- exited -> running: attach mode 2 (curved below) -->
-          <path d="M 660 270 Q 660 360 400 360 Q 320 360 320 270" fill="none" stroke="#0969da" stroke-width="1.8" marker-end="url(#sm-arrow-accent)"/>
-          <text x="490" y="384" font-size="11" font-weight="700" fill="#0969da" text-anchor="middle" class="mono">attach mode 2</text>
-          <text x="490" y="400" font-size="10" fill="#59636e" text-anchor="middle">起沙箱 + 注入 (含 session.jsonl, 对话续上)</text>
-
-          <!-- running self-loop: /detach + attach mode 3 (curved above) -->
-          <path d="M 360 180 Q 360 110 400 110 Q 440 110 440 180" fill="none" stroke="#1f2328" stroke-width="1.4" marker-end="url(#sm-arrow)"/>
-          <text x="400" y="100" font-size="11" font-weight="700" fill="#1f2328" text-anchor="middle" class="mono">/detach ↻ attach mode 3</text>
-          <text x="400" y="84" font-size="10" fill="#59636e" text-anchor="middle">沙箱不动, 仅断/重接 UI</text>
-        </svg>
-        <figcaption class="figure-caption">三态有向图. 没有 <code>killed</code> / <code>deleted</code> —— 状态永不删除是核心原则.</figcaption>
-      </figure>
-
-      <p>状态枚举:</p>
-      <ul>
-        <li><strong><code>spawned</code></strong> — Process row 已建, 快照骨架已建, 没起过沙箱. 离开方式: <code>attach</code>.</li>
-        <li><strong><code>running</code></strong> — 沙箱在跑. 内部子状态 (ps 不显示):
-          <ul>
-            <li>至少一个 viewer 连着 = "attached"</li>
-            <li>无 viewer = "detached" (沙箱仍跑, 占 compute)</li>
-          </ul>
-        </li>
-        <li><strong><code>exited</code></strong> — 沙箱已销毁, 快照已回收到 <code>snapshot_path</code>. 可走 mode 2 attach 重启.</li>
-      </ul>
-      <div class="callout">
-        <p><strong>没有 <code>killed</code> / <code>deleted</code> 状态</strong> —— 状态永不删除是核心原则.</p>
-      </div>
-
-      <h2 id="sot">Source of truth 总览</h2>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>数据</th><th>存储</th><th>谁是 authoritative</th></tr></thead>
-        <tbody>
-          <tr><td>User (账号 + 密码 hash)</td><td>control-plane DB</td><td>管理员 out-of-band 创建</td></tr>
-          <tr><td>AuthSession 服务端记录</td><td>control-plane DB</td><td>login 写, logout 改 revoked_at</td></tr>
-          <tr><td>AuthSession 客户端 token</td><td><code>~/.aprog/credentials</code> (mode 0600)</td><td>login 写, logout 删</td></tr>
-          <tr><td>Program 列表</td><td>文件系统扫描</td><td><code>~/.aprog/programs/</code> (不入 control-plane)</td></tr>
-          <tr><td>Process 元数据 (pid / state / phase / 时间戳)</td><td>control-plane DB</td><td>spawn / attach / detach / exit 都写它</td></tr>
-          <tr><td>进程状态文件 (spawned / exited 时)</td><td>控制面 <code>snapshot_path</code> 下</td><td>平台快照</td></tr>
-          <tr><td>进程状态文件 (running 时)</td><td>沙箱内 <code>/home/aprog/</code></td><td>沙箱工作副本 (新鲜)</td></tr>
-          <tr><td>Sandbox 实际生命</td><td>Daytona</td><td>以 Daytona 查询为准. 控制面只在 Process 行存 <code>sandbox_id</code> 做反查</td></tr>
-          <tr><td>Engine session (会话日志)</td><td><code>snapshot_path/session.jsonl</code> (沙箱不在时); 沙箱内 <code>/home/aprog/session.jsonl</code> (沙箱在时)</td><td>engine 写, aprog 只搬运 (tar)</td></tr>
-          <tr><td>Driver events buffer (实时事件流)</td><td>沙箱内 <code>/var/aprog/events.log</code> (ring)</td><td>沙箱在时给 reattach 兜底, 沙箱死时丢</td></tr>
-        </tbody>
-      </table>
-      </div>
-
-      <h2 id="cmd-map">命令到数据的映射</h2>
-      <p>每条命令 (除 <code>login</code> 本身) 默认携带客户端 <code>~/.aprog/credentials</code> 里的 token; control-plane 验证 token (= AuthSession.id), 失败一律 401.</p>
-      <div class="table-wrap">
-      <table>
-        <thead><tr><th>CLI</th><th>读</th><th>写</th></tr></thead>
-        <tbody>
-          <tr><td><code>aprog login</code></td><td>control-plane (User by username + password 校验)</td><td>control-plane (新 AuthSession), 客户端 (<code>~/.aprog/credentials</code>)</td></tr>
-          <tr><td><code>aprog logout</code></td><td>客户端 (token)</td><td>control-plane (AuthSession.revoked_at), 客户端 (删 credentials)</td></tr>
-          <tr><td><code>aprog programs</code></td><td>文件系统</td><td>—</td></tr>
-          <tr><td><code>aprog ps</code></td><td>control-plane (Process 表, 按 user_id 过滤)</td><td>—</td></tr>
-          <tr><td><code>aprog spawn &lt;prog&gt;</code></td><td>文件系统 (验程序存在)</td><td>control-plane (新 Process), 控制面磁盘 (初始化 <code>snapshot_path</code> 骨架)</td></tr>
-          <tr><td><code>aprog attach &lt;pid&gt;</code> mode 1/2</td><td>control-plane, 控制面磁盘 (读快照, 含 session.jsonl)</td><td>control-plane (sandbox_id, state→running), Daytona (起沙箱 + 注入快照 + 起 driver, mode 2 时 driver 用 session.jsonl resume)</td></tr>
-          <tr><td><code>aprog attach &lt;pid&gt;</code> mode 3</td><td>control-plane</td><td>— (沙箱已在)</td></tr>
-          <tr><td><code>/detach</code> (TUI)</td><td>—</td><td>control-plane (last_attached_at), 不动沙箱</td></tr>
-          <tr><td><code>/exit</code> (TUI)</td><td>Daytona (从沙箱 tar 出工作副本)</td><td>控制面磁盘 (覆盖 <code>snapshot_path</code>), control-plane (state→exited, sandbox_id→null, last_exited_at), Daytona (销毁沙箱)</td></tr>
-        </tbody>
-      </table>
-      </div>
-
+        <div class="pager" data-pager></div>
+      </article>
     </main>
-
-    <aside class="toc">
-      <p class="toc-title">On this page</p>
-      <ul>
-        <li><a href="#principles">核心原则</a></li>
-        <li><a href="#entities">实体</a></li>
-        <li><a class="h3" href="#user">User</a></li>
-        <li><a class="h3" href="#authsession">AuthSession</a></li>
-        <li><a class="h3" href="#program">Program</a></li>
-        <li><a class="h3" href="#process">Process</a></li>
-        <li><a href="#snapshot">Process Snapshot</a></li>
-        <li><a class="h3" href="#snapshot-layout">目录结构</a></li>
-        <li><a class="h3" href="#snapshot-lifecycle">快照生命周期</a></li>
-        <li><a href="#relations">关系</a></li>
-        <li><a href="#state-machine">Process 状态机</a></li>
-        <li><a href="#sot">Source of truth 总览</a></li>
-        <li><a href="#cmd-map">命令到数据的映射</a></li>
-      </ul>
-    </aside>
   </div>
-
-  <footer>aprog docs · <a href="index.html">← back to index</a></footer>
+  <script src="docs.js"></script>
 </body>
 </html>

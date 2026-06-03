@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>沙箱与镜像 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="sandbox">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>沙箱与镜像</h1>
+        <p class="lead">
+          沙箱是进程的临时算力——可销毁、可替换。aprog 当前用 Daytona，但从第一行代码起就把它关在一个
+          <strong>provider 抽象</strong>后面，因为之后还要接别的厂商。这页讲清楚两件事：怎么把厂商差异隔离干净，
+          以及一个 aprog 沙箱镜像里到底烘了什么、怎么烘。
+        </p>
+
+        <h2 id="provider">沙箱是可替换层：两半抽象</h2>
+        <p>
+          调研多家沙箱厂商后有一个清晰结论——<strong>运行时控制面各家几乎一样，唯独「烘镜像」四种模型互不兼容</strong>。
+          所以抽象的正确切法是把它劈成两半，中间只用一个<strong>不透明的 <code>ImageRef</code></strong> 衔接：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
+            <div class="node c-cp" style="min-width:210px">
+              <span class="nt">SandboxProvider <span class="tag">运行时</span></span>
+              <span class="nd">create / exec / openPty / inject·extractDir / hibernate·wake / destroy。各厂商高度一致，差异由 <code>caps</code> 能力位吸收。</span>
+            </div>
+            <div class="ar"><span class="albl">ImageRef</span><span class="gly">←</span></div>
+            <div class="node c-data" style="min-width:210px">
+              <span class="nt">ImageBaker <span class="tag">烘镜像</span></span>
+              <span class="nd">BakeSpec → ImageRef。厂商间最不能统一的一步，单独成接口、按策略分流（见下）。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            运行时那半统一；烘镜像这半分流。<code>SandboxProvider</code> 不管镜像怎么来的，只认 <code>ImageRef</code>——
+            这就是厂商隔离的边界。上层（进程编排）只从 <code>sandbox/</code> 的单一出口取，永不直接 import 某个厂商。
+          </div>
+        </div>
+        <div class="note">
+          <span class="note-label">为什么这样切</span>
+          如果只抽象「运行时」而把烘镜像也塞进同一个接口，Daytona 的声明式 <code>addLocalDir</code> 和 Morph 的「跑起来再存快照」
+          根本无法共用一个方法签名。把烘焙拎出去、用 <code>ImageRef</code> 解耦，运行时接口才能对几乎所有厂商保持干净。
+        </div>
+
+        <h2 id="caps">能力位与分档</h2>
+        <p>
+          运行时虽相似，但几个关键点必须<strong>按能力声明、不能假设</strong>。每个 provider 暴露一组 <code>caps</code>，上层据此分流：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>能力位</th><th>含义</th><th>谁有</th><th>上层据此做什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>pty</code></td><td>交互式 PTY——harness 桥接靠它</td><td>Daytona ✓ · E2B ✓；Modal/Cloudflare 缺</td><td>能不能直接桥接交互式引擎</td></tr>
+              <tr><td><code>memorySnapshot</code></td><td>内存级挂起恢复</td><td>E2B ✓ · Fly ✓ · Morph ✓；Daytona ✗</td><td>决定 hibernate 走哪种形态（见下）</td></tr>
+              <tr><td><code>egressAllowlist</code></td><td>出站白名单</td><td>多数支持</td><td>capability 访问企业系统时按 scope 放行</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>能力位把厂商映射成几条<strong>隔离档位</strong>，一套抽象多档并存：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>档位</th><th>provider</th><th>隔离</th><th>为什么是它</th></tr></thead>
+            <tbody>
+              <tr><td><strong>默认档</strong></td><td>Daytona（现状）</td><td>容器级 + gVisor</td><td>烘镜像最全（声明式 <code>addLocalDir</code>）、PTY + TS SDK 齐，冷启动快</td></tr>
+              <tr><td><strong>强隔离档</strong></td><td>E2B</td><td>Firecracker microVM</td><td>硬件级隔离 + 内存快照 ~1s 唤醒；与 Daytona API 形状最像，是验证抽象的「第二家靶子」</td></tr>
+              <tr><td><strong>自托管 / on-prem</strong></td><td>Northflank（Kata / Cloud Hypervisor）</td><td>可选 microVM / gVisor</td><td>成熟 BYOC，企业私有部署；也避开 Daytona 自托管的 AGPL 传染</td></tr>
+              <tr><td><strong>分支探索档</strong></td><td>Morph（Infinibranch）</td><td>microVM</td><td>~250ms 全 VM 状态分支，适合并行 agent / tree-of-thought</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="hibernate">两态休眠</h2>
+        <p>
+          进程<a href="state.html#snapshot">休眠</a>时要让出沙箱。怎么让出，取决于 <code>caps.memorySnapshot</code>——
+          <code>hibernate()</code> 因此是<strong>两态</strong>的，产物对调用方不透明，<code>wake()</code> 按同形态还原：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
+            <div class="node c-state" style="min-width:230px">
+              <span class="nt">extracted <span class="tag">无内存快照</span></span>
+              <span class="nd">Daytona 这类：tar-out 进程目录成平台侧快照 → 销毁沙箱。wake 时起新沙箱、tar-in 注回。靠 <a href="state.html#resume">state 协议</a> resume。</span>
+            </div>
+            <div class="node c-sandbox" style="min-width:230px">
+              <span class="nt">memory-snapshot <span class="tag">有内存快照</span></span>
+              <span class="nd">E2B/Fly/Morph 这类：内存级 pause，连进程/变量一起冻住，~1s 唤醒。<strong>可省去 tar-out</strong>。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            同一个 <code>hibernate/wake</code> 接口、两种形态。注意：即便有内存快照，进程的<strong>权威状态仍在进程目录</strong>里
+            （见 <a href="state.html">进程目录与状态</a>）——内存快照只是省了一次导出，不改变「状态不依赖对话」这条铁律。
+          </div>
+        </div>
+
+        <h2 id="image">镜像里烘了什么</h2>
+        <p>
+          一个 aprog 沙箱镜像（snapshot）服务<strong>所有</strong>进程——Daytona 的模型是「一个 snapshot 起 N 个 sandbox」，没有 per-process 镜像。
+          所以镜像内容要按<strong>变化频率</strong>分三层，per-process 的东西绝不烘进去：
+        </p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-muted"><span class="nt">① 基础镜像（烘进去）</span><span class="nd">OS + Bun + <strong>引擎运行时</strong>（Claude Agent SDK / Codex）+ capability 依赖。慢变，跟平台 release 走。</span></div>
+            <div class="node c-driver"><span class="nt">② driver（烘进去）</span><span class="nd"><code>@aprog/driver</code> 编成单文件可执行，落 <code>/opt/aprog/bin/</code>。改得勤——prod 钉版本烘入，dev 用 bind-mount 盖掉免重烘。</span></div>
+            <div class="node c-state"><span class="nt">③ 每进程注入（spawn 时，<strong>不</strong>烘）</span><span class="nd">进程目录三件套 meta/input/state + auth 凭据 + program(skill) 文件。每进程不同。</span></div>
+          </div>
+          <div class="dgm-cap">引擎运行时一定烘（重、稳，还能暖 layer cache 让冷启动快）；per-process 的一定注入（它们私有于进程/用户）。</div>
+        </div>
+
+        <h2 id="baking">烘焙：四模型与我们的主路径</h2>
+        <p>
+          「怎么把东西弄进镜像」是厂商间<strong>最不能统一</strong>的地方——四种互不兼容的模型。<code>ImageBaker</code> 因此只定一个统一输入
+          <code>BakeSpec</code> 和不透明产物 <code>ImageRef</code>，具体交给策略实现：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>策略</th><th>代表厂商</th><th>形态</th><th>binary 注入怎么落</th></tr></thead>
+            <tbody>
+              <tr><td><strong>declarative</strong></td><td>Daytona · E2B 2.0 · Modal</td><td>链式 SDK builder</td><td><code>addLocalDir(staging/bin → /opt/aprog/bin)</code>，最贴</td></tr>
+              <tr><td><strong>dockerfile</strong></td><td>Fly · Northflank · Cloudflare · Kata 自托管</td><td>生成 Dockerfile + 推 registry</td><td>自己写 <code>COPY</code></td></tr>
+              <tr><td><strong>snapshot</strong></td><td>Morph（Infinibranch）</td><td>跑起来再存快照</td><td>boot → exec 装 → save，没有 build-time 文件 API（最异类）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          aprog 主路径走 <strong>declarative</strong>（Daytona 首个实现）：镜像定义就是仓库里一段 TS、和 control-plane 同栈同类型，
+          不用自建 registry，命名 snapshot 永久缓存。代价是多语言工具的<strong>编译必须在镜像外</strong>先做完——这恰好把
+          Go/Rust/Python 的 toolchain 挡在镜像之外，更干净。流程：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-program" style="min-width:150px"><span class="nt">capabilities/*</span><span class="nd">多语言工具源码 + 清单</span></div>
+            <div class="ar accent"><span class="albl">编成 amd64</span><span class="gly">→</span></div>
+            <div class="node c-data" style="min-width:130px"><span class="nt">staging/bin/</span><span class="nd">语言无关的「成品架」</span></div>
+            <div class="ar accent"><span class="albl">addLocalDir</span><span class="gly">→</span></div>
+            <div class="node c-sandbox" style="min-width:150px"><span class="nt">snapshot</span><span class="nd">/opt/aprog/bin 全在 PATH</span></div>
+          </div>
+          <div class="dgm-cap">
+            <code>addLocalDir</code> 把本地 <code>staging/</code> 作为构建上下文上传到 Daytona 云端 runner 构建（无需本地 Docker），
+            <strong>所以产物必须构建时已在本地</strong>——这正是 declarative 策略要求「编译在外」的原因。
+            capability 怎么组织见<span class="tag" style="margin-left:4px">能力清单（编写中）</span>。
+          </div>
+        </div>
+
+        <h2 id="constraints">约束与版本</h2>
+        <p>下面几条来自 Daytona 文档实证，必须内化进设计（不是假设）：</p>
+        <ul>
+          <li><strong>amd64 only</strong>——所有 capability / driver 必须编成 <code>linux/amd64</code>，写进构建约定。</li>
+          <li><strong>tag 不能用 <code>latest</code></strong>，且 Daytona <strong>没有内置 content-hash / 不可变 tag</strong>——所以「capability 集合 content-hash → tag」要我们自己算，用作 snapshot 名（<code>aprog-sandbox:&lt;sha12&gt;</code>）。命名 snapshot 永久缓存正好承接。</li>
+          <li><strong>资源（cpu/mem/disk）烘进 snapshot</strong>——属于镜像定义的一部分，从命名 snapshot 起 sandbox 时不再逐个改。</li>
+          <li><strong>镜像大小 / 注入 context 上限 Daytona 未公布</strong>——capability binary 多了镜像会变大，得早测。</li>
+        </ul>
+        <div class="note ok">
+          <span class="note-label">dev / prod 对称</span>
+          dev 期 <code>daytona.create({ image })</code> <strong>on-the-fly</strong> 构建（24h 缓存），改完工具重跑即生效、不注册 snapshot；
+          prod 才 <code>snapshot.create</code> 按 content-hash 命名注册<strong>永久 snapshot</strong>，可复现、冷启动稳。这和 driver 的 dev/prod 烘法完全对称。
+        </div>
+        <div class="note warn">
+          <span class="note-label">版本握手</span>
+          driver 烘在镜像里、control-plane 在 VM 上，两者共用 <a href="protocol.html">protocol</a>。协议升版后可能错配——
+          所以 <strong>attach 时要做一次版本握手</strong>：driver 上报 protocol 版本，control-plane 校验兼容、不兼容就拒绝并提示「镜像该更新了」。
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

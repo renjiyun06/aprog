@@ -1,0 +1,10 @@
+# deps / build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime data (进程目录快照等不进 git)
+/var/lib/aprog/
+
+# editor / os
+.DS_Store

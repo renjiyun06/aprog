@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>进程目录与状态 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="state">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">状态与持久化</div>
+        <h1>进程目录与状态</h1>
+        <p class="lead">
+          一个核心断言：<strong>进程的状态不依赖对话上下文</strong>。进程“做到哪了”记录在它的目录里——
+          一套由 state 程序库定义的、有 schema 的状态文件。沙箱可销毁、对话可丢，唯独这个目录是事实源。
+        </p>
+
+        <h2 id="dir">进程目录 = 真正的状态</h2>
+        <p>
+          每个进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个目录（类比 <code>/proc/&lt;pid&gt;/</code>），挂在持久卷上。它的结构由
+          <strong>state 程序库</strong>统一定义：身份、输入流、有 schema 的执行状态、以及 resume 语义。
+        </p>
+        <div class="dgm">
+          <div class="tree">
+            <div class="tn"><span class="gly dir">📂</span><span class="tname">~/.aprog/&lt;pid&gt;/</span></div>
+            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">meta.yml</span><span class="tnote">进程控制块 (PCB)：phase / input_cursor / status</span></div>
+            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">input.md</span><span class="tnote">append-only 的用户输入流（权威意图）</span></div>
+            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">execution-state/</span><span class="tnote">有 schema 的执行状态</span></div>
+            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">state.yaml</span><span class="tnote">inline 键 + by-ref 指针</span></div>
+            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">*.md / blobs</span><span class="tnote">by-ref 的大块内容（决策记录、笔记…）</span></div>
+            <div class="tn lvl1"><span class="gly file">📄</span><span class="tname">session.aprog.jsonl</span><span class="tnote">会话逐字记录（engine-neutral，给 <a href="protocol.html#storage">前端/审计</a>）</span></div>
+            <div class="tn lvl1"><span class="gly dir">📁</span><span class="tname">artifacts/</span><span class="tnote">程序产出的文件</span></div>
+          </div>
+          <div class="legend">
+            <span class="li"><span style="color:#1a7f37;font-weight:700">★</span> 进程状态 · 唯一权威 · 驱动 resume</span>
+            <span class="li"><span style="color:var(--fg-subtle)">📄</span> 会话记录 · 仅展示/审计</span>
+          </div>
+        </div>
+
+        <h2 id="resume">唤醒靠状态，不靠对话</h2>
+        <p>
+          休眠进程被唤醒时，会分到一个全新沙箱、引擎<strong>冷启动、空上下文</strong>。它怎么知道“做到哪了”？
+          靠 resume 协议读状态文件：读 <code>meta.yml</code> 的 phase 和 input_cursor、读游标之后的 <code>input.md</code> 输入、
+          读 <code>execution-state/state.yaml</code> 及其 by-ref blob，然后重跑当前阶段的 on-entry。
+        </p>
+        <div class="note bad">
+          <span class="note-label">绝不反向重建引擎上下文</span>
+          aprog <strong>不会</strong>把历史对话翻译回引擎、重新喂进去来“恢复记忆”。因为进程状态根本不依赖对话——
+          所有要紧的东西（阶段、游标、决策、产物）都已被 state 捕获进目录。对话因此是<strong>可丢弃</strong>的。
+        </div>
+        <p>
+          这也是为什么换引擎（Claude → Codex）不丢工作：会话归 aprog 所有、状态在目录里，新引擎冷启动后照样能从状态接着干。
+          代价只是它读不到上一个引擎的私有对话缓存——而这本来就不需要。
+        </p>
+
+        <h2 id="layers">三层数据：谁权威、谁进快照</h2>
+        <p>同一段“执行”涉及三类数据，职责严格分开，别混为一谈：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>层</th><th>文件</th><th>谁写</th><th>进快照</th><th>参与 resume</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td><strong>进程状态</strong></td><td>meta.yml / input.md / execution-state/</td><td>程序（经引擎）</td><td>✅</td><td>✅ 权威</td><td>让进程接着干</td></tr>
+              <tr><td><strong>会话记录</strong></td><td>session.aprog.jsonl</td><td>Driver</td><td>✅（在进程目录里）</td><td>❌</td><td>前端历史 + 审计</td></tr>
+              <tr><td><strong>引擎缓存</strong></td><td>session.jsonl（SDK 私有）</td><td>引擎</td><td>❌</td><td>❌</td><td>沙箱内临时上下文，可丢</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li><strong>进程状态</strong>是唯一权威，驱动 resume；它和会话记录都在进程目录里，跟着进程持久化。</li>
+          <li><strong>会话记录</strong>是 engine-neutral 的逐字转录，只为展示和审计，不参与 resume。</li>
+          <li><strong>引擎缓存</strong>（<code>session.jsonl</code>）是沙箱生命周期内的临时物，沙箱一销毁就没了，永不权威、不进 aprog 快照。</li>
+        </ul>
+        <div class="note">
+          <span class="note-label"><code>input.md</code> ≠ 会话记录</span>
+          <code>input.md</code> 只存<strong>用户输入</strong>，是 state 协议里驱动 FSM 的权威意图流（<code>input_cursor</code> 标记处理到哪）；
+          会话记录是含思考/工具/回复的<strong>完整转录</strong>。用户消息在两处都出现，但服务的对象不同——前者驱动执行，后者驱动界面。
+        </div>
+
+        <h2 id="snapshot">快照与生命周期</h2>
+        <p>
+          沙箱在时，<strong>沙箱里的工作副本</strong>是权威；沙箱不在时（休眠/退出），<strong>平台侧快照</strong>是权威。
+          进程退出或休眠时，Control Plane 把进程目录 tar-out 成快照存到 <code>/var/lib/aprog/proc/&lt;pid&gt;/</code>；
+          唤醒/attach 时再 tar-in 注入新沙箱。<strong>状态永不删除</strong>——退出只是没有沙箱关联，目录与历史完整保留。
+        </p>
+        <p>具体的 spawn / hibernate / wake / exit 调用链见 <a href="flows.html">生命周期流程</a>。</p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "@aprog/control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aprog 控制平面：进程编排 / 沙箱编排 / 事件流中枢 / 持久化 / 给 web 前端的 API。运行在 aprog VM（非沙箱内）。",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aprog/protocol": "workspace:*"
+  }
+}

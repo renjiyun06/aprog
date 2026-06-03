@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作窗口 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="window">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">产品 · 工作窗口</div>
+        <h1>工作窗口</h1>
+        <p class="lead">
+          每个程序打开是一个窗口，所有程序的窗口骨架都一样——它本质是“执行一个智能程序”的视图，
+          而不是某个业务领域的专用界面。窗口分三区：进程列表、对话区、目录区。
+        </p>
+
+        <h2 id="layout">三区布局</h2>
+        <div class="dgm">
+          <div class="winmock">
+            <div class="winmock-bar"><span class="wt">UI 设计</span><span class="wc">▭ 目录　—　□　✕</span></div>
+            <div class="winmock-cols">
+              <a class="wzone z1" href="#proclist">
+                <div class="wz-h">进程列表</div>
+                <div class="wz-b">
+                  <span class="dot" style="background:#2da44e"></span>官网重设计<br>
+                  <span class="dot" style="background:#2da44e"></span>后台改版<br>
+                  <span class="dot" style="background:#b9c0c8"></span>旧活动页<br>
+                  ＋ 新建进程
+                </div>
+              </a>
+              <a class="wzone z2" href="#conversation">
+                <div class="wz-h">对话区</div>
+                <div class="wz-b">
+                  ● 用户消息<br>
+                  ▸ thinking 2.4s<br>
+                  ▸ bash · rg "foo"<br>
+                  回复正文…<br>
+                  <span style="display:inline-block;margin-top:6px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;color:var(--fg-subtle)">输入…（Enter 发送）</span>
+                </div>
+              </a>
+              <a class="wzone z3" href="#directory">
+                <div class="wz-h">目录区 <span style="font-weight:400;color:var(--fg-subtle)">· 默认收起</span></div>
+                <div class="wz-b">
+                  📄 meta.yml<br>
+                  📄 input.md<br>
+                  📁 execution-state/<br>
+                  📁 artifacts/
+                </div>
+              </a>
+            </div>
+          </div>
+          <div class="dgm-cap">点任一区进入对应说明。三区状态随 attach 的进程<b>整体切换</b>，从不混合。</div>
+        </div>
+
+        <h2 id="proclist">进程列表（左）</h2>
+        <p>
+          当前程序的所有进程。每行显示状态指示圆点 + 进程名。顶部是“进程”标题、进程数和一个 <strong>＋</strong>（新建进程）。
+          点某个进程即 attach 到它，对话区和目录区随之整体切换（不混合）。
+        </p>
+        <p>
+          <strong>新建进程</strong>：点 ＋ 弹出一个表单，目前只填一个名称（CPU/内存/沙箱配置等后续再加）。
+          每个新进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个独立目录。
+        </p>
+
+        <h2 id="states">进程两态：运行与休眠</h2>
+        <p>对用户而言进程只有两种状态，由“是否关联沙箱”决定：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>状态</th><th>含义</th><th>对话区</th><th>目录区</th></tr></thead>
+            <tbody>
+              <tr><td><span class="pill run">运行</span></td><td>当前关联着沙箱，正在执行</td><td>有：会话流 + 输入框</td><td>有</td></tr>
+              <tr><td><span class="pill hib">休眠</span></td><td>未关联沙箱</td><td><strong>无</strong>：此刻没有进行中的对话，只显示“唤醒”入口</td><td>有</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          休眠进程<strong>没有交互区</strong>——它压根没有正在运行的对话。但它的<strong>目录区依旧在</strong>，文件可只读浏览。
+          界面提供显式的状态切换：运行中的进程有“休眠”按钮（释放沙箱），休眠中的进程有“唤醒”按钮（重新关联沙箱）。
+        </p>
+        <div class="note">
+          <span class="note-label">唤醒后的连续性</span>
+          唤醒后对话区会铺出该进程<strong>完整的历史对话</strong>（读自进程目录的会话记录），但底层引擎是冷启动、不重放对话——
+          它靠状态文件知道做到哪了。原因见 <a href="state.html#resume">唤醒靠状态，不靠对话</a>。
+        </div>
+
+        <h2 id="conversation">对话区（中）</h2>
+        <p>
+          窗口主区就是<strong>对话区</strong>，没有阶段步进器、没有授权弹窗。它呈现用户与底层 harness 的对话，
+          harness 产出的东西归为三类：<strong>思考流</strong>、<strong>工具调用</strong>、<strong>回复</strong>，加上用户消息。
+          这些事件如何从引擎流到这里，见 <a href="protocol.html">事件协议与会话</a>。
+        </p>
+        <ul>
+          <li><strong>输入框</strong>：Enter 发送，Ctrl+Enter 换行，无发送按钮、无提示语。</li>
+          <li><strong>打开文件</strong>时主区顶部才出现标签栏：第一个标签是“对话”，其余是只读文件标签。</li>
+        </ul>
+
+        <h2 id="directory">目录区（右）</h2>
+        <p>
+          当前进程的目录树（<code>~/.aprog/&lt;pid&gt;/</code>），真实的多级树：<code>meta.yml</code> / <code>input.md</code> /
+          <code>execution-state/</code> / <code>session.aprog.jsonl</code> / <code>artifacts/</code>…。默认<strong>收起</strong>，
+          点标题栏的目录按钮向右弹出——整个窗口加宽来容纳它，不挤压对话区。会话区与目录区之间是一条可拖动的分割线。
+        </p>
+        <p>
+          文件一律<strong>只读</strong>：用户能查看，但修改只由程序和底层 harness 进行。文件按类型显示不同图标（VS Code 风格），
+          支持语法高亮；子目录默认只展开一级，有缩进引导线，文件夹开/合图标不同。
+        </p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>
