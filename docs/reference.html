@@ -49,7 +49,7 @@
 {"type":"agent.message",     "id":"e10", "delta":"…"}</code></pre>
         <p>上行（前端 → 引擎）：</p>
         <pre><code>{"type":"user.input", "text":"…"}</code></pre>
-        <p>聚合规则（按 <code>id</code> 追加、tool_use↔tool_result 配对）见 <a href="protocol.html#aggregation">流式聚合</a>。</p>
+        <p>聚合规则（按 <code>id</code> 追加、tool_use↔tool_result 配对）见 <a href="protocol.html#recover">事件流协议 · 恢复与压实</a>。</p>
 
         <h2 id="session-schema">会话记录 schema</h2>
         <p>持久化在进程目录 <code>session.aprog.jsonl</code> 的<strong>合并后</strong>事件（非 wire delta）。每行一条：</p>
@@ -57,7 +57,7 @@
 {"id":"e9",  "ts":"…", "turn":3, "kind":"tool", "name":"bash", "arg":"rg \"foo\"", "result":"…"}
 {"id":"e10", "ts":"…", "turn":3, "kind":"reply", "text":"…"}
 {"id":"u11", "ts":"…", "turn":4, "kind":"user", "text":"…"}</code></pre>
-        <p>它是 engine-neutral 的逐字记录，给前端重放与审计用，不参与 resume。详见 <a href="protocol.html#storage">会话存储</a>。</p>
+        <p>它是 engine-neutral 的逐字记录，给前端重放与审计用，不参与 resume。详见 <a href="protocol.html">事件流协议</a>。</p>
 
         <h2 id="db">DB schema 概要</h2>
         <p>Control Plane 持久化的实体（字段详见 <a href="data-model.html">数据模型</a>）：</p>

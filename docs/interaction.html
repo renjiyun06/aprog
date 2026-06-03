@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>沙箱交互界面 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="interaction">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>沙箱交互界面</h1>
+        <p class="lead">
+          <a href="sandbox.html">沙箱与镜像</a>讲了沙箱怎么烘、怎么起；这页讲沙箱<strong>起来之后</strong>，
+          控制平面跟它之间到底发生哪些交互、这些交互该抽象成什么接口。结论一句话：交互分属<strong>两个正交的平面</strong>——
+          一个把沙箱当<strong>托管资源</strong>管（厂商相关），一个跟<strong>烘在沙箱里的 driver</strong> 对话（厂商无关）。
+          <strong>所有文件搬运都走后者</strong>，于是前者瘦成纯生命周期。
+        </p>
+
+        <h2 id="two-planes">两个平面</h2>
+        <p>
+          把「控制平面 ↔ 沙箱」之间所有往来摊开，它们天然落在两类，区别不在数据多少，而在<strong>对谁说话</strong>：
+        </p>
+        <div class="dgm">
+          <div class="dgm-stack">
+            <div class="node c-cp"><span class="nt">control-plane（VM 上）</span><span class="nd">进程编排 · 会话持久化 · 检查点 · 向 web 扇出。两个平面的发起方。</span></div>
+            <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+              <div class="dgm-col grow">
+                <div class="ar down"><span class="albl">A · 资源平面（带外 / 厂商 API）</span><span class="gly">↓</span></div>
+                <div class="node c-data"><span class="nt">SandboxProvider <span class="tag">厂商相关</span></span><span class="nd"><strong>纯生命周期</strong>：create / destroy（就这俩）。把沙箱当被托管的资源。各家 API 各异。<strong>不碰文件、不碰协议。</strong></span></div>
+              </div>
+              <div class="dgm-col grow">
+                <div class="ar down"><span class="albl">B · 数据平面（带内 / 我们的协议）</span><span class="gly">↓</span></div>
+                <div class="node c-driver"><span class="nt">DriverChannel <span class="tag">厂商无关</span></span><span class="nd"><strong>带内全包</strong>：<a href="protocol.html">协议</a>事件流、输入、控制、实时 fs 读、<strong>大块传输（bootstrap / 检查点 / 恢复）</strong>。同一个 driver、同一套协议。</span></div>
+              </div>
+            </div>
+            <div class="dgm-group g-sandbox">
+              <span class="glabel">沙箱（临时、可销毁）</span>
+              <div class="dgm-cols" style="flex-wrap:nowrap">
+                <div class="node c-muted"><span class="nt">厂商 daemon</span><span class="nd">A 平面的对端：响应厂商 API。</span></div>
+                <div class="node c-driver"><span class="nt">driver</span><span class="nd">B 平面的对端：自启、持凭证拨出、桥接 harness ↔ 协议。</span></div>
+                <div class="node c-program"><span class="nt">harness + engine</span><span class="nd">driver 拉起的子进程，cwd 在<a href="state.html">进程目录</a>。</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            两个平面的<strong>厂商相关性恰好相反</strong>：A 平面每家 API 不同（<code>SandboxProvider</code> 吸收）；
+            B 平面对所有厂商都一样（说话的是<strong>我们自己</strong>的 driver、跑<strong>我们自己</strong>的协议）。厂商在 B 平面只负责一件事——
+            给我们一根<strong>可达 driver 的字节管道</strong>。<strong>所有文件搬运（启动注入、运行检查点、唤醒恢复、UI 浏览）都在 B 平面</strong>，A 平面碰都不碰。
+          </div>
+        </div>
+        <div class="note ok">
+          <span class="note-label">为什么文件全在 B、A 一个文件接口都不留</span>
+          曾经的直觉是「整目录注入/导出该走厂商原生 fs（A 平面）」，理由是 ① 信任种子没法用还没建立的 B 通道送；② 耐久备份要扛住坏掉的 driver。
+          这两条在收敛后的模型里都<strong>不成立</strong>：① 信任种子<strong>烘进镜像</strong>即可（镜像本身就是带外通道，见<a href="#trust">信任与启动序</a>）；
+          ② 我们<strong>从不</strong>从坏掉的 driver 里抢救——driver 死 = 沙箱死 = 进程<strong>恢复到上一个检查点</strong>（见 <a href="state.html#checkpoint">检查点</a>），不需要事后导出。
+          于是 <code>injectDir/extractDir</code> 被<strong>彻底删除</strong>，<code>SandboxProvider</code> 的厂商面更小，也更 provider-neutral——而这正是当初做这层抽象的目标。
+        </div>
+
+        <h2 id="resource-plane">A · 资源平面：SandboxProvider</h2>
+        <p>
+          把沙箱当<strong>托管资源</strong>管，仅此而已。当前需求下只需要两个方法：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>方法</th><th>方向</th><th>干什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>create(image, res)</code></td><td>→</td><td>用烘好的 <a href="sandbox.html#image">ImageRef</a> 起沙箱。driver 随镜像 entrypoint <strong>自启并拨出</strong>（见 <a href="#trust">下文</a>）。</td></tr>
+              <tr><td><code>destroy(h)</code></td><td>→</td><td>销毁、释放全部资源（即进程 <a href="#hibernate">hibernate</a> 的落地）。状态早已经 B 平面落到控制平面。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          就这两个。<strong>没有 hibernate/wake/exec/openPty、没有 caps、没有任何文件接口</strong>——进程休眠就是 <code>destroy</code>（见 <a href="#hibernate">下文</a>），
+          文件全是 B 平面的事。这条纪律让 <code>SandboxProvider</code> 的厂商面收敛到最小：接一家新厂商，只要能 create/destroy + 让 driver 拨得出来，就够了。
+          需要快速唤醒（厂商热令牌）、运维 shell、出站白名单时再按需加（YAGNI）。
+        </p>
+
+        <h2 id="data-plane">B · 数据平面：DriverChannel</h2>
+        <p>
+          控制平面跟 driver 的<strong>双工对话</strong>。driver 拨上来、通道建立后，下面这套接口在所有厂商上都一样：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>方法</th><th>方向</th><th>干什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>subscribe(fromSeq)</code></td><td>←</td><td>可续订的 <code>AsyncIterable&lt;Envelope&gt;</code> 事件流。重连 / 唤醒时用 <code>fromSeq</code> 续上（见 <a href="#seq">seq 归属</a>）。</td></tr>
+              <tr><td><code>sendInput(item)</code></td><td>→</td><td>注入一条<a href="protocol.html">输入</a>：用户消息 / 文件。落到 harness 的 <code>input.md</code> 流。</td></tr>
+              <tr><td><code>respond(actionId, allow|deny)</code></td><td>→</td><td>对 <code>requires_action</code> 的应答（放行 / 拒绝某次工具调用）。</td></tr>
+              <tr><td><code>control(signal)</code></td><td>→</td><td>带内控制信号：中断当前回合、checkpoint-now、hibernate-prepare 等。</td></tr>
+              <tr><td><code>fs.list(path)</code> / <code>fs.read(path)</code></td><td>⇆</td><td>UI 目录浏览的<strong>实时读</strong>：driver 在沙箱内 ls/cat 自己的 cwd（见 <a href="#dir-read">目录读取</a>）。</td></tr>
+              <tr><td><code>pushBundle</code> / <code>pullBundle</code></td><td>⇅</td><td><strong>大块传输</strong>：启动时灌进进程目录 + auth；检查点 / 唤醒时整段 state 子集进出。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note warn">
+          <span class="note-label">设计约束 · 多路复用</span>
+          B 通道现在<strong>同时</strong>跑交互事件流和大块传输。一个几十 MB 的 bundle <strong>绝不能头部阻塞</strong>住实时事件流——
+          所以 <code>DriverChannel</code> 必须<strong>分帧 / 多流</strong>（HTTP/2 风格 mux，或给大块开独立子连接）。这是落地时的硬性要求，不是可选项。
+        </div>
+
+        <h2 id="trust">信任与启动序</h2>
+        <p>
+          既然文件全走 B，那 driver 必须能<strong>自己起来、自己拨出、且一拨上来就被信任</strong>。信任种子<strong>烘进镜像</strong>解决——镜像本身就是一条带外通道：
+        </p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-muted"><span class="nt">① create</span><span class="nd">沙箱起来。镜像 entrypoint <strong>自启 driver</strong>；driver 知道控制平面地址（烘入 / create 时给 env）。</span></div>
+            <div class="node c-driver"><span class="nt">② driver 拨出 + 握手</span><span class="nd">driver 持<strong>烘入镜像的凭证</strong>拨向控制平面 → B 通道建立 + <a href="sandbox.html#constraints">protocol 版本握手</a>。</span></div>
+            <div class="node c-cp"><span class="nt">③ create-time 绑定</span><span class="nd">控制平面把这条拨入连接<strong>钉死</strong>到它刚 create 的那个沙箱/待命进程上。</span></div>
+            <div class="node c-state"><span class="nt">④ 灌 bootstrap</span><span class="nd">控制平面经 B <code>pushBundle</code>：skill 闭包 + <strong>per-process auth</strong>（用户 OAuth，不能烘）+（首次）用户初始输入 /（唤醒）最新检查点。</span></div>
+            <div class="node c-program"><span class="nt">⑤ driver 拉起 harness</span><span class="nd">cwd = 进程目录。<strong>首次</strong>由 harness 按 <a href="state.html">state 技能</a>自己写出骨架（平台不代笔）；产出经 driver 翻成信封流回来。</span></div>
+          </div>
+          <div class="dgm-cap">
+            <strong>凭证为何能烘进去</strong>：bake 发生在 driver 说第一句话<strong>之前</strong>，等于把 B 通道的引导凭证安全地预置好了——鸡生蛋解除。
+            它是<strong>整张镜像所有沙箱共享的静态秘密</strong>，只够证明「我是正版 aprog 沙箱」；要证明「我是进程 X」靠第 ③ 步的 create-time 绑定补齐。
+            <strong>per-process auth</strong> 敏感且因人而异、不能烘——但第 ④ 步通道已是 TLS + 凭证鉴权过的，经 B 送 auth 跟走任何厂商 API 一样安全。
+          </div>
+        </div>
+        <div class="note">
+          <span class="note-label">driver 是 harness 的父进程</span>
+          注意第 ⑤ 步：<strong>driver 先起、harness 后起，且是被 driver 作为子进程拉起来的</strong>。driver 当父进程才能掌控 harness 的生命周期
+          （启动、喂输入、中断、kill、探退出、休眠前确保落盘）——这也是 driver「harness-specific」的由来：它的全部职责就是包住一个 harness、把它的 IO 双向翻译成协议。
+        </div>
+
+        <h2 id="seq">seq 归属：driver 定序，control-plane 盖章</h2>
+        <p>
+          事件流要能跨<strong>休眠 / 重连</strong>续上，就必须有一个单调递增的 <code>seq</code>。拆成两步最干净：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-driver" style="min-width:200px"><span class="nt">driver：定序</span><span class="nd">保证一次运行内事件的<strong>局部顺序</strong>（它最贴近 harness 的产出时序）。</span></div>
+            <div class="ar accent"><span class="albl">envelope 流</span><span class="gly">→</span></div>
+            <div class="node c-cp" style="min-width:200px"><span class="nt">control-plane：盖全局 seq</span><span class="nd">落库时盖上<strong>跨生命周期单调</strong>的 seq 并持久化。重连 / 唤醒后 <code>subscribe(fromSeq)</code> 据此续。</span></div>
+          </div>
+          <div class="dgm-cap">
+            为什么不让 driver 直接定全局 seq：driver 随沙箱生灭，休眠后换一个沙箱、换一个 driver，它无从知道「上一世」发到哪了。
+            全局连续性是<strong>跨沙箱</strong>的事实，只有常驻的 control-plane 看得全。
+          </div>
+        </div>
+        <p>
+          控制平面持久化的是<strong>抽象后的会话记录</strong>（engine-neutral，见 <a href="state.html#layers">三层数据</a>），不是底层 harness 的原始事件格式——
+          省空间、且不把某个 harness 的格式焊进我们的存储。原始事件只在沙箱活着时留在 driver 侧。
+        </p>
+
+        <h2 id="hibernate">休眠 = destroy，唤醒 = create + 灌检查点</h2>
+        <p>
+          这里说的休眠是<strong>进程</strong>的休眠，目的就是把沙箱资源<strong>全部让出</strong>。进程在 <a href="state.html#checkpoint">quiescent 点</a>时
+          state 子集早已经 B 平面落到控制平面，所以休眠很轻——直接 <code>destroy</code>：
+        </p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-state"><span class="nt">休眠 = <code>destroy</code></span><span class="nd">末次检查点经 B 流回 CP → <code>provider.destroy</code> 释放全部资源。<strong>不用厂商 stop</strong>——stop 免 compute 却仍计 disk 费，进程常隔很久才回，留盘白烧钱。厂商成本归零。</span></div>
+            <div class="node c-sandbox"><span class="nt">唤醒 = <code>create</code> + 灌回</span><span class="nd"><code>provider.create</code> 新沙箱 → driver 拨入 → 经 B <code>pushBundle</code> 把检查点灌回去 → driver 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
+          </div>
+          <div class="dgm-cap">
+            耐久真相是<strong>控制平面侧的检查点</strong>（运行中已持续经 B 流回），不依赖任何厂商热令牌或留盘。检查点天生<strong>跨厂商</strong>——
+            迁移就是「在厂商 Y 起沙箱、把检查点经 B 灌给它的 driver」。所以 <code>SandboxProvider</code> 不需要 hibernate/wake——它们就是 destroy / create。完整语义见 <a href="state.html#checkpoint">进程目录与状态</a>。
+          </div>
+        </div>
+
+        <h2 id="dir-read">目录读取：UI 看到的是谁的数据</h2>
+        <p>
+          用户在<a href="window.html">工作窗口</a>里看到的进程目录是<strong>只读</strong>的。一条硬边界：<strong>UI 永远对着控制平面，从不直连沙箱</strong>
+          （浏览器没凭证、也没路由能摸到厂商云里的沙箱；多 tab 还要在控制平面收敛扇出）。但控制平面这份数据的<strong>新鲜度来源</strong>取决于进程状态：
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-program" style="min-width:140px"><span class="nt">浏览器 UI</span><span class="nd">只跟控制平面说话</span></div>
+            <div class="ar"><span class="albl">读</span><span class="gly">→</span></div>
+            <div class="dgm-col grow">
+              <div class="node c-cp"><span class="nt">控制平面</span><span class="nd">运行中 = <strong>透明中继</strong>（不吃自己的缓存）；休眠中 = <strong>喂检查点</strong>。</span></div>
+              <div class="dgm-cols" style="flex-wrap:nowrap;margin-top:8px">
+                <div class="node c-driver" style="flex:1"><span class="nt">运行中 → 经 B 实时拉沙箱</span><span class="nd"><code>fs.list/read</code> 当场读 driver 的 cwd。同步按钮 / 轮询都打到这。<strong>能看到正在被写的文件</strong>。</span></div>
+                <div class="node c-state" style="flex:1"><span class="nt">休眠中 → 上一份检查点</span><span class="nd">没沙箱可拉，给控制平面存的检查点。只读、可能略旧，UI 标「休眠快照」。</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            所以「UI 同步的是沙箱还是控制平面的数据」——对端永远是控制平面，但运行时它只是<strong>管道</strong>、把沙箱实时态原样转发，不是缓存。
+          </div>
+        </div>
+        <div class="note">
+          <span class="note-label">两种读、两种节奏</span>
+          同一条 B 平面 <code>fs</code>、同一份沙箱磁盘，被两种目的以两种节奏读：
+          <strong>UI 实时拉</strong>可任意时刻发生（哪怕回合进行中、文件半写也无妨，它只是「看」）；
+          <strong>检查点</strong>必须 <a href="state.html#checkpoint">quiescent 点</a> gate（要能 resume，必须是一致点）。看可脏，存必净。
+        </div>
+
+        <h2 id="summary">小结：三套抽象各管一段</h2>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>抽象</th><th>时机</th><th>厂商相关性</th><th>管什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>ImageBaker</code></td><td>构建期</td><td><strong>高</strong>（四种模型）</td><td>把东西烘进镜像 → <code>ImageRef</code></td></tr>
+              <tr><td><code>SandboxProvider</code><span class="tag" style="margin-left:6px">A 平面</span></td><td>生命周期拐点</td><td>中</td><td>沙箱作为资源：<strong>create / destroy</strong>（hibernate=destroy、wake=create）。<strong>不碰文件</strong></td></tr>
+              <tr><td><code>DriverChannel</code><span class="tag" style="margin-left:6px">B 平面</span></td><td>运行期持续</td><td><strong>无</strong></td><td>跟 driver 的协议对话：事件流、输入、控制、实时 fs、<strong>所有文件搬运</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          这套收敛模型对应的代码：<code>SandboxProvider</code> 收敛到 <code>create/destroy</code>（删掉 hibernate/wake/exec/openPty/caps 与 <code>Dormant</code>），
+          新增 <code>DriverChannel</code> 接口承载 B 平面。检查点 / resume 的细节见 <a href="state.html#checkpoint">进程目录与状态</a>。
+        </p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

@@ -42,8 +42,8 @@
           同一个程序可以并行跑多个进程——“UI 设计”可以同时有“官网重设计”和“后台改版”两个互不相干的进程。
         </p>
         <p>
-          进程的<strong>真正状态</strong>落在它的目录 <code>~/.aprog/&lt;pid&gt;/</code> 里（类比 <code>/proc/&lt;pid&gt;/</code>），
-          挂在持久卷上。这个目录就是进程，详见 <a href="state.html">进程目录与状态</a>。
+          进程的<strong>真正状态</strong>落在它的目录 <code>~/.aprog/&lt;pid&gt;/</code> 里（类比 <code>/proc/&lt;pid&gt;/</code>，也是 harness 的 cwd）。
+          它不挂持久卷，靠<a href="state.html#checkpoint">检查点</a>持久化。这个目录就是进程，详见 <a href="state.html">进程目录与状态</a>。
         </p>
         <div class="note">
           <span class="note-label">两种状态</span>

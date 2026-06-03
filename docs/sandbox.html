@@ -36,7 +36,7 @@
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
             <div class="node c-cp" style="min-width:210px">
               <span class="nt">SandboxProvider <span class="tag">运行时</span></span>
-              <span class="nd">create / exec / openPty / inject·extractDir / hibernate·wake / destroy。各厂商高度一致，差异由 <code>caps</code> 能力位吸收。</span>
+              <span class="nd"><strong>create / destroy</strong>，仅此。<strong>纯生命周期、不碰文件</strong>——文件全走 <a href="interaction.html">DriverChannel</a>。各厂商高度一致。</span>
             </div>
             <div class="ar"><span class="albl">ImageRef</span><span class="gly">←</span></div>
             <div class="node c-data" style="min-width:210px">
@@ -55,52 +55,45 @@
           根本无法共用一个方法签名。把烘焙拎出去、用 <code>ImageRef</code> 解耦，运行时接口才能对几乎所有厂商保持干净。
         </div>
 
-        <h2 id="caps">能力位与分档</h2>
+        <h2 id="caps">厂商分档</h2>
         <p>
-          运行时虽相似，但几个关键点必须<strong>按能力声明、不能假设</strong>。每个 provider 暴露一组 <code>caps</code>，上层据此分流：
+          运行时接口本身极简（见上：<strong>create / destroy</strong>），各厂商干净覆盖。真正的差异在
+          <strong>隔离强度、烘镜像模型、冷启动速度</strong>——据此把厂商分成几档，一套抽象多档并存，按场景选：
         </p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>能力位</th><th>含义</th><th>谁有</th><th>上层据此做什么</th></tr></thead>
-            <tbody>
-              <tr><td><code>pty</code></td><td>交互式 PTY——harness 桥接靠它</td><td>Daytona ✓ · E2B ✓；Modal/Cloudflare 缺</td><td>能不能直接桥接交互式引擎</td></tr>
-              <tr><td><code>memorySnapshot</code></td><td>内存级挂起恢复</td><td>E2B ✓ · Fly ✓ · Morph ✓；Daytona ✗</td><td>决定 hibernate 走哪种形态（见下）</td></tr>
-              <tr><td><code>egressAllowlist</code></td><td>出站白名单</td><td>多数支持</td><td>capability 访问企业系统时按 scope 放行</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>能力位把厂商映射成几条<strong>隔离档位</strong>，一套抽象多档并存：</p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>档位</th><th>provider</th><th>隔离</th><th>为什么是它</th></tr></thead>
             <tbody>
-              <tr><td><strong>默认档</strong></td><td>Daytona（现状）</td><td>容器级 + gVisor</td><td>烘镜像最全（声明式 <code>addLocalDir</code>）、PTY + TS SDK 齐，冷启动快</td></tr>
-              <tr><td><strong>强隔离档</strong></td><td>E2B</td><td>Firecracker microVM</td><td>硬件级隔离 + 内存快照 ~1s 唤醒；与 Daytona API 形状最像，是验证抽象的「第二家靶子」</td></tr>
+              <tr><td><strong>默认档</strong></td><td>Daytona（现状）</td><td>容器级 + gVisor</td><td>烘镜像最全（声明式 <code>addLocalDir</code>）、TS SDK 齐，冷启动快</td></tr>
+              <tr><td><strong>强隔离档</strong></td><td>E2B</td><td>Firecracker microVM</td><td>硬件级隔离；与 Daytona API 形状最像，是验证抽象的「第二家靶子」</td></tr>
               <tr><td><strong>自托管 / on-prem</strong></td><td>Northflank（Kata / Cloud Hypervisor）</td><td>可选 microVM / gVisor</td><td>成熟 BYOC，企业私有部署；也避开 Daytona 自托管的 AGPL 传染</td></tr>
               <tr><td><strong>分支探索档</strong></td><td>Morph（Infinibranch）</td><td>microVM</td><td>~250ms 全 VM 状态分支，适合并行 agent / tree-of-thought</td></tr>
             </tbody>
           </table>
         </div>
+        <div class="note">
+          <span class="note-label">不再有 caps 能力位</span>
+          早期接口带一组 <code>caps</code>（pty / memorySnapshot / egressAllowlist）做能力分流。现已<strong>全部移除</strong>——
+          因为 hibernate 统一走「<a href="#hibernate">检查点 + destroy</a>」（不依赖内存快照）、harness 桥接是 driver 内部的事（不依赖 provider pty）、
+          出站白名单等 capability 体系尚未落地。需要时再按需加回（YAGNI）。
+        </div>
 
-        <h2 id="hibernate">两态休眠</h2>
+        <h2 id="hibernate">休眠 = 让出全部资源 = destroy</h2>
         <p>
-          进程<a href="state.html#snapshot">休眠</a>时要让出沙箱。怎么让出，取决于 <code>caps.memorySnapshot</code>——
-          <code>hibernate()</code> 因此是<strong>两态</strong>的，产物对调用方不透明，<code>wake()</code> 按同形态还原：
+          这里说的<a href="state.html#checkpoint">休眠</a>是<strong>进程</strong>的休眠，目的就是把沙箱资源<strong>全部让出</strong>。
+          所以它直接 <code>destroy</code> 沙箱——而<strong>不</strong>用厂商的 stop：stop 虽免 compute，却<strong>仍按 disk 计费</strong>，
+          而进程休眠常是用户隔很久才回来，留着盘只是白烧钱。
         </p>
         <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
-            <div class="node c-state" style="min-width:230px">
-              <span class="nt">extracted <span class="tag">无内存快照</span></span>
-              <span class="nd">Daytona 这类：tar-out 进程目录成平台侧快照 → 销毁沙箱。wake 时起新沙箱、tar-in 注回。靠 <a href="state.html#resume">state 协议</a> resume。</span>
-            </div>
-            <div class="node c-sandbox" style="min-width:230px">
-              <span class="nt">memory-snapshot <span class="tag">有内存快照</span></span>
-              <span class="nd">E2B/Fly/Morph 这类：内存级 pause，连进程/变量一起冻住，~1s 唤醒。<strong>可省去 tar-out</strong>。</span>
-            </div>
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-state" style="min-width:200px"><span class="nt">hibernate</span><span class="nd">末次检查点经 DriverChannel 流回 CP → <code>provider.destroy</code>。厂商成本归零。</span></div>
+            <div class="ar"><span class="albl">检查点在 CP</span><span class="gly">→</span></div>
+            <div class="node c-sandbox" style="min-width:200px"><span class="nt">wake</span><span class="nd"><code>provider.create</code> 新沙箱 → <code>pushBundle</code> 灌回检查点 → driver 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
           </div>
           <div class="dgm-cap">
-            同一个 <code>hibernate/wake</code> 接口、两种形态。注意：即便有内存快照，进程的<strong>权威状态仍在进程目录</strong>里
-            （见 <a href="state.html">进程目录与状态</a>）——内存快照只是省了一次导出，不改变「状态不依赖对话」这条铁律。
+            耐久真相是<strong>控制平面侧的检查点</strong>（运行中已持续经 <a href="interaction.html#data-plane">DriverChannel</a> 流回），不依赖任何厂商热令牌。
+            检查点天生<strong>跨厂商</strong>——迁移就是「在厂商 Y 起沙箱、灌回检查点」。完整语义见 <a href="state.html#checkpoint">进程目录与状态</a>。
+            <br><b>费用</b>：running 计 compute+disk；destroy 后归零。stop（免 compute、仍计 disk）/ archive（冷盘更便宜）对我们没意义——耐久不靠厂商留盘。
           </div>
         </div>
 

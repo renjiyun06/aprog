@@ -138,7 +138,7 @@
             <tr><td>state</td><td>enum</td><td><code>running</code>（有沙箱）/ <code>hibernating</code>（无沙箱）</td></tr>
             <tr><td>provider</td><td>enum</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）</td></tr>
             <tr><td>sandbox_id</td><td>string?</td><td>当前沙箱 ID，无沙箱时 null</td></tr>
-            <tr><td>snapshot_ref</td><td>string?</td><td>休眠态的引用：导出的进程目录路径，或厂商内存快照 id（见 <a href="sandbox.html#hibernate">两态休眠</a>）</td></tr>
+            <tr><td>checkpoint_ref</td><td>string?</td><td>最新检查点的引用（控制平面侧存储路径）；唤醒时灌回新沙箱（见 <a href="state.html#checkpoint">检查点</a>）</td></tr>
             <tr><td>created_at / last_active_at</td><td>timestamp</td><td></td></tr>
           </tbody>
         </table></div>
@@ -184,10 +184,10 @@
           <div class="dgm-cap">休眠态：交互区收起、目录仍可浏览（见 <a href="window.html#states">工作窗口</a>）。<strong>状态永不删除</strong>——程序跑完也只是处于休眠、随时可再唤醒。</div>
         </div>
 
-        <h2 id="snapshot">快照与事实源</h2>
+        <h2 id="snapshot">检查点与事实源</h2>
         <p>
-          进程状态两种形态：沙箱里的<strong>工作副本</strong>、平台上的<strong>快照</strong>。同一时刻只有一份权威——
-          沙箱在跑时是工作副本；沙箱不在时是平台快照（或厂商内存快照）。状态穿越沙箱生死，<strong>永不删除</strong>。
+          进程状态两种形态：沙箱里的<strong>工作副本</strong>、控制平面上的<strong>检查点</strong>。同一时刻只有一份权威——
+          沙箱在跑时是工作副本；沙箱不在时（休眠=destroy）是控制平面检查点（运行中经 <a href="interaction.html#data-plane">DriverChannel</a> 持续流回）。状态穿越沙箱生死，<strong>永不删除</strong>。
         </p>
         <div class="note bad">
           <span class="note-label">不变量</span>

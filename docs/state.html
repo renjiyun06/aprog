@@ -28,8 +28,10 @@
 
         <h2 id="dir">进程目录 = 真正的状态</h2>
         <p>
-          每个进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个目录（类比 <code>/proc/&lt;pid&gt;/</code>），挂在持久卷上。它的结构由
-          <strong>state 程序库</strong>统一定义：身份、输入流、有 schema 的执行状态、以及 resume 语义。
+          每个进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个目录（类比 <code>/proc/&lt;pid&gt;/</code>）。它<strong>就是底层 harness 的工作目录（cwd）</strong>——
+          这点很重要：平台只关心这个目录里的东西，用户在界面上看到的进程目录也正是它。（harness 并不被禁止访问别处，只是别处平台不管。）
+          它<strong>不挂持久卷</strong>，活在沙箱本地盘上；耐久性靠<a href="#checkpoint">检查点</a>经 B 平面流回控制平面，而非靠卷。
+          目录结构由 <strong>state 程序库</strong>统一定义：身份、输入流、有 schema 的执行状态、以及 resume 语义。
         </p>
         <div class="dgm">
           <div class="tree">
@@ -39,7 +41,7 @@
             <div class="tn lvl1"><span class="gly star">★</span><span class="tname">execution-state/</span><span class="tnote">有 schema 的执行状态</span></div>
             <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">state.yaml</span><span class="tnote">inline 键 + by-ref 指针</span></div>
             <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">*.md / blobs</span><span class="tnote">by-ref 的大块内容（决策记录、笔记…）</span></div>
-            <div class="tn lvl1"><span class="gly file">📄</span><span class="tname">session.aprog.jsonl</span><span class="tnote">会话逐字记录（engine-neutral，给 <a href="protocol.html#storage">前端/审计</a>）</span></div>
+            <div class="tn lvl1"><span class="gly file">📄</span><span class="tname">session.aprog.jsonl</span><span class="tnote">会话逐字记录（engine-neutral，给 <a href="protocol.html">前端/审计</a>）</span></div>
             <div class="tn lvl1"><span class="gly dir">📁</span><span class="tname">artifacts/</span><span class="tnote">程序产出的文件</span></div>
           </div>
           <div class="legend">
@@ -87,13 +89,63 @@
           会话记录是含思考/工具/回复的<strong>完整转录</strong>。用户消息在两处都出现，但服务的对象不同——前者驱动执行，后者驱动界面。
         </div>
 
-        <h2 id="snapshot">快照与生命周期</h2>
+        <h2 id="checkpoint">检查点：耐久性是平台的事，不是程序的事</h2>
         <p>
-          沙箱在时，<strong>沙箱里的工作副本</strong>是权威；沙箱不在时（休眠/退出），<strong>平台侧快照</strong>是权威。
-          进程退出或休眠时，Control Plane 把进程目录 tar-out 成快照存到 <code>/var/lib/aprog/proc/&lt;pid&gt;/</code>；
-          唤醒/attach 时再 tar-in 注入新沙箱。<strong>状态永不删除</strong>——退出只是没有沙箱关联，目录与历史完整保留。
+          沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠的是<strong>检查点</strong>——把进程目录的 state 子集
+          经 <a href="interaction.html#data-plane">B 平面</a>流回控制平面。关键在职责分层：
         </p>
-        <p>具体的 spawn / hibernate / wake / exit 调用链见 <a href="flows.html">生命周期流程</a>。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>关注点</th><th>归谁</th><th>具体</th></tr></thead>
+            <tbody>
+              <tr><td>状态的<strong>内容与结构</strong></td><td>程序 / state 库</td><td>meta / input / execution-state 怎么组织、程序自己逻辑怎么 resume</td></tr>
+              <tr><td>状态的<strong>耐久性</strong></td><td><strong>平台 / driver</strong></td><td><strong>何时</strong>快照、怎么传、怎么恢复。对内容无知</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note bad">
+          <span class="note-label">检查点不归程序控制</span>
+          上层程序<strong>无法、也不该</strong>决定何时做检查点。它是平台机制，由 <strong>driver 用 harness-specific 的手段</strong>实现——
+          比如 Claude Agent SDK 在回复结束时的 hook，driver 接住后<strong>按配置</strong>决定要不要同步（这只是一种方式）。程序不参与，也不需要「为检查点而 flush」。
+        </div>
+
+        <h3 id="quiescent">检查点落在 quiescent 点</h3>
+        <p>
+          自然的保存点是 <strong>quiescent 点</strong>：harness 已回复完、正在等用户下一条输入。此刻 agent 不在写盘，加上 state 库<strong>原子落盘</strong>（写临时文件再 rename），
+          盘面自然是个一致、可 resume 的点。它是「每个回合结束」的<strong>子集</strong>（多了「之后转入空闲」这个条件），因此比每回合都存稀疏。
+        </p>
+        <div class="note ok">
+          <span class="note-label">quiescent 点 = 自然的休眠点</span>
+          进程空闲等人，恰好也是<strong>最该让出沙箱</strong>的时刻。于是「做检查点」和「<a href="interaction.html#hibernate">hibernate-prepare</a>」在同一时刻发生——
+          <strong>休眠在机制上就是「在 quiescent 点做检查点 + 顺手让出沙箱」</strong>，两者天然合一。
+        </div>
+
+        <h3 id="cadence">节奏是配置项</h3>
+        <p>检查点频率是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆，平台配置：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>配置</th><th>同步成本</th><th>崩溃丢失窗口</th></tr></thead>
+            <tbody>
+              <tr><td>每个 quiescent 点</td><td>高</td><td>最小（最多一组对话的算力）</td></tr>
+              <tr><td>每 N 个 quiescent / 每 T 分钟</td><td>中</td><td>中</td></tr>
+              <tr><td>仅显式休眠时</td><td>最低</td><td>最大（整段运行的算力）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="restore">恢复 = 纯 resume，没有「回退语义」</h3>
+        <p>
+          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康检查点（新沙箱热恢复 / 经 B 灌回检查点）。这里<strong>没有任何回退语义要设计</strong>：
+        </p>
+        <ul>
+          <li>底层 harness 启动后<strong>就是普通 resume</strong>，它不知道、也不关心「丢了一段活」。</li>
+          <li>检查点之后到崩溃前那几条输入，<strong>控制平面 eager 持久化着</strong>（输入很小、一到就存，是耐久脊梁）；恢复后当<strong>普通新输入重投</strong>给那个正在等输入的 harness，它当第一次收到来处理。没有重放逻辑、没有补偿、没有回退事件。</li>
+          <li><strong>唯一代价</strong>：丢失那段活若产生过<strong>系统外副作用</strong>（发邮件、写外部库），重跑会重做。这<strong>明确划在范围外</strong>——aprog 只管系统内状态，不管系统外。</li>
+        </ul>
+        <p>
+          于是两类状态用两种节奏，互补：<strong>输入</strong>（轻、是脊梁）发出即存；<strong>执行状态 / 会话</strong>（重）在 quiescent 点按配置检查点。
+          <strong>状态永不删除</strong>——退出只是没有沙箱关联，目录与历史完整保留。具体的 spawn / hibernate / wake / exit 调用链见 <a href="flows.html">生命周期流程</a>。
+        </p>
 
         <div class="pager" data-pager></div>
       </article>

@@ -35,7 +35,7 @@
             <tbody>
               <tr><td>可执行程序</td><td><strong>程序 Program</strong></td><td>一段以 skill 形态存在的能力（<code>SKILL.md</code>），静态实体</td></tr>
               <tr><td>进程</td><td><strong>进程 Process</strong></td><td>程序的一次运行，可休眠 / 唤醒，有自己的 PID 与目录</td></tr>
-              <tr><td><code>/proc/&lt;pid&gt;/</code></td><td><strong>进程目录</strong></td><td><code>~/.aprog/&lt;pid&gt;/</code>，进程的真正状态，挂在持久卷上</td></tr>
+              <tr><td><code>/proc/&lt;pid&gt;/</code></td><td><strong>进程目录</strong></td><td><code>~/.aprog/&lt;pid&gt;/</code>，进程的真正状态，也是 harness 的 cwd（不挂卷，靠检查点持久化）</td></tr>
               <tr><td>CPU</td><td><strong>引擎 Engine</strong></td><td>底层 agent loop（当前 Claude Agent SDK，可替换）</td></tr>
               <tr><td>内存 / 运行环境</td><td><strong>沙箱 Sandbox</strong></td><td>per-process 容器，临时算力，由 Daytona 提供</td></tr>
             </tbody>
@@ -57,7 +57,7 @@
           <a class="hero-card" href="components.html">
             <div class="num">03</div>
             <div class="name">组件清单</div>
-            <p class="blurb">一次活着的进程涉及哪些进程/服务：Control Plane、Driver、Bridge、Engine、Sandbox。</p>
+            <p class="blurb">一次活着的进程涉及哪些进程/服务：Control Plane、Driver、Engine、Sandbox。</p>
           </a>
           <a class="hero-card" href="protocol.html">
             <div class="num">04</div>

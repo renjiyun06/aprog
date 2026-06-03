@@ -30,33 +30,35 @@
         <div class="dgm">
           <div class="dgm-cols" style="align-items:flex-start;flex-wrap:nowrap">
             <a class="node c-frontend" href="#frontend" style="min-width:130px">
-              <span class="nt">🖥 Web 前端</span><span class="nd">浏览器 · mica</span>
+              <span class="nt">🖥 Web 前端</span><span class="nd">浏览器 · @aprog/web</span>
             </a>
-            <div class="ar accent" style="margin-top:14px"><span class="albl">HTTP / WS</span><span class="gly">→</span></div>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">HTTP / SSE</span><span class="gly">→</span></div>
             <div class="dgm-group g-vm">
               <span class="glabel">aprog 自家 VM</span>
               <div class="dgm-col">
-                <a class="node c-cp" href="#control-plane"><span class="nt">🧭 Control Plane</span><span class="nd">协调 · 反代 · 编排</span></a>
-                <div class="ar down"><span class="albl">快照 IO ▼</span><span class="gly">↓</span></div>
-                <a class="node c-muted" href="state.html#snapshot"><span class="nt">💽 平台快照</span></a>
+                <a class="node c-cp" href="#control-plane"><span class="nt">🧭 Control Plane</span><span class="nd">协调 · 编排 · 流中枢</span></a>
+                <div class="ar down"><span class="albl">检查点 ▼</span><span class="gly">↓</span></div>
+                <a class="node c-muted" href="state.html#checkpoint"><span class="nt">💽 检查点存储</span></a>
               </div>
             </div>
-            <div class="ar accent" style="margin-top:14px"><span class="albl">Daytona SDK</span><span class="gly">→</span></div>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">A 起停 · B driver 拨回</span><span class="gly">⇄</span></div>
             <div class="dgm-group g-sandbox">
               <span class="glabel">外部 cloud · 沙箱 (1/进程)</span>
               <div class="dgm-col">
                 <a class="node c-driver" href="#driver"><span class="nt">🔌 Driver + Engine</span><span class="tag">常驻</span></a>
-                <a class="node c-bridge" href="#bridge"><span class="nt">🪢 Bridge</span><span class="tag">短命</span></a>
-                <a class="node c-state" href="state.html"><span class="nt">📂 /home/aprog/</span><span class="nd">进程目录</span></a>
+                <a class="node c-state" href="state.html"><span class="nt">📂 进程目录 (cwd)</span><span class="nd">harness 的工作目录</span></a>
               </div>
             </div>
           </div>
-          <div class="dgm-cap">点任一组件跳到下方说明。<b>前端只跟 Control Plane 通信</b>，永不直连沙箱。</div>
+          <div class="dgm-cap">
+            点任一组件跳到下方说明。<b>前端只跟 Control Plane 通信</b>，永不直连沙箱。CP↔沙箱分两平面：
+            <b>A</b> 经 <a href="interaction.html#resource-plane">provider SDK</a> 起停沙箱，<b>B</b> 由沙箱内 driver 持烘入凭证<a href="interaction.html#trust">拨回 CP</a> 建一条常驻 <a href="interaction.html#data-plane">DriverChannel</a>。
+          </div>
         </div>
         <p>
-          一句话：<strong>前端</strong>只跟 <strong>Control Plane</strong> 通信；Control Plane 通过 Daytona 把数据流接进
-          <strong>沙箱</strong>；沙箱里常驻一个 <strong>Driver</strong>（内含 <strong>Engine</strong>），
-          每次连接时再起一个短命的 <strong>Bridge</strong> 做管道。
+          一句话：<strong>前端</strong>只跟 <strong>Control Plane</strong> 通信；Control Plane 用 provider SDK 起停<strong>沙箱</strong>（A 平面）；
+          沙箱里常驻一个 <strong>Driver</strong>（内含 <strong>Engine</strong>），driver 自启后拨回 CP 建一条活满沙箱生命周期的 <strong>DriverChannel</strong>（B 平面），
+          事件流、输入、文件搬运全走它。
         </p>
 
         <h2 id="table">组件一览</h2>
@@ -64,18 +66,17 @@
           <table>
             <thead><tr><th>组件</th><th>跑在哪</th><th>生命周期</th><th>职责</th><th>谁出的</th></tr></thead>
             <tbody>
-              <tr><td><strong>Web 前端</strong> (mica)</td><td>用户浏览器</td><td>会话期</td><td>用户入口：进程列表、对话区、目录区。发指令、看事件流、只读浏览文件</td><td>aprog</td></tr>
-              <tr><td><strong>Control Plane</strong></td><td>aprog VM</td><td>长跑 service</td><td>鉴权 / 进程元数据 / 快照磁盘 / 沙箱编排 / 流转代理</td><td>aprog</td></tr>
-              <tr><td><strong>Bridge</strong></td><td>沙箱内</td><td>一次 attach</td><td>把 Driver 的本地 socket pipe 到 Daytona exec 的 stdio。短命、无状态</td><td>aprog</td></tr>
-              <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>把 Engine 接上 aprog 协议。当前是 <code>claude-driver</code>（TS）</td><td>aprog</td></tr>
-              <tr><td><strong>Engine</strong></td><td>沙箱内（Driver 进程里）</td><td>同 Driver</td><td>Claude Agent SDK 的 <code>query()</code> 跑 agent loop</td><td>外部依赖</td></tr>
-              <tr><td><strong>Sandbox</strong> (Daytona)</td><td>外部 cloud</td><td>per-process</td><td>提供文件系统 + 进程 + 网络 + exec API</td><td>外部依赖</td></tr>
+              <tr><td><strong>Web 前端</strong> (@aprog/web)</td><td>用户浏览器</td><td>会话期</td><td>用户入口：进程列表、对话区、目录区。发指令、看事件流、只读浏览文件</td><td>aprog</td></tr>
+              <tr><td><strong>Control Plane</strong></td><td>aprog VM</td><td>长跑 service</td><td>鉴权 / 进程元数据 / 检查点 / 沙箱编排（A）/ 持有 DriverChannel + 盖 seq + 扇出（B）</td><td>aprog</td></tr>
+              <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>自启拨回 CP；翻译引擎事件、当 harness 父进程、承载 DriverChannel。当前是 <code>claude-driver</code>（TS）</td><td>aprog</td></tr>
+              <tr><td><strong>Engine</strong></td><td>沙箱内（Driver 拉起）</td><td>同 Driver</td><td>Claude Agent SDK 的 <code>query()</code> 跑 agent loop</td><td>外部依赖</td></tr>
+              <tr><td><strong>Sandbox</strong></td><td>外部 cloud</td><td>per-process</td><td>提供文件系统 + 进程 + 网络（出站，供 driver 拨回）</td><td>外部依赖</td></tr>
             </tbody>
           </table>
         </div>
-        <p>aprog 自己出的代码是：<strong>前端、Control Plane、Driver、Bridge</strong>，外加一个共享的 <strong>protocol</strong> 包。Engine 和 Sandbox 都是外部依赖。</p>
+        <p>aprog 自己出的代码是：<strong>前端、Control Plane、Driver</strong>，外加一个共享的 <strong>protocol</strong> 包。Engine 和 Sandbox 都是外部依赖。</p>
 
-        <h2 id="frontend">Web 前端 (mica)</h2>
+        <h2 id="frontend">Web 前端 (@aprog/web)</h2>
         <p>
           用户真正面对的界面。一个程序打开是一个窗口，窗口分三区：左边<strong>进程列表</strong>、中间<strong>对话区</strong>、右边<strong>目录区</strong>。
           它跨 NAT，只跟 Control Plane 的一个稳定 endpoint 通信，永不直连沙箱。详见 <a href="window.html">工作窗口</a>。
@@ -88,59 +89,48 @@
 
         <h2 id="control-plane">Control Plane</h2>
         <p>
-          平台的中枢，跑在 aprog 自家 VM 上，是所有跨沙箱操作的<strong>协调点</strong>和元数据/快照的<strong>事实源</strong>。它内部分几块：
+          平台的中枢，跑在 aprog 自家 VM 上，是所有跨沙箱操作的<strong>协调点</strong>和元数据/检查点的<strong>事实源</strong>。它内部分几块：
         </p>
         <div class="cards">
-          <div class="card"><div class="k">api</div><div class="t">HTTP / WS 端点</div><p class="d">前端的所有请求入口；attach 升级为 WebSocket 流</p></div>
+          <div class="card"><div class="k">api</div><div class="t">HTTP / SSE 端点</div><p class="d">前端的所有请求入口；事件流订阅走 SSE（<code>from=&lt;seq&gt;</code>）</p></div>
           <div class="card"><div class="k">auth</div><div class="t">鉴权</div><p class="d">login / logout / token，单一鉴权面</p></div>
           <div class="card"><div class="k">process</div><div class="t">进程编排</div><p class="d">spawn / attach / detach / hibernate / wake / exit 的流程</p></div>
-          <div class="card"><div class="k">snapshot</div><div class="t">快照磁盘 IO</div><p class="d">进程目录 tar-in / tar-out，平台侧持久化</p></div>
-          <div class="card"><div class="k">sandbox</div><div class="t">沙箱封装</div><p class="d">Daytona SDK 封装 + Bridge 调用</p></div>
-          <div class="card"><div class="k">stream</div><div class="t">流反代</div><p class="d">把 Driver 的事件流反代给前端 WS</p></div>
+          <div class="card"><div class="k">checkpoint</div><div class="t">检查点持久化</div><p class="d">存 DriverChannel 流回的 state 子集，是耐久事实源（<a href="state.html#checkpoint">详</a>）</p></div>
+          <div class="card"><div class="k">sandbox</div><div class="t">A 平面 · 沙箱封装</div><p class="d">provider SDK 封装：create/destroy/hibernate/wake（不碰文件）</p></div>
+          <div class="card"><div class="k">driver-channel</div><div class="t">B 平面 · 流中枢</div><p class="d">受理 driver 拨入、盖全局 seq 落库、扇出给前端、下发输入/控制/fs</p></div>
         </div>
         <p>
-          为什么所有流量都过 Control Plane、不让前端直连沙箱？单一鉴权面、沙箱不暴露公网端口、provider 抽象不外漏。
+          为什么所有流量都过 Control Plane、不让前端直连沙箱？单一鉴权面、沙箱不暴露公网入站端口、provider 抽象不外漏。
           这是一条 load-bearing 决策，见 <a href="architecture.html#adr">架构 · 关键决策</a>。
         </p>
 
         <h2 id="driver">Engine Driver</h2>
         <p>
-          沙箱内<strong>常驻</strong>的进程，跨 attach/detach 持续活着。它做两件事：
+          沙箱内<strong>常驻</strong>的进程，随镜像 entrypoint 自启、持烘入凭证拨回 Control Plane，跨 attach/detach 持续活着。它做三件事：
         </p>
         <ol>
-          <li>跑 Engine：在自己进程里 <code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，以 streaming-input 模式驱动 agent loop。</li>
-          <li>翻译协议：把 SDK 私有的 <code>AssistantMessage / SystemMessage / ResultMessage</code> 翻成 <strong>engine-neutral 的 aprog 事件</strong>，写本地缓冲、并 append 进进程目录的会话记录。</li>
+          <li>当 <strong>harness 父进程</strong>：拉起 Engine（<code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，streaming-input 模式），掌控其生命周期。</li>
+          <li>翻译协议：把 SDK 私有的 <code>AssistantMessage / SystemMessage / ResultMessage</code> 翻成 <strong>engine-neutral 的 aprog 事件</strong>，局部定序后经 DriverChannel 上行（全局 seq 由 CP 落库时盖）。</li>
+          <li>承载 <a href="interaction.html#data-plane">DriverChannel</a>：接收 CP 下发的输入 / 控制信号 / 实时 fs 读，并在 quiescent 点经它把 state 子集流回当检查点。</li>
         </ol>
         <p>
-          为什么要一个常驻 Driver、而不是裸跑 Engine？因为 detach 后前端走了、Control Plane 到沙箱的连接也该关，
-          但 Engine 可能还在跑或在等输入，它的产出得有东西兜住；reattach 时还要能看到“离开这段时间发生了啥”。
-          “SDK 消息 → aprog 事件”的翻译放在沙箱内做，让平台与引擎彻底解耦。每款引擎一个 <code>&lt;name&gt;-driver</code> 包，
-          对外的 wire 协议固定，内部怎么调 SDK 是 driver 自己的事。
-        </p>
-
-        <h2 id="bridge">Bridge</h2>
-        <p>
-          一次 attach 期间才存在的<strong>短命管道</strong>，无状态。Control Plane 通过 <code>daytona exec</code> 在沙箱里把它拉起来，
-          它连上 Driver 的本地 socket（<code>/run/aprog/io.sock</code>），把下行字节 pipe 到自己的 stdout（Daytona 流回 Control Plane），
-          把上行的用户输入 pipe 回 socket。前端断开 → Control Plane 关 exec → Bridge 退出；Driver 不受影响继续兜 Engine 输出。
-        </p>
-        <p>
-          为什么不直接 <code>daytona exec</code> 启动 Driver？因为 Driver 是沙箱生命周期级别的长跑进程，不能跟某一次 attach 绑命。
-          Bridge 才是按 attach 起灭的一次性管道。
+          为什么要一个常驻 Driver、而不是裸跑 Engine？detach 后前端走了，但 DriverChannel 是 <strong>per-sandbox 常驻</strong>、不随 detach 关；
+          Engine 可能还在跑或在等输入，它的产出得有东西兜住并继续落库；reattach 时还要能按游标看到“离开这段时间发生了啥”。
+          “SDK 消息 → aprog 事件”的翻译放在沙箱内做，让平台与引擎彻底解耦。每款引擎一个 <code>&lt;name&gt;-driver</code> 包，对外协议固定，内部怎么调 SDK 是 driver 自己的事。
         </p>
 
         <h2 id="engine">Engine</h2>
         <p>
-          实际的 agent loop，当前是 Claude Agent SDK。它跑在 Driver 进程里，吃 Driver 喂来的用户输入（async iterable），
+          实际的 agent loop，当前是 Claude Agent SDK。它由 Driver 作为子进程拉起，吃 Driver 喂来的用户输入（async iterable），
           产出消息流。它自己的会话持久化（<code>session.jsonl</code>）是 SDK 默认行为，但<strong>对 aprog 不权威</strong>——
           那只是沙箱生命周期内的临时缓存，沙箱一销毁就没了。详见 <a href="state.html">进程目录与状态</a>。
         </p>
 
-        <h2 id="sandbox">Sandbox（Daytona）</h2>
+        <h2 id="sandbox">Sandbox</h2>
         <p>
-          per-process 的容器，外部 cloud 服务，提供文件系统、进程空间、网络和 exec API。沙箱镜像（template）里烘进了：
-          基础 OS + 常用工具、<code>claude-driver</code>、<code>aprog-bridge</code>、Node.js 运行时。spawn/wake 时 Control Plane 选用当前 active 镜像起一个新沙箱，
-          把进程目录注入 <code>/home/aprog/</code>。沙箱本身不对外暴露端口；任何“进沙箱”的动作都经 Daytona exec 发起。
+          per-process 的容器，外部 cloud 服务（当前 Daytona），提供文件系统、进程空间、网络和 exec API。沙箱镜像（template）里烘进了：
+          基础 OS + 常用工具、<code>claude-driver</code>（含拨回 CP 的凭证）、引擎运行时。spawn/wake 时 Control Plane 用 provider SDK 起一个新沙箱（A 平面）；
+          沙箱本身<strong>不对外暴露入站端口</strong>——所有交互靠沙箱内 driver <strong>出站拨回</strong> CP 的 DriverChannel（B 平面）。沙箱与镜像详见 <a href="sandbox.html">沙箱与镜像</a>、交互界面详见 <a href="interaction.html">沙箱交互界面</a>。
         </p>
 
         <h2 id="deps">依赖方向</h2>
@@ -152,13 +142,12 @@
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>controlplane</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span></div>
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>drivers/*</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span></div>
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>drivers/*</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#bc4c00"></span>engine SDK</span><span class="nd" style="font-size:11.5px">各自的</span></div>
-            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#bf3989"></span>bridge</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span><span class="nd" style="font-size:11.5px">只做 transport，不解析 payload</span></div>
           </div>
           <div class="dgm-cap"><b>┈┈►</b> 镜像内容依赖（非源码）　·　<b>───►</b> 源码依赖。单向无环，driver 可独立演化。</div>
         </div>
         <p>
           <code>controlplane</code> 和 <code>drivers/*</code> <strong>没有源码依赖</strong>——driver 跟着沙箱镜像一起烘进去，
-          通过固定的 socket 协议交互。这保证 driver 可以独立演化、独立换引擎。
+          通过固定的 <a href="protocol.html">protocol</a> + DriverChannel 交互。这保证 driver 可以独立演化、独立换引擎。
         </p>
 
         <div class="pager" data-pager></div>

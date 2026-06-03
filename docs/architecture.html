@@ -57,34 +57,31 @@
           <div class="dgm-cols" style="align-items:flex-start;flex-wrap:nowrap">
             <div class="dgm-col" style="min-width:140px">
               <a class="node c-frontend" href="window.html" style="width:100%">
-                <span class="nt">🖥 Web 前端</span><span class="nd">用户浏览器 · mica</span>
+                <span class="nt">🖥 Web 前端</span><span class="nd">用户浏览器 · @aprog/web</span>
               </a>
             </div>
-            <div class="ar accent" style="margin-top:14px"><span class="albl">HTTP / WS</span><span class="gly">→</span></div>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">HTTP / SSE</span><span class="gly">→</span></div>
             <div class="dgm-group g-vm">
               <span class="glabel">aprog VM</span>
               <div class="dgm-col">
                 <a class="node c-cp" href="components.html#control-plane">
-                  <span class="nt">🧭 Control Plane</span><span class="nd">协调 / 鉴权 / 反代 / 沙箱编排</span>
+                  <span class="nt">🧭 Control Plane</span><span class="nd">协调 / 鉴权 / 流中枢 / 沙箱编排</span>
                 </a>
-                <div class="ar down"><span class="albl">快照磁盘 IO ▼</span><span class="gly">↓</span></div>
-                <a class="node c-muted" href="state.html#snapshot">
-                  <span class="nt">💽 平台快照</span><span class="nd">/var/lib/aprog/proc/&lt;pid&gt;/</span>
+                <div class="ar down"><span class="albl">检查点 ▼</span><span class="gly">↓</span></div>
+                <a class="node c-muted" href="state.html#checkpoint">
+                  <span class="nt">💽 检查点存储</span><span class="nd">/var/lib/aprog/proc/&lt;pid&gt;/</span>
                 </a>
               </div>
             </div>
-            <div class="ar accent" style="margin-top:14px"><span class="albl">Daytona SDK</span><span class="gly">→</span></div>
+            <div class="ar accent" style="margin-top:14px"><span class="albl">A 起停 · B driver 拨回</span><span class="gly">⇄</span></div>
             <div class="dgm-group g-sandbox">
               <span class="glabel">外部 · 沙箱 (per process)</span>
               <div class="dgm-col">
                 <a class="node c-driver" href="components.html#driver">
-                  <span class="nt">🔌 claude-driver <span class="tag">常驻</span></span><span class="nd">含 Engine · socket /run/aprog/io.sock</span>
-                </a>
-                <a class="node c-bridge" href="components.html#bridge">
-                  <span class="nt">🪢 bridge <span class="tag">短命</span></span><span class="nd">exec 起，一次 attach 的管道</span>
+                  <span class="nt">🔌 claude-driver <span class="tag">常驻</span></span><span class="nd">含 Engine · 自启拨回 CP 建 DriverChannel</span>
                 </a>
                 <a class="node c-state" href="state.html">
-                  <span class="nt">📂 /home/aprog/</span><span class="nd">进程目录（工作副本）</span>
+                  <span class="nt">📂 进程目录 (cwd)</span><span class="nd">harness 的工作目录</span>
                 </a>
               </div>
             </div>
@@ -93,30 +90,27 @@
         <ul>
           <li>前端跨 NAT，只跟 Control Plane 的一个稳定 endpoint 通信。</li>
           <li>Control Plane 是所有跨沙箱操作的协调点，也是元数据与快照的事实源。</li>
-          <li>沙箱不对外暴露端口；任何“进沙箱”的动作都经 Daytona exec 发起。</li>
+          <li>沙箱不对外暴露<strong>入站</strong>端口；所有交互靠沙箱内 driver <strong>出站拨回</strong> CP（B 平面），生命周期起停经 provider SDK（A 平面）。</li>
         </ul>
 
         <h2 id="links">三条通信链路</h2>
         <h3 id="link1">链路 1 · 前端 ↔ Control Plane</h3>
         <p>
-          一般命令走 HTTP/JSON；attach 会话流走 WebSocket，行分隔 JSON。鉴权用一套 token 每次请求带上。
-          下行是 <code>agent.thinking / tool_use / tool_result / message</code> 等 engine-neutral 事件，
-          上行是 <code>user.input</code>。事件类型是 aprog 协议层的术语，不是某个 SDK 的术语。
+          一般命令走 HTTP/JSON；事件流订阅走 SSE（<code>from=&lt;seq&gt;</code>），行分隔 JSON。鉴权用一套 token 每次请求带上。
+          下行是 <code>turn.* / item.* / user / error</code> 等 engine-neutral 事件，上行是用户输入。事件类型是 aprog 协议层的术语，不是某个 SDK 的术语。
         </p>
-        <h3 id="link2">链路 2 · Control Plane ↔ Sandbox</h3>
-        <p>通过 Daytona exec + Bridge 实现。一次 attach 期间：</p>
+        <h3 id="link2">链路 2 · Control Plane ↔ Sandbox（两平面）</h3>
+        <p>见 <a href="interaction.html">沙箱交互界面</a>。分两个正交平面：</p>
         <ol>
-          <li>Control Plane 调 Daytona 起一个 exec：<code>aprog-bridge --from-offset=&lt;N&gt;</code>。</li>
-          <li>Bridge 在沙箱内连上 Driver 的本地 socket。</li>
-          <li>Bridge 把 socket 下行 pipe 到 stdout（Daytona 流回 Control Plane）。</li>
-          <li>上行的 <code>user.input</code> 经 Bridge stdin 回灌 socket。</li>
-          <li>前端断开 → Control Plane 关 exec → Bridge 退出；Driver 不变，继续接 Engine 输出写缓冲。</li>
+          <li><strong>A · 资源平面</strong>：CP 经 <a href="interaction.html#resource-plane">provider SDK</a> 起停沙箱（create/destroy/hibernate/wake）。不碰文件。</li>
+          <li><strong>B · 数据平面</strong>：沙箱内 driver 自启后持烘入凭证<strong>拨回</strong> CP，建一条活满沙箱生命周期的常驻 <a href="interaction.html#data-plane">DriverChannel</a>——事件流、输入、控制、实时 fs、所有文件搬运（bootstrap / 检查点 / 恢复）都走它。</li>
+          <li>detach 只是摘掉一个订阅者，DriverChannel <strong>不</strong>随之关；reattach 用游标 <code>from=&lt;seq&gt;</code> 补回间隙。</li>
         </ol>
         <h3 id="link3">链路 3 · Driver ↔ Engine</h3>
         <p>
-          进程内。Driver 是 TS，<code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，用 streaming-input 模式跑：
-          prompt 是来自 socket 的 <code>user.input</code> async iterable，<code>cwd</code> 为 <code>/home/aprog</code>，
-          <code>settingSources: ["project"]</code> 加载进程目录里的 skill。消息从 iterator 出来，Driver 翻成 aprog 事件。
+          进程内。Driver 把 Engine 作为子进程拉起：<code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，用 streaming-input 模式跑：
+          prompt 是 CP 经 DriverChannel 下发的用户输入 async iterable，<code>cwd</code> 为<a href="state.html">进程目录</a>，
+          <code>settingSources: ["project"]</code> 加载进程目录里的 skill。消息从 iterator 出来，Driver 翻成 aprog 事件（局部定序，CP 落库盖 seq）。
         </p>
 
         <h2 id="adr">关键决策（ADR）</h2>
@@ -129,8 +123,9 @@
 
         <h3 id="adr-2">ADR-2 · 沙箱内常驻 Driver，不裸跑 Engine</h3>
         <p>
-          沙箱内常驻 <code>claude-driver</code>，跨 attach/detach 持续活、兜住 Engine 输出。detach 后前端走了、连接该关，
-          但 Engine 还在跑，产出得有东西兜；reattach 要能补上间隙；“SDK 消息 → aprog 事件”的翻译在沙箱内做，让平台与引擎解耦。
+          沙箱内常驻 <code>claude-driver</code>，自启后拨回 CP 建一条 per-sandbox 的 DriverChannel，跨 attach/detach 持续活、兜住 Engine 输出。
+          detach 后前端走了但 DriverChannel 不关、Engine 还在跑，产出得有东西兜并继续落库；reattach 要能补上间隙；
+          “SDK 消息 → aprog 事件”的翻译在沙箱内做，让平台与引擎解耦。
         </p>
 
         <h3 id="adr-3">ADR-3 · Engine 可替换，Program 不知道 Engine</h3>
@@ -149,7 +144,7 @@
           引擎冷启动后读状态即可接着干，<strong>绝不反向重建</strong>引擎上下文。因此：
         </p>
         <ul>
-          <li>aprog 用自己的协议<strong>自己存储会话</strong>（落进程目录，engine-neutral），见 <a href="protocol.html#storage">会话存储</a>。</li>
+          <li>aprog 用自己的协议<strong>自己存储会话</strong>（落进程目录，engine-neutral），见 <a href="protocol.html">事件流协议</a>。</li>
           <li>引擎私有的 <code>session.jsonl</code> 降级为沙箱生命周期内的临时缓存，<strong>不进 aprog 快照、永不权威</strong>。</li>
           <li>换引擎不丢工作，因为会话归 aprog、状态在目录里。</li>
         </ul>
@@ -159,14 +154,13 @@
         <div class="dgm">
           <div class="tree">
             <div class="tn"><span class="gly dir">📂</span><span class="tname">aprog/</span></div>
-            <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="window.html">web/</a><span class="tnote">Web 前端（mica, SolidJS）</span></div>
+            <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="window.html">web/</a><span class="tnote">Web 前端（@aprog/web, SolidJS）</span></div>
             <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="components.html#control-plane">controlplane/</a><span class="tnote">后端服务 + DB + 沙箱编排</span></div>
-            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">api/ · auth/ · process/ · snapshot/ · sandbox/ · stream/</span></div>
+            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">api/ · auth/ · process/ · persistence/ · sandbox/ (A) · driver-channel/ (B) · stream/</span></div>
             <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="components.html#driver">drivers/</a></div>
             <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">claude/</span><span class="tnote">claude-driver（TS），当前唯一</span></div>
             <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">codex/</span><span class="tnote">占位，MVP 不实现</span></div>
-            <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="components.html#bridge">bridge/</a><span class="tnote">沙箱内管道工具，跨 driver 共用</span></div>
-            <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="reference.html">protocol/</a><span class="tnote">事件 / socket 协议定义，共享</span></div>
+            <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="reference.html">protocol/</a><span class="tnote">事件 / 协议定义，共享</span></div>
             <div class="tn lvl1"><span class="gly dir">📁</span><a class="tname" href="concepts.html#program">programs/</a><span class="tnote">内置 skills</span></div>
           </div>
         </div>

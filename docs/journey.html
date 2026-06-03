@@ -108,13 +108,13 @@
               休眠的进程<strong>不占沙箱</strong>。它在列表里照常显示（含版本号），随时能唤醒。<strong>状态永不删</strong>。
             </span>
             <ul class="acts">
-              <li>把进程目录存成平台侧快照、销毁沙箱（有内存快照的厂商则直接内存级挂起）</li>
+              <li>末次检查点经 DriverChannel 流回控制平面、<code>destroy</code> 沙箱（让出全部资源，不用 stop）</li>
               <li>DB 置 <code>state=hibernating</code>；事件流留在平台侧（不丢）</li>
             </ul>
             <div class="legend">
               <a class="chip" href="flows.html#hibernate">深入 · hibernate 调用链 →</a>
-              <a class="chip" href="sandbox.html#hibernate">深入 · 两态休眠 →</a>
-              <a class="chip" href="state.html#snapshot">深入 · 快照与生命周期 →</a>
+              <a class="chip" href="sandbox.html#hibernate">深入 · 休眠让出算力 →</a>
+              <a class="chip" href="state.html#checkpoint">深入 · 检查点与持久化 →</a>
             </div>
           </div>
         </div>
@@ -129,7 +129,7 @@
               对你来说是连续的。但底层是一个<strong>全新沙箱、引擎冷启动、空上下文</strong>——它怎么知道做到哪了？
             </span>
             <ul class="acts">
-              <li>起新沙箱 + 注入<strong>钉死版本</strong>的程序闭包 + tar-in 进程目录快照</li>
+              <li>起新沙箱 + driver 自启拨入 + 经 DriverChannel 灌回<strong>钉死版本</strong>的程序闭包 + 最新检查点</li>
               <li>程序按 <a href="state.html#resume">resume 协议</a>读状态文件接着干，<strong>绝不反向重建引擎对话上下文</strong></li>
               <li>前端重连，按事件流游标补齐缺口 + 续 live —— 历史对话完整呈现</li>
             </ul>

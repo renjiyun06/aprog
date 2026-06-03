@@ -31,7 +31,7 @@
         <div class="dgm">
           <div class="dgm-stack tight">
             <div class="node c-driver"><span class="nt">① 翻译</span><span class="nd">把引擎私有消息 → aprog 事件（<code>turn.* / item.* / user / error</code>）</span></div>
-            <div class="node c-driver"><span class="nt">② 盖 seq</span><span class="nd">给每个事件一个单调递增 <code>seq</code>——<strong>两家 CLI 都不提供</strong>，Driver 用计数器合成</span></div>
+            <div class="node c-driver"><span class="nt">② 定序</span><span class="nd">保证一次运行内事件的<strong>局部顺序</strong>（两家 CLI 都不提供序号）；<strong>全局 <code>seq</code> 由 control-plane 落库时盖</strong>，Driver 不盖（见 <a href="interaction.html#seq">沙箱交互界面 · seq</a>）</span></div>
             <div class="node c-driver"><span class="nt">③ 映射 id</span><span class="nd">把引擎的 item / call 标识归一成稳定 <code>id</code>，让 delta 能折叠、重连能按 id 替换</span></div>
             <div class="node c-driver"><span class="nt">④ 兜策略</span><span class="nd">自动应答审批（不进流）、回显 <code>user</code> 事件、内存持有“在飞项”供恢复</span></div>
           </div>
@@ -58,7 +58,7 @@
             <tr><td><code>item.end</code> tool.result</td><td>随后的 <code>user</code> 消息里的 <code>tool_use_result</code>（按 <code>tool_use_id</code> 回挂）</td></tr>
             <tr><td><code>turn.end</code></td><td><code>result</code>(SDKResultMessage：num_turns / total_cost_usd / usage)</td></tr>
             <tr><td><code>id</code></td><td><code>message.id : block_index</code>（工具用 <code>tool_use.id</code>）</td></tr>
-            <tr><td><code>seq</code></td><td>Driver 合成</td></tr>
+            <tr><td><code>seq</code></td><td>control-plane 落库时盖（Driver 只保证局部顺序）</td></tr>
           </tbody>
         </table></div>
         <div class="note">

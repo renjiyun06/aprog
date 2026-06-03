@@ -44,7 +44,7 @@
               <span class="nd">逻辑分组，流一开始就定。把属于同一条消息的 delta 折叠成一条。回答“是不是同一条”。</span>
             </div>
           </div>
-          <div class="dgm-cap"><b>seq</b> 管重放到哪、<b>id</b> 管哪些折成一条。两者都由 Driver 赋予——底层引擎大多不提供（见 <a href="harness.html#seq">Harness 适配 · seq</a>）。</div>
+          <div class="dgm-cap"><b>seq</b> 管重放到哪、<b>id</b> 管哪些折成一条。<b>id</b> 由 Driver 赋予；<b>seq</b> 由 control-plane 落库时盖全局单调（Driver 只保证一次运行内的局部顺序，见 <a href="interaction.html#seq">沙箱交互界面 · seq</a> 与 <a href="harness.html#seq">Harness 适配 · seq</a>）。</div>
         </div>
 
         <h2 id="kinds">事件种类</h2>
@@ -108,14 +108,14 @@
 
         <h2 id="echo">用户输入：echo-from-stream</h2>
         <p>
-          用户回车后，前端<strong>不</strong>乐观地把消息画上去。它只是把输入提交到沙箱（Driver）；Driver 接受后，作为一个带 <code>seq</code> 的
-          <code>user</code> 事件<strong>注入流</strong>，再顺着流回到所有 viewer——前端这时才显示它。
+          用户回车后，前端<strong>不</strong>乐观地把消息画上去。它只是把输入提交给 Driver（经 DriverChannel）；Driver 接受后注入一个
+          <code>user</code> 事件<strong>到流</strong>（局部定序，control-plane 落库时盖 <code>seq</code>），再顺着流回到所有 viewer——前端这时才显示它。
         </p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
             <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">回车 → 提交，不本地渲染</span></div>
             <div class="ar accent"><span class="albl">submit</span><span class="gly">→</span></div>
-            <div class="node c-driver" style="min-width:130px"><span class="nt">Driver</span><span class="nd">接受 → 注入 <code>user</code> 事件(带 seq)</span></div>
+            <div class="node c-driver" style="min-width:130px"><span class="nt">Driver</span><span class="nd">接受 → 注入 <code>user</code> 事件(CP 盖 seq)</span></div>
             <div class="ar accent"><span class="albl">stream</span><span class="gly">→</span></div>
             <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">从流里收到 → 才显示</span></div>
           </div>

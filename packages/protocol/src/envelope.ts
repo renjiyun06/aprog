@@ -1,9 +1,11 @@
 // 流的两个核心标识 + 订阅/恢复的信封类型。
 //
 // 详见 docs/protocol.html：seq 管「重放到哪」，id 管「哪些 delta 折成一条」。
-// 两者都由 Driver 赋予——底层引擎大多不提供（见 docs/harness.html#seq）。
+// 分工（见 docs/interaction.html#seq）：id 由 Driver 取引擎稳定标识；seq 由 control-plane
+// 落库时盖「跨生命周期单调」的全局序号——driver 只保证一次运行内的局部顺序，跨沙箱/休眠的
+// 全局连续性只有常驻的 control-plane 看得全。
 
-/** 单调递增的流位置。每个事件（含用户输入）都有。游标单位，回答「落后多少 / 补哪些」。 */
+/** 单调递增的流位置（control-plane 盖，全局单调）。每个事件（含用户输入）都有。游标单位，回答「落后多少 / 补哪些」。 */
 export type Seq = number;
 
 /**

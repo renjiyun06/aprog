@@ -1,46 +1,23 @@
-// 运行时控制面抽象。这半在各厂商间几乎一致（create/exec/pty/fs/destroy），
-// 所以一个接口能干净覆盖 Daytona / E2B / Northflank / Fly… 差异由 caps 能力位吸收。
+// A 平面 · 资源平面抽象。把沙箱当一个「被托管的资源」来管。
 //
-// 注意：本接口「不」管烘镜像——那步差异太大，单独交给 ImageBaker（见 baker.ts），
-// 只通过 ImageRef 把结果喂进 create()。这是厂商隔离的关键切法。
+// 当前需求下只需要两件事：create / destroy。理由：
+//  - 进程 hibernate = 让出「全部」沙箱资源 = destroy（耐久靠控制平面检查点，零厂商成本；
+//    不走 stop——stop 仍计 disk 费，违背「让出资源」的初衷）。wake = create 新沙箱 +
+//    经 DriverChannel 灌回检查点。所以没有 provider 级的 hibernate/wake。
+//  - 文件搬运、事件流、控制信号全走 B 平面 DriverChannel（见 ../driver-channel/），本接口不碰。
+//  - exec / openPty / caps（pty·memorySnapshot·egressAllowlist）等先不引入——没有当前需求
+//    驱动（YAGNI）。需要时（如快速唤醒、运维 shell、出站白名单）再按需加回。
+//  - 烘镜像差异关进 ImageBaker（baker.ts），只通过 ImageRef 喂进 create。这是厂商隔离的切法。
 
-import type {
-  ProviderId,
-  ImageRef,
-  Resources,
-  ProviderCaps,
-  SandboxHandle,
-  Dormant,
-  ExecResult,
-  PtySession,
-} from './types.ts';
+import type { ProviderId, ImageRef, Resources, SandboxHandle } from './types.ts';
 
 export interface SandboxProvider {
   readonly id: ProviderId;
-  /** 该厂商支持哪些关键能力——上层据此分流（尤其 pty / memorySnapshot）。 */
-  readonly caps: ProviderCaps;
-
-  // ── 生命周期 ──────────────────────────────────────────────
-  /** 用一个已烘好的镜像起沙箱。driver 已在镜像里，随沙箱常驻。 */
-  create(image: ImageRef, res: Resources): Promise<SandboxHandle>;
-  /** 销毁沙箱（状态由上层另行快照，见 persistence）。 */
-  destroy(h: SandboxHandle): Promise<void>;
-
   /**
-   * 休眠：按能力二选一——有 memorySnapshot 走内存快照，否则导出进程目录。
-   * 返回的 Dormant 形态对调用方不透明，wake 按同形态还原。
+   * 用一个已烘好的镜像起沙箱。driver 已烘在镜像里，随 entrypoint 自启并持烘入凭证
+   * 拨回控制平面（见 docs/interaction.html#trust）；不需要本接口去启动它。
    */
-  hibernate(h: SandboxHandle): Promise<Dormant>;
-  wake(d: Dormant): Promise<SandboxHandle>;
-
-  // ── 执行 ──────────────────────────────────────────────────
-  exec(h: SandboxHandle, cmd: string[]): Promise<ExecResult>;
-  /** 仅当 caps.pty。harness 交互桥接走这里。 */
-  openPty(h: SandboxHandle, cmd: string[]): Promise<PtySession>;
-
-  // ── 文件注入/导出（进程目录 tar-in / tar-out）────────────────
-  /** 把本地 tar（进程目录快照）注入沙箱指定路径。 */
-  injectDir(h: SandboxHandle, localTar: string, destPath: string): Promise<void>;
-  /** 从沙箱导出某目录为本地 tar，返回路径。 */
-  extractDir(h: SandboxHandle, srcPath: string): Promise<string>;
+  create(image: ImageRef, res: Resources): Promise<SandboxHandle>;
+  /** 销毁沙箱、释放全部资源（即进程 hibernate 的落地）。状态早已经检查点落到控制平面。 */
+  destroy(h: SandboxHandle): Promise<void>;
 }

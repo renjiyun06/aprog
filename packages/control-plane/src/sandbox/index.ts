@@ -1,15 +1,12 @@
-// 沙箱层公共出口。上层（process/lifecycle、bridge、persistence）只从这里取，
+// 沙箱层（A 平面）公共出口。上层（process/lifecycle、persistence）只从这里取，
 // 永远不直接 import 某个厂商的实现——厂商隔离的边界就在这。
+// B 平面的 DriverChannel 不在这层，见 ../driver-channel/。
 
 export type {
   ProviderId,
   ImageRef,
   Resources,
-  ProviderCaps,
   SandboxHandle,
-  Dormant,
-  ExecResult,
-  PtySession,
 } from './types.ts';
 export type { SandboxProvider } from './provider.ts';
 export type { ImageBaker, BakeSpec } from './baker.ts';

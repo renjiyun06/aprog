@@ -8,9 +8,11 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aprog/protocol": "workspace:*"
+    "@aprog/protocol": "workspace:*",
+    "@daytonaio/sdk": "^0.183.0"
   }
 }
