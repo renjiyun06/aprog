@@ -28,7 +28,7 @@
 
         <h2 id="layout">三区布局</h2>
         <div class="dgm">
-          <div class="winmock">
+          <div class="winmock" style="position:relative">
             <div class="winmock-bar"><span class="wt">UI 设计</span><span class="wc">▭ 目录　—　□　✕</span></div>
             <div class="winmock-cols">
               <a class="wzone z1" href="#proclist">
@@ -41,7 +41,7 @@
                 </div>
               </a>
               <a class="wzone z2" href="#conversation">
-                <div class="wz-h">对话区</div>
+                <div class="wz-h">对话区 <span style="float:right;font-weight:400;color:var(--accent)">⤴ 分享</span></div>
                 <div class="wz-b">
                   ● 用户消息<br>
                   ▸ thinking 2.4s<br>
@@ -60,8 +60,16 @@
                 </div>
               </a>
             </div>
+            <div class="winmock-status" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-top:1px solid var(--border);background:var(--bg-sidebar);font-size:11.5px;color:var(--fg-muted)">
+              <span><span class="dot" style="background:#2da44e"></span>3 进程在跑</span>
+              <span title="消息中心">🔔 <span style="background:var(--accent);color:#fff;border-radius:9px;padding:0 5px;font-size:10px">2</span>　⚙</span>
+            </div>
+            <div class="winmock-toast" style="position:absolute;right:12px;bottom:40px;width:184px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,.12);font-size:11.5px">
+              <div style="font-weight:600">「后台改版」有新回复</div>
+              <div style="color:var(--fg-subtle)">点此查看 · 刚刚</div>
+            </div>
           </div>
-          <div class="dgm-cap">点任一区进入对应说明。三区状态随 attach 的进程<b>整体切换</b>，从不混合。</div>
+          <div class="dgm-cap">三区随 attach 的进程<b>整体切换</b>；底部<b>状态栏</b>右下角是<b>消息中心</b>（铃铛 + 未读角标），新回复 / 分享会在右下角弹 toast（仿 Windows 11）。对话区头部的 <b>⤴ 分享</b> 仅 owner 可见。</div>
         </div>
 
         <h2 id="proclist">进程列表（左）</h2>
@@ -72,6 +80,9 @@
         <p>
           <strong>新建进程</strong>：点 ＋ 弹出一个表单，目前只填一个名称（CPU/内存/沙箱配置等后续再加）。
           每个新进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个独立目录。
+        </p>
+        <p>
+          列表里<strong>也包含别人分享给你的进程</strong>（进程与用户<a href="#share">一对多</a>），可加一个小标记区分「我创建的 / 共享给我的」与角色（可写 / 只读）。
         </p>
 
         <h2 id="states">进程两态：运行与休眠</h2>
@@ -104,6 +115,8 @@
         <ul>
           <li><strong>输入框</strong>：Enter 发送，Ctrl+Enter 换行，无发送按钮、无提示语。</li>
           <li><strong>打开文件</strong>时主区顶部才出现标签栏：第一个标签是“对话”，其余是只读文件标签。</li>
+          <li><strong>分享按钮</strong>：头部一个 <strong>⤴ 分享</strong>（仅 owner 可见），点开<a href="#share">分享面板</a>。</li>
+          <li><strong>只读成员</strong>：以 <em>viewer</em> 身份进来的人，<strong>输入框、[允许]/[拒绝]、打断都禁用</strong>，只能看。</li>
         </ul>
 
         <h2 id="directory">目录区（右）</h2>
@@ -116,6 +129,42 @@
           文件一律<strong>只读</strong>：用户能查看，但修改只由程序和底层 harness 进行。文件按类型显示不同图标（VS Code 风格），
           支持语法高亮；子目录默认只展开一级，有缩进引导线，文件夹开/合图标不同。
         </p>
+
+        <h2 id="share">共享与分享管理</h2>
+        <p>
+          进程可分享给别人，<strong>一对多</strong>。分享是 <strong>owner 专属</strong>的能力，分两档权限：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>角色</th><th>能做什么</th></tr></thead>
+            <tbody>
+              <tr><td><span class="pill">owner</span></td><td>创建者。读写 + 分享 / 改权 / 撤回。</td></tr>
+              <tr><td><span class="pill run">editor</span></td><td>可读 + 可发消息；<strong>不能</strong>再分享。</td></tr>
+              <tr><td><span class="pill hib">viewer</span></td><td><strong>只读</strong>：看对话与目录，不能发消息。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul>
+          <li><strong>分享面板</strong>（点对话区 ⤴ 分享）：列出<strong>已分享给谁、各是什么角色</strong>，可加人（选 editor/viewer）、切换角色、移除——owner 在这里<strong>统一管理</strong>一个进程的所有共享。</li>
+          <li><strong>对方无需接收</strong>：分享后直接出现在对方的<a href="#proclist">进程列表</a>里，不用同意；但对方会在<a href="#notify">消息中心</a>收到一条「X 把进程分享给你」。</li>
+          <li><strong>随时改 / 撤</strong>：owner 可把 editor 降成 viewer、或移除；被移除后对方列表里这条立即消失。</li>
+          <li><strong>被共享方不能再分享</strong>：只有 owner 看得到分享按钮。</li>
+        </ul>
+        <div class="note">
+          <span class="note-label">底层为什么简单</span>
+          所有用户的输入都先到控制平面再下发沙箱，<strong>底层 harness 不区分谁发的</strong>（都算「用户」）。所以多人同写不需要复杂协调，详见 <a href="api.html#sharing">控制平面 API · 共享与权限</a>。
+        </div>
+
+        <h2 id="notify">消息中心</h2>
+        <p>
+          仿 <strong>Windows 11</strong>：窗口底部状态栏<strong>右下角</strong>一个铃铛（带未读角标），点开是通知面板；有新事件时还会在<strong>右下角弹出 toast</strong>。
+        </p>
+        <ul>
+          <li><strong>会收到什么</strong>：有人把进程<strong>分享</strong>给你；你参与的进程<strong>有了新回复</strong>（且你没在看它）；进程<strong>需要你决策</strong>（允许/拒绝某操作）。</li>
+          <li><strong>toast</strong>：右下角短暂弹出，点一下直接跳到对应进程（attach）。正在看的那个进程的新回复不再弹（你已经在看了）。</li>
+          <li><strong>面板</strong>：点铃铛展开通知列表，可标记已读 / 全部已读；角标显示未读数。</li>
+        </ul>
+        <div class="dgm-cap">对应端点见 <a href="api.html#notifications">控制平面 API · 消息中心</a>。</div>
 
         <div class="pager" data-pager></div>
       </article>

@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>控制平面 API · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="api">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>控制平面 API</h1>
+        <p class="lead">
+          <a href="interaction.html">沙箱交互界面</a>讲的是控制平面朝<strong>南</strong>跟沙箱说话；这页讲控制平面朝<strong>北</strong>跟
+          <strong>客户端</strong>说话。当前客户端只有一个：<a href="window.html">Web 前端</a>（暂不做纯 CLI 实现）。一句话定调：
+          <strong>命令走 REST，实时事件流走 SSE，输入与交互回写也走 REST</strong>。
+          这页是这套接口的<strong>设计稿</strong>——只定契约、不写实现；拿不准的地方我直接标成「待确认」块，你在文档里逐处评论即可。
+        </p>
+
+        <div class="note">
+          <span class="note-label">这页 vs 旧的 reference.html</span>
+          <a href="reference.html#http">参考 · HTTP 端点</a>里那份速查是<strong>早于</strong>本轮模型收敛写的，已和现状冲突两处：① 它写实时流是
+          <code>WebSocket</code>、事件形如 <code>agent.thinking</code>；现状是 <strong>SSE</strong> + <a href="protocol.html">协议</a >里的
+          <code>item.*/turn.*</code> 事件并集。② 它有 <code>POST /proc/&lt;pid&gt;/attach「关联沙箱」</code>，但收敛后 driver 自启拨出、
+          一条 <a href="interaction.html#data-plane">DriverChannel</a> 活满沙箱整生命周期，<strong>attach 不再关联沙箱</strong>（见 <a href="#q-attach">待确认 · attach</a>）。
+          本页确定后，reference.html 的速查应据此<strong>重生</strong>。
+        </div>
+
+        <h2 id="scope">北面 / 南面</h2>
+        <p>控制平面是两套接口的交汇点，方向相反、抽象也相反：</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+              <div class="dgm-col grow">
+                <div class="node c-program"><span class="nt">客户端 <span class="tag">本页</span></span><span class="nd">Web 前端。REST + SSE。<strong>多用户</strong>、带 token。</span></div>
+                <div class="ar down"><span class="albl">北 · REST 命令 + SSE 事件流</span><span class="gly">↓</span></div>
+              </div>
+            </div>
+            <div class="node c-cp"><span class="nt">control-plane（VM 上）</span><span class="nd">鉴权 · 进程编排 · 事件流中枢（盖全局 seq / resync / 扇出）· 检查点持久化。<strong>两面的中枢。</strong></span></div>
+            <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+              <div class="dgm-col grow">
+                <div class="ar down"><span class="albl">南 · SandboxProvider（A）+ DriverChannel（B）</span><span class="gly">↓</span></div>
+                <div class="node c-driver"><span class="nt">沙箱 / driver <span class="tag">见 interaction.html</span></span><span class="nd">A 平面起停沙箱；B 平面带内承载事件 / 输入 / 控制 / fs / bundle。</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            北面对客户端<strong>隐藏一切南面细节</strong>：客户端只跟 pid 与事件流打交道，<strong>看不到沙箱、provider、bindToken、检查点</strong>。
+            控制平面在运行时是<strong>透明中继</strong>（事件流 / fs 实时穿透到沙箱内的 driver），休眠时是<strong>持久化数据源</strong>（回放已落库的流、按检查点服务 fs）。
+          </div>
+        </div>
+
+        <h2 id="shape">传输与通用形态</h2>
+        <p>整套 API 的横切约定，逐条单列一行，便于你就某一条单独评论：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>维度</th><th>约定</th></tr></thead>
+          <tbody>
+            <tr><td>命令 / 写</td><td>REST（JSON over HTTP）。每个端点对应一个<a href="concepts.html">平台操作</a>：<code>ps / spawn / hibernate / wake / cat / ls</code>。</td></tr>
+            <tr><td>实时事件流</td><td><strong>SSE</strong>：一条长连 <code>GET …/stream</code>，服务端推 <a href="protocol.html">协议</a> 事件（见 <a href="#stream">事件流端点</a>）。单向（server→client）。</td></tr>
+            <tr><td>反向（输入 / 决策 / 中断）</td><td>不复用 SSE，走独立的小 <code>POST</code>（<a href="#input">输入与交互</a>）。SSE 单向、这些是低频指令，拆开比塞进双工连接更简单。</td></tr>
+            <tr><td>鉴权</td><td>每个请求带 token（header）；SSE 同样带 token 起连。失败 <code>401</code>。进程<strong>按成员授权</strong>（一对多，成员都可读写；见 <a href="#q-tenancy">Q9</a>），非成员 <code>403</code>。</td></tr>
+            <tr><td>标识</td><td><code>pid</code> 由控制平面分配，全局唯一、跨休眠/唤醒不变（沙箱可换、pid 不换）。客户端只认 pid。</td></tr>
+            <tr><td>错误信封</td><td>非 2xx 统一 <code>{ "error": { "code": "...", "message": "...", "retryable": bool } }</code>。<code>code</code> 取自一套稳定枚举（待定，见 <a href="#q-errors">待确认 · 错误码</a>）。</td></tr>
+            <tr><td>幂等</td><td>create 类（spawn）支持 <code>Idempotency-Key</code> header，重复提交返回同一 pid，不重复起进程（见 <a href="#q-idem">待确认 · 幂等</a>）。</td></tr>
+            <tr><td>版本</td><td>路径前缀带版本，建议 <code>/v1/…</code>。本页端点表省略前缀。</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="map">端点全表</h2>
+        <p>权威端点表（此页确定后，<a href="reference.html#http">reference.html</a> 据此重生）。<code>:pid</code> 为进程号。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>方法 / 路径</th><th>操作</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /auth/login</code></td><td>—</td><td>用户名密码换 token。</td></tr>
+            <tr><td><code>POST /auth/logout</code></td><td>—</td><td>失效当前 token。</td></tr>
+            <tr><td><code>GET  /programs?scope=store|installed</code></td><td>—</td><td>列出<a href="concepts.html">程序</a>：<code>store</code>=程序商店全部可安装程序；<code>installed</code>=当前用户已安装、可 spawn 的（用户桌面）。含可选版本。</td></tr>
+            <tr><td><code>GET  /proc</code></td><td><code>ps</code></td><td>列出当前用户的进程（pid · program · state · uptime）。</td></tr>
+            <tr><td><code>GET  /proc/:pid</code></td><td><code>ps -l</code> / <code>top</code></td><td>单进程详情（PCB + 资源/沙箱概况）。</td></tr>
+            <tr><td><code>POST /proc</code></td><td><code>spawn</code></td><td>新建进程（<strong>仅控制平面</strong>）：<code>{ program, name?, input? }</code> 分配 pid + 建进程目录，<strong>不起沙箱</strong>（起沙箱用 wake）。版本恒取最新并钉死。</td></tr>
+            <tr><td><code>POST /proc/:pid/hibernate</code></td><td><code>hibernate</code></td><td>末次检查点后释放沙箱全部资源（= <a href="interaction.html#hibernate">provider.destroy</a>）。状态保留。</td></tr>
+            <tr><td><code>POST /proc/:pid/wake</code></td><td><code>wake</code></td><td>起沙箱 + 灌入 bundle（首次=bootstrap，之后=最新检查点）+ 运行/resume。<strong>首次运行与休眠后唤醒同一路径</strong>。pid 不变。</td></tr>
+            <tr><td><code>GET  /proc/:pid/stream?from=&lt;seq&gt;</code></td><td><code>logs</code></td><td><strong>SSE</strong>：先 resync（<code>seq &gt; from</code>）再续 live（见 <a href="#stream">下文</a>）。</td></tr>
+            <tr><td><code>POST /proc/:pid/input</code></td><td>—</td><td>投递用户输入：<code>{ kind:'message'|'file', content }</code> → 经 <a href="interaction.html#data-plane">DriverChannel.sendInput</a> 交给沙箱内 driver。<strong>落到哪、怎么消费是上层程序的事，平台不管。</strong></td></tr>
+            <tr><td><code>POST /proc/:pid/respond</code></td><td><code>allow</code>/<code>deny</code></td><td>对 <code>requires_action</code> 决策：<code>{ actionId, decision:'allow'|'deny' }</code>。</td></tr>
+            <tr><td><code>POST /proc/:pid/interrupt</code></td><td>—</td><td>打断当前回合 → <code>DriverChannel.control('interrupt')</code>。</td></tr>
+            <tr><td><code>GET  /proc/:pid/fs?path=&amp;op=list|read</code></td><td><code>ls</code>/<code>cat</code>/<code>get</code></td><td>只读进程目录：running 时实时穿透 driver，hibernating 时按检查点（见 <a href="#fs">下文</a>）。</td></tr>
+            <tr><td colspan="3" style="background:var(--code-bg);font-weight:600">共享与权限（见 <a href="#sharing">共享</a>，仅 owner 可操作）</td></tr>
+            <tr><td><code>GET    /proc/:pid/shares</code></td><td>—</td><td>列出该进程分享给了谁（成员 + 角色）。</td></tr>
+            <tr><td><code>POST   /proc/:pid/shares</code></td><td><code>share</code></td><td>分享给某用户：<code>{ userId, role:'editor'|'viewer' }</code>。<strong>无需对方接收，直接生效</strong> + 给对方发通知。</td></tr>
+            <tr><td><code>PATCH  /proc/:pid/shares/:userId</code></td><td>—</td><td>改某成员权限：<code>{ role }</code>。</td></tr>
+            <tr><td><code>DELETE /proc/:pid/shares/:userId</code></td><td>—</td><td>撤回某成员的访问。</td></tr>
+            <tr><td colspan="3" style="background:var(--code-bg);font-weight:600">消息中心（用户级，跨进程，见 <a href="#notifications">消息中心</a>）</td></tr>
+            <tr><td><code>GET  /notifications?unread=&amp;cursor=</code></td><td>—</td><td>拉取当前用户的通知列表（分页，可只取未读）。</td></tr>
+            <tr><td><code>GET  /notifications/stream</code></td><td>—</td><td><strong>SSE</strong>：实时推未读数 + 新通知（驱动右下角弹窗与角标）。</td></tr>
+            <tr><td><code>POST /notifications/read</code></td><td>—</td><td>标记已读：<code>{ ids?: string[] }</code>（缺省=全部已读）。</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok" id="q-attach">
+          <span class="note-label">已定 · attach / detach 不是服务端端点</span>
+          driver 自启拨出、一条 DriverChannel 活满沙箱整生命周期，<strong>不是 per-attach 建立的</strong>。所以「attach」是<strong>纯客户端概念</strong>——
+          切到某 pid、打开 <code>…/stream</code>（+ <code>…/fs</code>）并渲染；detach = 关掉这些连接。<strong>没有</strong> attach/detach 端点。
+          要让一个未运行的进程跑起来，<strong>显式 wake</strong>，不靠 attach 触发。前端「新建进程」= <code>spawn</code> + <code>wake</code> 两个连续操作（见 <a href="#lifecycle">生命周期</a>）。
+        </div>
+
+        <h2 id="params">各端点参数</h2>
+        <p>
+          每个端点支持的参数（路径 / 查询 / 请求体 / 头）逐条列清。<strong>所有请求</strong>都在 <code>Authorization</code> 头带 token（鉴权端点除外），下表不再重复这一行。
+          形状未定的格子链到对应<a href="#open">待确认</a>。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>端点</th><th>位置</th><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="2"><code>POST /auth/login</code></td><td>body</td><td><code>username</code></td><td>string</td><td>✓</td><td>用户名</td></tr>
+            <tr><td>body</td><td><code>password</code></td><td>string</td><td>✓</td><td>密码</td></tr>
+            <tr><td><code>POST /auth/logout</code></td><td>—</td><td>—</td><td>—</td><td>—</td><td>无参数，仅凭 token</td></tr>
+            <tr><td rowspan="4"><code>GET /programs</code></td><td>query</td><td><code>scope</code></td><td><code>store</code>｜<code>installed</code></td><td>✓</td><td>程序商店全部可装 / 当前用户已安装</td></tr>
+            <tr><td>query</td><td><code>q</code></td><td>string</td><td>✗</td><td>关键字搜索（商店浏览用）</td></tr>
+            <tr><td>query</td><td><code>cursor</code></td><td>string</td><td>✗</td><td>分页游标（上一页返回的 <code>nextCursor</code>）</td></tr>
+            <tr><td>query</td><td><code>limit</code></td><td>number</td><td>✗</td><td>每页条数（缺省由服务端定）</td></tr>
+            <tr><td rowspan="3"><code>GET /proc</code></td><td>query</td><td><code>state</code></td><td><code>running</code>｜<code>stopped</code></td><td>✗</td><td>按状态过滤（缺省全部）</td></tr>
+            <tr><td>query</td><td><code>cursor</code></td><td>string</td><td>✗</td><td>分页游标</td></tr>
+            <tr><td>query</td><td><code>limit</code></td><td>number</td><td>✗</td><td>每页条数</td></tr>
+            <tr><td><code>GET /proc/:pid</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
+            <tr><td rowspan="5"><code>POST /proc</code><br><span style="color:var(--fg-subtle)">spawn</span></td><td>body</td><td><code>program</code></td><td>string</td><td>✓</td><td>要运行的程序 id（取自 <code>GET /programs</code>）。<strong>版本不可选</strong>：spawn 时取最新并钉死（见 <a href="#q-version">Q10</a>）</td></tr>
+            <tr><td>body</td><td><code>name</code></td><td>string</td><td>✗</td><td>进程显示名（<a href="window.html#proclist">表单的「名称」</a>）</td></tr>
+            <tr><td>body</td><td><code>input</code></td><td>string</td><td>✗</td><td>初始输入（首次 wake 时随 bootstrap 灌入）</td></tr>
+            <tr><td>body</td><td><code>resources</code></td><td>object</td><td>✗</td><td><code>{cpu,memory,disk}</code>；P0 暂不暴露（<a href="window.html#proclist">后续再加</a>）</td></tr>
+            <tr><td>header</td><td><code>Idempotency-Key</code></td><td>string</td><td>✗</td><td>去重重复提交（见 <a href="#q-idem">Q8</a>）</td></tr>
+            <tr><td><code>POST /proc/:pid/hibernate</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body</td></tr>
+            <tr><td><code>POST /proc/:pid/wake</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body（版本沿用 spawn 钉死的，见 <a href="#q-version">Q10</a>）</td></tr>
+            <tr><td rowspan="2"><code>GET /proc/:pid/stream</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
+            <tr><td>query</td><td><code>from</code></td><td>number（<a href="protocol.html">Seq</a>）</td><td>✓</td><td>已渲染到的最后一条事件 seq；首连传 <code>0</code></td></tr>
+            <tr><td rowspan="3"><code>POST /proc/:pid/input</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
+            <tr><td>body</td><td><code>kind</code></td><td><code>message</code>｜<code>file</code></td><td>✓</td><td>输入类型</td></tr>
+            <tr><td>body</td><td><code>content</code></td><td>string</td><td>✓</td><td><code>message</code>=文本；<code>file</code>=文件内容（编码/传输方式见 <a href="#q-input">Q5</a>）</td></tr>
+            <tr><td rowspan="2"><code>POST /proc/:pid/respond</code></td><td>body</td><td><code>actionId</code></td><td>string</td><td>✓</td><td>取自流里那条 <code>requires_action</code> 事件</td></tr>
+            <tr><td>body</td><td><code>decision</code></td><td><code>allow</code>｜<code>deny</code></td><td>✓</td><td>放行 / 拒绝</td></tr>
+            <tr><td><code>POST /proc/:pid/interrupt</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body</td></tr>
+            <tr><td rowspan="3"><code>GET /proc/:pid/fs</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
+            <tr><td>query</td><td><code>op</code></td><td><code>list</code>｜<code>read</code></td><td>✓</td><td>列目录 / 读文件</td></tr>
+            <tr><td>query</td><td><code>path</code></td><td>string</td><td>✓</td><td>进程目录内相对路径（根为 <code>~/.aprog/&lt;pid&gt;/</code>）</td></tr>
+            <tr><td><code>GET /proc/:pid/shares</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号（仅 owner）</td></tr>
+            <tr><td rowspan="3"><code>POST /proc/:pid/shares</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号（仅 owner）</td></tr>
+            <tr><td>body</td><td><code>userId</code></td><td>string</td><td>✓</td><td>分享给谁</td></tr>
+            <tr><td>body</td><td><code>role</code></td><td><code>editor</code>｜<code>viewer</code></td><td>✓</td><td>可读可写 / 只读</td></tr>
+            <tr><td rowspan="2"><code>PATCH /proc/:pid/shares/:userId</code></td><td>path</td><td><code>pid</code> · <code>userId</code></td><td>number · string</td><td>✓</td><td>进程号 + 目标成员（仅 owner）</td></tr>
+            <tr><td>body</td><td><code>role</code></td><td><code>editor</code>｜<code>viewer</code></td><td>✓</td><td>改后的角色</td></tr>
+            <tr><td><code>DELETE /proc/:pid/shares/:userId</code></td><td>path</td><td><code>pid</code> · <code>userId</code></td><td>number · string</td><td>✓</td><td>撤回该成员（仅 owner）；无 body</td></tr>
+            <tr><td rowspan="2"><code>GET /notifications</code></td><td>query</td><td><code>unread</code></td><td>bool</td><td>✗</td><td>只取未读</td></tr>
+            <tr><td>query</td><td><code>cursor</code></td><td>string</td><td>✗</td><td>分页游标</td></tr>
+            <tr><td><code>GET /notifications/stream</code></td><td>—</td><td>—</td><td>—</td><td>—</td><td>SSE，无参数（凭 token 定用户）</td></tr>
+            <tr><td><code>POST /notifications/read</code></td><td>body</td><td><code>ids</code></td><td>string[]</td><td>✗</td><td>要标已读的通知 id；缺省=全部已读</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="responses">响应</h3>
+        <p>
+          约定：成功一律 JSON（流端点除外）；<strong>列表端点统一包在<a href="#r-paged">分页信封</a></strong> <code>{ items, nextCursor? }</code>；
+          失败一律 <a href="#shape">错误信封</a> <code>{ error: { code, message, retryable } }</code> + 对应 HTTP 状态码。下表每端点列「成功」与「常见错误」两栏，返回体形状见<a href="#shapes">下一节</a>。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>端点</th><th>成功</th><th>常见错误</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /auth/login</code></td><td><code>200</code> <a href="#r-token">Token</a></td><td><code>401</code> 用户名或密码错</td></tr>
+            <tr><td><code>POST /auth/logout</code></td><td><code>204</code> 无体</td><td>—</td></tr>
+            <tr><td><code>GET /programs</code></td><td><code>200</code> 分页信封（item=<a href="#r-program">Program</a>）</td><td><code>400</code> scope 缺失/非法</td></tr>
+            <tr><td><code>GET /proc</code></td><td><code>200</code> 分页信封（item=<a href="#process-record">ProcessRecord</a>）</td><td>—</td></tr>
+            <tr><td><code>GET /proc/:pid</code></td><td><code>200</code> ProcessRecord</td><td><code>404</code> 无此 pid；<code>403</code> 非成员</td></tr>
+            <tr><td><code>POST /proc</code></td><td><code>201</code> ProcessRecord（新 pid，<code>state=stopped</code>，无沙箱）</td><td><code>404</code> 无此 program；<code>400</code> 体非法</td></tr>
+            <tr><td><code>POST /proc/:pid/hibernate</code></td><td><code>202</code> ProcessRecord（含末次检查点+destroy，非瞬时）</td><td><code>404</code>；<code>409</code> 已是 stopped</td></tr>
+            <tr><td><code>POST /proc/:pid/wake</code></td><td>同步 <code>200</code>(running) / 异步 <code>202</code>(waking)，均回 ProcessRecord（见 <a href="#q-async">Q2</a>）</td><td><code>404</code>；<code>409</code> 已 running</td></tr>
+            <tr><td><code>GET /proc/:pid/stream</code></td><td><code>200 text/event-stream</code>，<a href="#r-sse">SSE 帧</a></td><td><code>404</code>；<code>403</code> 非成员</td></tr>
+            <tr><td><code>POST /proc/:pid/input</code></td><td><code>202</code> <a href="#r-ack">输入回执</a>（见 <a href="#q-input">Q5</a>）</td><td><code>404</code>；<code>409</code> 进程未运行</td></tr>
+            <tr><td><code>POST /proc/:pid/respond</code></td><td><code>204</code> 无体</td><td><code>404</code> 无此 actionId / 进程未运行</td></tr>
+            <tr><td><code>POST /proc/:pid/interrupt</code></td><td><code>202</code> 无体</td><td><code>404</code>；<code>409</code> 进程未运行</td></tr>
+            <tr><td><code>GET /proc/:pid/fs</code></td><td><code>200</code> <a href="#r-fs">fs 响应</a></td><td><code>404</code> 无此 pid/路径</td></tr>
+            <tr><td><code>GET /proc/:pid/shares</code></td><td><code>200</code> <code>{ owner, shares: [<a href="#r-share">Share</a>] }</code></td><td><code>403</code> 非 owner</td></tr>
+            <tr><td><code>POST /proc/:pid/shares</code></td><td><code>201</code> <a href="#r-share">Share</a></td><td><code>403</code> 非 owner；<code>404</code> 无此 userId；<code>409</code> 已是成员</td></tr>
+            <tr><td><code>PATCH /proc/:pid/shares/:userId</code></td><td><code>200</code> <a href="#r-share">Share</a></td><td><code>403</code> 非 owner；<code>404</code> 非成员</td></tr>
+            <tr><td><code>DELETE /proc/:pid/shares/:userId</code></td><td><code>204</code> 无体</td><td><code>403</code> 非 owner；<code>404</code> 非成员</td></tr>
+            <tr><td><code>GET /notifications</code></td><td><code>200</code> 分页信封（item=<a href="#r-notif">Notification</a>）</td><td>—</td></tr>
+            <tr><td><code>GET /notifications/stream</code></td><td><code>200 text/event-stream</code>，每帧一条 <a href="#r-notif">Notification</a> 或 <code>{ unread: n }</code></td><td>—</td></tr>
+            <tr><td><code>POST /notifications/read</code></td><td><code>204</code> 无体</td><td>—</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>401</code>（无 / 失效 token）对所有需鉴权端点都适用，上表只列各端点特有的错误；HTTP 状态码 → 错误码枚举的映射见 <a href="#q-errors">Q7</a>。写类端点对 <code>viewer</code> 返回 <code>403</code>。</p>
+
+        <h3 id="shapes">返回体形状</h3>
+
+        <p><strong id="r-token">Token</strong> · <code>POST /auth/login</code></p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>token</code></td><td>string</td><td>Bearer token；之后请求放 <code>Authorization</code> 头</td></tr>
+            <tr><td><code>expiresAt</code></td><td>string</td><td>ISO-8601 过期时刻</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-paged">分页信封</strong> · 所有列表端点</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>items</code></td><td>array</td><td>当页条目（<a href="#r-program">Program</a> 或 <a href="#process-record">ProcessRecord</a>）</td></tr>
+            <tr><td><code>nextCursor</code></td><td>string?</td><td>传回 <code>cursor</code> 查参取下一页；为空 / 缺省 = 到底</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-program">Program</strong> · <code>GET /programs</code> 的 item</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>string</td><td>程序 id（spawn 用）</td></tr>
+            <tr><td><code>name</code></td><td>string</td><td>显示名</td></tr>
+            <tr><td><code>latestVersion</code></td><td>string</td><td>当前最新版本；<strong>spawn 恒用它并钉死</strong>，客户端不选版本（见 <a href="#q-version">Q10</a>）</td></tr>
+            <tr><td><code>installed</code></td><td>bool</td><td>当前用户是否已安装（<code>scope=store</code> 时用于区分）</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-sse">SSE 帧</strong> · <code>GET /proc/:pid/stream</code> —— 帧格式 <code>data: &lt;Event JSON&gt;\n\n</code>，每帧一个 <a href="protocol.html">@aprog/protocol</a> Event（长连持续推，非一次性体）。各 Event 的公共信封字段：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>seq</code></td><td>number</td><td>全局单调序号；前端断线重连用作 <code>from</code> 游标</td></tr>
+            <tr><td><code>ts</code></td><td>string</td><td>ISO-8601 时间戳</td></tr>
+            <tr><td><code>kind</code></td><td>string</td><td>事件类型：<code>turn.start|turn.end | item.start|item.delta|item.end | user | error</code></td></tr>
+            <tr><td><code>id</code></td><td>string</td><td>项标识（<code>item.*</code> / <code>user</code> 有）；前端按它幂等去重 + 折叠 delta</td></tr>
+            <tr><td>（其余）</td><td>—</td><td>随 <code>kind</code> 不同（<code>patch</code> / <code>value</code> / <code>content</code> …），完整并集见 <a href="protocol.html">事件流协议</a></td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-ack">输入回执</strong> · <code>POST /proc/:pid/input</code></p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>seq</code></td><td>number</td><td>该输入落库后盖的全局 seq；前端用它对齐流里那条 <code>user</code> 事件的回显（见 <a href="#q-input">Q5</a>）</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-fs">fs 响应</strong> · <code>GET /proc/:pid/fs</code></p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>适用</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>source</code></td><td><code>live</code>｜<code>checkpoint</code></td><td>两者</td><td><code>live</code>=穿透运行中沙箱；<code>checkpoint</code>=按检查点（见 <a href="#q-fs">Q6</a>）</td></tr>
+            <tr><td><code>entries</code></td><td>array</td><td><code>op=list</code></td><td>目录项列表</td></tr>
+            <tr><td><code>entries[].name</code></td><td>string</td><td><code>op=list</code></td><td>名称</td></tr>
+            <tr><td><code>entries[].kind</code></td><td><code>file</code>｜<code>dir</code></td><td><code>op=list</code></td><td>类型</td></tr>
+            <tr><td><code>path</code></td><td>string</td><td><code>op=read</code></td><td>所读文件的相对路径</td></tr>
+            <tr><td><code>content</code></td><td>string</td><td><code>op=read</code></td><td>文本内容（二进制 / 大文件处理见 <a href="#q-input">Q5</a>）</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-share">Share</strong> · <code>/proc/:pid/shares</code> 的 item</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>userId</code></td><td>string</td><td>成员 id</td></tr>
+            <tr><td><code>name</code></td><td>string</td><td>成员显示名（便于 owner 在管理界面识别）</td></tr>
+            <tr><td><code>role</code></td><td><code>editor</code>｜<code>viewer</code></td><td>可读可写 / 只读（见 <a href="#sharing">共享</a>）</td></tr>
+            <tr><td><code>sharedAt</code></td><td>string</td><td>分享时刻（ISO-8601）</td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong id="r-notif">Notification</strong> · <code>/notifications</code> 的 item</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>string</td><td>通知 id（标已读用）</td></tr>
+            <tr><td><code>type</code></td><td><code>share</code>｜<code>reply</code>｜<code>action</code></td><td>类型（见 <a href="#notifications">消息中心</a>）</td></tr>
+            <tr><td><code>title</code></td><td>string</td><td>标题（如「张三把『落地页设计』分享给你」）</td></tr>
+            <tr><td><code>procId</code></td><td>number?</td><td>关联进程（点通知可跳转 attach）</td></tr>
+            <tr><td><code>fromUser</code></td><td>userId?</td><td>来源用户（<code>share</code> 类有）</td></tr>
+            <tr><td><code>createdAt</code></td><td>string</td><td>产生时刻</td></tr>
+            <tr><td><code>readAt</code></td><td>string?</td><td>已读时刻；空=未读</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="process-record"><code>ProcessRecord</code></h3>
+        <p>多个端点返回的进程记录（控制平面的 PCB 内存视图，权威态在进程目录 <code>meta.yml</code>）：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>pid</code></td><td>number</td><td>进程号，全局唯一、跨休眠/唤醒不变</td></tr>
+            <tr><td><code>program</code></td><td>string</td><td>程序 id</td></tr>
+            <tr><td><code>programVersion</code></td><td>string</td><td>spawn 时取最新并钉死，唤醒永远沿用它（状态与程序强耦合，见 <a href="#q-version">Q10</a>）</td></tr>
+            <tr><td><code>name</code></td><td>string?</td><td>可选显示名</td></tr>
+            <tr><td><code>state</code></td><td><code>running</code>｜<code>stopped</code></td><td>状态（两态 / 三态待定，见 <a href="#q-states">Q3</a>）</td></tr>
+            <tr><td><code>sandboxId</code></td><td>string?</td><td><code>running</code> 时有，<code>stopped</code> 时空</td></tr>
+            <tr><td><code>createdAt</code></td><td>string</td><td>spawn 创建时刻（ISO-8601）</td></tr>
+            <tr><td><code>startedAt</code></td><td>string?</td><td>最近一次 wake 起来的时刻</td></tr>
+            <tr><td><code>owner</code></td><td>userId</td><td>创建者；唯一能分享/改权/撤权的人（见 <a href="#sharing">共享</a>）</td></tr>
+            <tr><td><code>members</code></td><td>{userId, role}[]</td><td>被共享成员及角色（<code>editor</code>｜<code>viewer</code>）。<strong>一对多</strong>，成员按角色读/写；不追踪具体发送者（见 <a href="#q-tenancy">Q9</a>）</td></tr>
+            <tr><td><code>myRole</code></td><td><code>owner</code>｜<code>editor</code>｜<code>viewer</code></td><td>当前请求用户对本进程的角色（前端据此显示分享按钮 / 禁用输入框）</td></tr>
+            <tr><td><code>lastExit</code></td><td>object?</td><td><strong>待定</strong>：区分 <code>completed/crashed/hibernated</code>（见 <a href="#q-end">Q4</a>）</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="usage">接口场景：前端哪个动作打哪个端点</h2>
+        <p>
+          把端点按 <a href="window.html">工作窗口</a>的界面面归位——每个端点都对应一个具体的用户动作或界面时机。
+          窗口三区（进程列表 / 对话区 / 目录区）<strong>随 attach 的进程整体切换</strong>，下面就按这几处分组。
+        </p>
+
+        <h3 id="u-auth">进入与鉴权</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>打开前端、无有效 token → 登录页提交</td><td><code>POST /auth/login</code></td></tr>
+            <tr><td>用户菜单点「登出」</td><td><code>POST /auth/logout</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="u-list">进程列表（左）</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>列表首次加载 / 刷新 / 状态指示圆点更新</td><td><code>GET /proc</code></td></tr>
+            <tr><td>选中某进程行（看状态 / uptime 详情）</td><td><code>GET /proc/:pid</code></td></tr>
+            <tr><td>点顶部 <strong>＋ 新建进程</strong>，弹出表单时填充可选程序（已安装的）</td><td><code>GET /programs?scope=installed</code></td></tr>
+            <tr><td>新建进程表单提交 → 先落进程记录、紧接着起沙箱运行（<strong>两个连续操作</strong>）</td><td><code>POST /proc</code> + <code>POST /proc/:pid/wake</code></td></tr>
+            <tr><td>运行中进程点「<a href="window.html#states">休眠</a>」按钮（释放沙箱）</td><td><code>POST /proc/:pid/hibernate</code></td></tr>
+            <tr><td>点「<a href="window.html#states">唤醒</a>」按钮 / 新进程首次运行 —— 关联沙箱（首次或再次都走它）</td><td><code>POST /proc/:pid/wake</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="u-chat">对话区（中）</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>attach 到运行中进程 → 对话区开实时流并渲染；断线重连带 <code>from=&lt;seq&gt;</code></td><td><code>GET /proc/:pid/stream</code></td></tr>
+            <tr><td>底部输入框发消息 / 拖入文件</td><td><code>POST /proc/:pid/input</code></td></tr>
+            <tr><td>流里 <code>requires_action</code> 那行的 <strong>[allow] / [deny]</strong> 按钮</td><td><code>POST /proc/:pid/respond</code></td></tr>
+            <tr><td>生成中点「打断 / 停止」</td><td><code>POST /proc/:pid/interrupt</code></td></tr>
+            <tr><td>对话区头部点 <strong>分享</strong> 按钮（仅 owner 可见）→ 打开分享面板</td><td><code>GET /proc/:pid/shares</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">viewer 的对话区</span>
+          <code>myRole=viewer</code> 时，对话区<strong>底部输入框、[allow]/[deny]、打断按钮全部禁用</strong>（只读）；<code>editor</code>/<code>owner</code> 才可写。分享按钮只在 <code>owner</code> 显示。
+        </div>
+        <div class="note">
+          <span class="note-label">唤醒进程的对话区</span>
+          attach 一个刚<a href="window.html#states">唤醒</a>的进程时，对话区先靠 <code>stream?from=0</code> 铺出<strong>完整历史</strong>（回放已落库的流），
+          再续 live——底层引擎是冷启动、不重放对话，历史只是渲染。这正是 <a href="#stream">事件流端点</a> resync→live 的同一条订阅。
+        </div>
+
+        <h3 id="u-dir">目录区（右）</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>展开目录树 / 展开子目录</td><td><code>GET /proc/:pid/fs?op=list</code></td></tr>
+            <tr><td>点某文件预览内容（<code>meta.yml</code> / <code>session.aprog.jsonl</code> / <code>artifacts/…</code>）</td><td><code>GET /proc/:pid/fs?op=read</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">attach 不是一个端点</span>
+          界面上「点进程行 attach」这一步，<strong>本身不打任何端点</strong>——它只是把三区切到该 pid，然后由对话区开 <code>…/stream</code>、目录区开 <code>…/fs</code>。
+          这与 <a href="#q-attach">待确认 Q1</a>（attach 退化成纯客户端订阅）是同一件事。
+        </div>
+
+        <h3 id="u-share">分享面板（owner）</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>打开分享面板 → 列出已分享给谁 + 各角色（统一管理）</td><td><code>GET /proc/:pid/shares</code></td></tr>
+            <tr><td>输入用户、选 editor/viewer，点「分享」</td><td><code>POST /proc/:pid/shares</code></td></tr>
+            <tr><td>在某成员行切换 editor⇄viewer</td><td><code>PATCH /proc/:pid/shares/:userId</code></td></tr>
+            <tr><td>点某成员「移除」</td><td><code>DELETE /proc/:pid/shares/:userId</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3 id="u-notif">状态栏 · 消息中心</h3>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>触发处</th><th>端点</th></tr></thead>
+          <tbody>
+            <tr><td>登录后常驻——右下角铃铛角标、新通知 toast 弹窗</td><td><code>GET /notifications/stream</code>（SSE）</td></tr>
+            <tr><td>点铃铛展开通知面板 / 下拉加载更多</td><td><code>GET /notifications?unread=&amp;cursor=</code></td></tr>
+            <tr><td>点某条通知（跳转 attach 对应进程）/ 标记已读 / 全部已读</td><td><code>POST /notifications/read</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="lifecycle">生命周期命令语义</h2>
+        <p>
+          三个命令对应 <code>process/lifecycle.ts</code> 的 FSM。关键收敛：<strong><code>spawn</code> 纯控制平面（只建记录、不碰沙箱）</strong>，
+          <strong>起沙箱的活全在 <code>wake</code></strong>——首次运行与休眠后唤醒<strong>走完全相同的路径</strong>，唯一差别是灌入的 bundle（首次没有检查点，用 bootstrap）：
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>命令</th><th>动作链</th><th>终态</th></tr></thead>
+          <tbody>
+            <tr><td><code>spawn</code></td><td>分配 pid + 建进程目录（绑定 program + 初始 input）。<strong>纯控制平面，不碰沙箱。</strong></td><td><code>未运行</code></td></tr>
+            <tr><td><code>wake</code></td><td><code>provider.create</code> → driver 自启拨入 → <code>pushBundle</code> 灌入（<strong>首次</strong>=bootstrap：program+初始 input；<strong>之后</strong>=最新检查点）→ driver 拉起 harness（首次运行 / resume）</td><td><code>running</code></td></tr>
+            <tr><td><code>hibernate</code></td><td><code>control('hibernate-prepare')</code> + 末次检查点（<code>pullBundle</code>）→ <code>provider.destroy</code></td><td><code>未运行</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">前端「新建进程」= spawn + wake</span>
+          点 ＋ 新建并提交，前端连发两个请求：<code>POST /proc</code>（spawn，落进程记录）→ <code>POST /proc/:pid/wake</code>（起沙箱跑起来）。
+          spawn 之所以单拆出来，是因为它<strong>只是控制平面里记一笔</strong>，瞬时完成；而 wake 才是那条会起沙箱、要等几秒的重操作。这也让「新建」与「休眠后再跑」共用同一个 wake。
+        </div>
+        <div class="note warn" id="q-async">
+          <span class="note-label">待确认 Q2 · wake 同步还是异步？</span>
+          <code>spawn</code> 只写控制平面记录，瞬时同步返回，无悬念。<code>wake</code> 含 <code>provider.create</code>（Daytona 实测约数秒），两种返回风格：
+          <strong>(a) 同步</strong>——阻塞到 <code>running</code> 才返回；<strong>(b) 异步</strong>——立刻 <code>202</code> 返回过渡态，前端订阅 <code>…/stream</code> 或轮询 <code>GET /proc/:pid</code> 观察转 <code>running</code>。
+          我倾向 <strong>(b)</strong>：起沙箱的耗时不该占着 HTTP 连接，且前端本来就要连 stream。
+        </div>
+        <div class="note warn" id="q-states">
+          <span class="note-label">待确认 Q3 · 进程状态集怎么定？</span>
+          <code>process/manager.ts</code> 现在只有 <code>running | hibernating</code>。新模型里，<code>spawn</code> 后「已建未运行」和 <code>hibernate</code> 后「休眠」
+          <strong>对平台是不是同一个状态</strong>（都=无沙箱、可 wake，差别只在有没有检查点）？若是，状态集就两态：<code>running</code> / <code>未运行</code>；
+          若否，需要区分 <code>新建未运行</code> 与 <code>休眠</code>。另外 Q2 选异步还要不要 <code>waking</code> 过渡态？这块归在<a href="#lifecycle">生命周期讨论</a>里一起定。
+        </div>
+        <div class="note warn" id="q-end">
+          <span class="note-label">待确认 Q4 · 进程怎么「终结」？（无 kill / 无删除）</span>
+          已去掉 <code>kill</code>，也<strong>没有删除进程的操作</strong>——进程目录与历史永不删。那两个问题待定：
+          <strong>(a)</strong> 程序<strong>真的做完了</strong>（沙箱里 harness 自己退出）时，进程转成什么终态？自动 <code>hibernate</code> 保留现场？还是有个 <code>done/exited</code> 终态？
+          <strong>(b)</strong> 永不删除 → 进程目录无限累积，要不要 archive / GC 机制（仅清冷数据、不算「删进程」）？
+        </div>
+
+        <h2 id="stream">事件流端点</h2>
+        <p>
+          <code>GET /proc/:pid/stream?from=&lt;seq&gt;</code> 是客户端看进程「实时画面」的唯一入口，承接 <code>stream/resync.ts</code> 的契约——
+          <strong>同一条订阅</strong>里先回放 <code>seq &gt; from</code> 的历史，再无缝续 live：
+        </p>
+        <ul>
+          <li><strong>游标</strong>：<code>from</code> = 客户端已渲染到的最后一条事件的 <a href="protocol.html">seq</a>。首连传 <code>0</code>。</li>
+          <li><strong>投递语义</strong>：at-least-once；客户端按事件 <code>id</code> <strong>幂等去重</strong>（见 <a href="protocol.html#recover">协议 · 恢复与压实</a>）。</li>
+          <li><strong>载荷</strong>：每条 SSE message 是一个 <code>@aprog/protocol</code> 的 <code>Event</code>（<code>turn.* / item.start|delta|end / user / error</code>）。<strong>不是</strong>旧的 <code>agent.thinking</code> 形。</li>
+          <li><strong>running 时</strong>：控制平面把 driver 上行的事件盖全局 seq、落库、扇出（透明中继 + 多端共看）。</li>
+          <li><strong>未运行时</strong>：没有 live，只回放已落库的流到 head 后挂起；要恢复 live 须显式 <code>wake</code>。</li>
+        </ul>
+        <div class="note">
+          <span class="note-label">为什么 resync 与 live 必须同一条连接</span>
+          别拆成「HTTP 拿全量历史 + 另开连接收增量」——两条连接的交接点会漏/重。<code>resyncThenLive</code> 在服务端原子交接，客户端只管按 id 去重。
+        </div>
+
+        <h2 id="input">输入与交互</h2>
+        <p>三个反向指令，都是小 <code>POST</code>，落到 <a href="interaction.html#data-plane">DriverChannel</a> 的对应方法：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>端点</th><th>映射</th><th>语义</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST …/input</code></td><td><code>sendInput(item)</code></td><td>用户消息或文件，交给 driver。<strong>落到哪、怎么消费由上层程序决定，平台不管</strong>。输入由 driver echo 进事件流（<code>user</code> 事件），<strong>不</strong>在 POST 响应里回显内容。</td></tr>
+            <tr><td><code>POST …/respond</code></td><td><code>respond(actionId, decision)</code></td><td>对一条 <code>requires_action</code> 的 allow/deny。<code>actionId</code> 取自流里那条待决事件。</td></tr>
+            <tr><td><code>POST …/interrupt</code></td><td><code>control('interrupt')</code></td><td>打断当前回合（相当于 Esc）。<code>checkpoint-now / hibernate-prepare</code> 是平台内部信号，<strong>不</strong>对客户端暴露。</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok" id="input-concurrency">
+          <span class="note-label">多消息怎么处理：排队 vs 打断（对齐 Claude Agent SDK）</span>
+          共享进程下多人可同时发消息，但<strong>harness 不区分谁发的</strong>——对它就是「用户」（SDK 的 user 消息只有 <code>role:"user"</code>、无 author），所以平台<strong>也不带发送者身份</strong>。
+          当一条消息到达而上一回合还没回复完，只有两种处置，恰好对应 SDK 的两个原语：
+          <span class="pp" style="display:block;margin-top:6px">· <strong>排队等待</strong>（默认）：<code>sendInput</code> 入队，<strong>等当前回合回复完</strong>再送给模型，一条一回合、<strong>不拼接</strong>。即 SDK 的 streaming-input 队列。</span>
+          <span class="pp" style="display:block">· <strong>打断</strong>：<code>POST …/interrupt</code> → <code>control('interrupt')</code> → SDK 的 <code>query.interrupt()</code> 中止当前回合，下一条排队消息随即处理。</span>
+          这两种来自底层 harness 能力、不是平台自造，所以并发多写在控制平面只需做<strong>到达定序</strong>，不必发明「输入锁 / 轮次归属」。
+        </div>
+        <div class="note warn" id="q-input">
+          <span class="note-label">待确认 Q5 · input 的返回 + 文件怎么传？</span>
+          <strong>(a) 返回</strong>：<code>POST …/input</code> 投递成功该返回什么？我倾向 <code>202</code> + 该输入落库后的 <code>seq</code>（客户端可用它对齐自己在流里的回显），而非回显内容本身。认可吗？
+          <strong>(b) 文件输入</strong>：<code>kind:'file'</code> 时内容怎么传——内联 base64（小文件，简单）还是 <code>multipart</code> / 预签名直传（大文件）？大小阈值多少？以及它落到 <code>sendInput</code> 还是直接 <code>pushBundle</code> 进进程目录？
+        </div>
+
+        <h2 id="fs">进程目录读</h2>
+        <p>
+          <code>GET /proc/:pid/fs</code> 服务 <a href="window.html">前端</a>左下角的目录树与文件预览。只读，<strong>平台只按字节服务、不解释文件语义</strong>（<code>meta.yml / execution-state/ / artifacts/</code> 这些多是上层程序自己写的）。数据源随状态切换：
+        </p>
+        <ul>
+          <li><strong>running</strong>：实时穿透 → <code>DriverChannel.fs.list/read</code>，读的是沙箱内 driver 的 cwd 实时态（见 <a href="interaction.html#dir-read">interaction · 实时目录读</a>）。</li>
+          <li><strong>hibernating</strong>：沙箱已销毁，按<strong>最新检查点</strong>服务。</li>
+        </ul>
+        <div class="note ok" id="q-fs">
+          <span class="note-label">已定 Q6 · 休眠时 fs = 读检查点数据，一致即真</span>
+          休眠时直接读控制平面上存的<strong>检查点数据</strong>。它是 state 的某个一致快照——<strong>读到什么，进程恢复时就按什么执行</strong>，二者同源、不存在不一致。
+          所以不必当作「残缺视图」来报警；响应仍带 <code>source: 'live'|'checkpoint'</code> 只为告诉客户端「这是检查点态」。检查点不含的运行期碎产物本就不参与恢复，读不到是符合预期的。
+        </div>
+
+        <h2 id="sharing">共享与权限</h2>
+        <p>
+          进程与用户是<strong>一对多</strong>：owner（创建者）可把进程分享给别人。<a href="#input-concurrency">前面</a>已定底层不区分发送者，这里补<strong>权限粒度</strong>——分享方能精确控制对方能干什么。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>角色</th><th>读流 / 读 fs</th><th>发消息 / 决策 / 打断</th><th>分享给他人</th><th>改/撤权限</th></tr></thead>
+          <tbody>
+            <tr><td><code>owner</code>（创建者）</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td><code>editor</code>（可读可写）</td><td>✓</td><td>✓</td><td>✗</td><td>✗</td></tr>
+            <tr><td><code>viewer</code>（只读）</td><td>✓</td><td>✗（写类端点 <code>403</code>）</td><td>✗</td><td>✗</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li><strong>两档共享权限</strong>：<code>editor</code>（可读 + 可发消息）/ <code>viewer</code>（只读）。<code>viewer</code> 调 <code>input/respond/interrupt</code> 一律 <code>403</code>。</li>
+          <li><strong>被共享方不能再分享</strong>：分享、改权限、撤回<strong>只有 owner 能做</strong>（<code>/shares*</code> 非 owner → <code>403</code>）。</li>
+          <li><strong>无需「接收」</strong>：分享后对方<strong>直接进入</strong>（出现在他的进程列表），不需要同意；但会在<a href="#notifications">消息中心</a>收到一条「X 把进程 Y 分享给你」通知。</li>
+          <li><strong>owner 可随时改/撤</strong>：<code>PATCH</code> 改档（editor⇄viewer）、<code>DELETE</code> 撤回；撤回后对方进程列表移除、活跃的 stream/fs 下次请求即 <code>403</code> 并断流。</li>
+          <li><strong>统一管理</strong>：owner 在前端有一处「分享管理」可看某进程<strong>分享给了谁、各是什么角色</strong>，并就地改/撤（端点 <code>GET/POST/PATCH/DELETE /proc/:pid/shares</code>）。</li>
+        </ul>
+        <div class="note warn" id="q-share">
+          <span class="note-label">待讨论 · 共享的边角</span>
+          <strong>(a)</strong> 分享按 <code>userId</code> 直接加，还是也支持「邀请链接」（发链接、谁点谁进，可设角色/有效期）？P0 我倾向只做 <code>userId</code> 直加。
+          <strong>(b)</strong> owner 能不能转让 / 多 owner？P0 我倾向单 owner、不转让。
+          <strong>(c)</strong> editor 能否 <code>hibernate/wake</code> 这类生命周期操作，还是只 owner？我倾向生命周期归 owner，editor 只对话。这几点要不要这样定？
+        </div>
+
+        <h2 id="notifications">消息中心</h2>
+        <p>
+          用户级、跨进程的通知中枢，形态对标 <strong>Windows 11</strong>：状态栏<strong>右下角</strong>一个铃铛（带未读角标），点开是通知面板；新通知还会在<strong>右下角弹出 toast</strong>（如某进程有了新回复）。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>通知类型</th><th>触发</th><th>带</th></tr></thead>
+          <tbody>
+            <tr><td><code>share</code></td><td>有人把某进程分享给你</td><td>来源用户 + procId + 角色</td></tr>
+            <tr><td><code>reply</code></td><td>你参与的某进程<strong>有了新回复</strong>（且你当前没在看它）</td><td>procId</td></tr>
+            <tr><td><code>action</code></td><td>某进程需要决策（<code>requires_action</code>）</td><td>procId</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li><strong>拉取</strong>：<code>GET /notifications</code> 取列表（分页、可只看未读）；<strong>实时</strong>：<code>GET /notifications/stream</code>（SSE）推未读数与新通知，驱动角标 + toast。</li>
+          <li><strong>已读</strong>：<code>POST /notifications/read</code>（带 ids 或全部）。</li>
+          <li><strong>不重复打扰</strong>：你<strong>正在 attach</strong> 的那个进程的 <code>reply</code> 不再 toast（你已经在看了）。</li>
+        </ul>
+        <div class="note warn" id="q-notif">
+          <span class="note-label">待讨论 · 通知触发</span>
+          <strong>(a)</strong> <code>reply</code> 通知只在「我没在看该进程」时发，对吗？还是只要不在前台就发？
+          <strong>(b)</strong> P0 通知类型就 <code>share / reply / action</code> 这三类，够不够？要不要加进程<strong>完成 / 出错 / 被撤回</strong>等？
+          <strong>(c)</strong> 通知是否需要长期留存与跨设备同步（落库），还是只在线推、读了即弃？我倾向落库（消息中心要能回看）。
+        </div>
+
+        <h2 id="open">开放问题索引</h2>
+        <p>本页所有「待确认」汇总，逐条在上文对应位置评论即可：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>#</th><th>问题</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#q-attach">Q1</a></td><td><strong>已定</strong>：attach/detach 不是端点（纯客户端订阅）；新建 = spawn + wake。</td></tr>
+            <tr><td><a href="#q-async">Q2</a></td><td>wake 同步阻塞到 running，还是异步 202 + 观察过渡态？（spawn 恒同步）</td></tr>
+            <tr><td><a href="#q-states">Q3</a></td><td>「已建未运行」与「休眠」是否同一状态？状态集是两态还是三态？要不要 waking 过渡态？</td></tr>
+            <tr><td><a href="#q-end">Q4</a></td><td>无 kill / 无删除下，进程怎么终结：程序做完转什么终态？要不要 archive/GC？</td></tr>
+            <tr><td><a href="#q-input">Q5</a></td><td>input 的返回形态（202 + seq？）；文件输入的传输方式与落点。</td></tr>
+            <tr><td><a href="#q-fs">Q6</a></td><td><strong>已定</strong>：休眠读检查点数据，一致即真（= 恢复所据），<code>source</code> 仅作标记。</td></tr>
+            <tr><td><a href="#q-errors">Q7</a></td><td><strong>已定</strong>：北面另立一套客户端错误码，不复用南面 SandboxError。</td></tr>
+            <tr><td><a href="#q-idem">Q8</a></td><td>spawn 幂等用 <code>Idempotency-Key</code> header？窗口多久？其他写操作要不要也支持？</td></tr>
+            <tr><td><a href="#q-tenancy">Q9</a></td><td><strong>已定</strong>：进程一对多、共享即可写、不追踪发送者；并发=排队/打断（对齐 SDK）；权限 owner/editor/viewer 见<a href="#sharing">共享</a>。</td></tr>
+            <tr><td><a href="#q-version">Q10</a></td><td><strong>已定</strong>：版本不可选，spawn 取最新、wake 沿用钉死版本；无 <code>version</code> 入参。</td></tr>
+            <tr><td><a href="#q-share">Q11</a></td><td>共享边角：邀请链接？owner 转让 / 多 owner？生命周期操作（hibernate/wake）是否限 owner？</td></tr>
+            <tr><td><a href="#q-notif">Q12</a></td><td>通知触发：<code>reply</code> 只在「没在看」时发？P0 通知类型够不够？通知是否落库回看？</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok" id="q-errors">
+          <span class="note-label">已定 Q7 · 北面另立一套客户端错误码</span>
+          北面业务与南面不同，<strong>不复用</strong> <code>SandboxErrorCode</code>，而是<strong>另立一套面向客户端</strong>的枚举，例如
+          <code>unauthorized / forbidden / not_found / conflict / validation / rate_limited / sandbox_unavailable / internal</code>。
+          南面的沙箱错误细节在控制平面内部消化，必要时映射成北面这套（如沙箱起不来 → <code>sandbox_unavailable</code>），<strong>不原样透给客户端</strong>。具体枚举值定稿前可继续补。
+        </div>
+        <div class="note warn" id="q-idem">
+          <span class="note-label">待确认 Q8 · 幂等窗口</span>
+          <code>spawn</code> 用 <code>Idempotency-Key</code> 去重重复提交（网络重试不重复建进程）。窗口多久算同一次？只 spawn 支持，还是 <code>wake/hibernate</code> 这类状态转移也要（它们本身大体幂等，但并发可能竞态）？
+        </div>
+        <div class="note ok" id="q-tenancy">
+          <span class="note-label">已定 Q9 · 进程一对多、共享即可写；不追踪发送者</span>
+          进程与用户是<strong>一对多</strong>，共享<strong>不止只读</strong>——成员都能发消息。关键简化：<strong>harness 不区分谁发的</strong>（<a href="#input-concurrency">见输入并发</a>，SDK 的 user 消息只有 <code>role:"user"</code>、无 author），所以平台<strong>不带发送者身份</strong>、<code>user</code> 事件也不加 attribution。
+          多人并发发消息只有「排队等待 / 打断」两种处置，直接复用底层 harness 能力（<a href="#input-concurrency">同上</a>）；控制平面只做<strong>到达定序 + 向全体成员扇出</strong>，不发明输入锁。
+          <strong>权限粒度</strong>（owner / editor / viewer、无需接收、owner 可改撤、被共享方不能再分享）已展开到 <a href="#sharing">共享与权限</a>，配套通知见 <a href="#notifications">消息中心</a>；剩余边角见 <a href="#q-share">共享边角</a> / <a href="#q-notif">通知触发</a>。存储：进程从单挂 <code>user_id</code> 改成 <code>owner</code> + <code>members</code>（<a href="reference.html#db">DB schema</a> 随改）。
+        </div>
+        <div class="note ok" id="q-version">
+          <span class="note-label">已定 Q10 · 版本不可选：spawn 取最新、wake 沿用</span>
+          <strong>首次 spawn 不存在版本选择</strong>，直接取当前<strong>最新</strong>并钉死。之后<strong>唤醒必须沿用</strong>最初钉死的版本——进程的 state 与具体程序版本强耦合，换版本会让恢复错位。
+          因此 <code>POST /proc</code> <strong>没有 <code>version</code> 入参</strong>，<code>GET /programs</code> 也无需为「选版本」列出全部历史（仅 <code>latestVersion</code> 即可）。版本固化在 <code>ProcessRecord.programVersion</code>。
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

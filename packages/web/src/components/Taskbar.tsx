@@ -5,6 +5,7 @@ import { openWindow, openProgramIds, windowsStore } from '../stores/windows';
 import { useClock } from '../stores/system';
 import { Glyph } from '../icons';
 import { UserFlyout } from './UserFlyout';
+import { NotifyFlyout } from './NotifyFlyout';
 
 export const Taskbar: Component = () => {
   const { time, date } = useClock();
@@ -61,6 +62,8 @@ export const Taskbar: Component = () => {
           <span class="time">{time()}</span>
           <span class="date">{date()}</span>
         </div>
+        {/* notification center sits at the FAR right edge (Win10 Action Center) */}
+        <NotifyFlyout />
       </div>
     </footer>
   );

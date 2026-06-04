@@ -104,10 +104,14 @@
             </tbody>
           </table>
         </div>
-        <div class="note warn">
-          <span class="note-label">设计约束 · 多路复用</span>
-          B 通道现在<strong>同时</strong>跑交互事件流和大块传输。一个几十 MB 的 bundle <strong>绝不能头部阻塞</strong>住实时事件流——
-          所以 <code>DriverChannel</code> 必须<strong>分帧 / 多流</strong>（HTTP/2 风格 mux，或给大块开独立子连接）。这是落地时的硬性要求，不是可选项。
+        <div class="note ok">
+          <span class="note-label">已定 · 一条连接，按 stream 多路复用</span>
+          一个 driver（= 一个沙箱 = 一个运行中的进程）跟控制平面之间<strong>只建一条物理连接</strong>（HTTP/2 双工，driver 拨出），
+          内部按 <strong>stream</strong> 多路复用：一条常驻 <strong>control-stream</strong> 跑全部交互消息，外加按需开的 <strong>bulk-stream</strong> 跑大块传输——
+          几十 MB 的 bundle 单开一条 stream，靠 HTTP/2 帧交错 + 每流 flow-control，<strong>不头部阻塞</strong>实时事件流。
+          <strong>不拆成两条物理连接</strong>：两条连接换来的内核级隔离只省掉性能抖动，却引入「控制连接活、数据连接死」的<strong>部分失败</strong>与身份二次绑定——
+          拿可容忍的性能风险换不可容忍的状态一致性风险，不划算。所有 stream <strong>与连接同生死</strong>：连接断 = 全断，
+          重连一次、按 <a href="#seq">seq</a> 续上即可，没有「半通」中间态。落到线上的完整 schema 见 <a href="#schema">交互 schema</a>。
         </div>
 
         <h2 id="trust">信任与启动序</h2>
@@ -153,6 +157,135 @@
           控制平面持久化的是<strong>抽象后的会话记录</strong>（engine-neutral，见 <a href="state.html#layers">三层数据</a>），不是底层 harness 的原始事件格式——
           省空间、且不把某个 harness 的格式焊进我们的存储。原始事件只在沙箱活着时留在 driver 侧。
         </p>
+
+        <h2 id="schema">交互 schema：一条连接上的消息与流</h2>
+        <p>
+          把前面 <a href="#data-plane">B 平面方法</a>落到线上，就是这条连接里跑的两类 stream、三种帧。下面先定<strong>连接/流模型</strong>与<strong>帧信封</strong>，
+          再按<strong>业务场景</strong>把它们串成消息序。约定：<code>→</code> = control-plane→driver，<code>←</code> = driver→control-plane。
+        </p>
+
+        <h3 id="schema-streams">连接与流模型</h3>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-driver"><span class="nt">1 driver ⇒ 1 连接</span><span class="nd">HTTP/2 双工，driver 拨出。运行中进程恰好一条；休眠进程零连接。连接是唯一的故障域。</span></div>
+            <div class="dgm-cols" style="flex-wrap:nowrap">
+              <div class="node c-cp" style="flex:1"><span class="nt">control-stream<span class="tag" style="margin-left:6px">常驻 1 条</span></span><span class="nd">双向帧流，跑 <code>hello</code> / <code>event</code> / 各类 <code>request</code>+<code>reply</code>。小、低延迟、绝不阻塞。</span></div>
+              <div class="node c-state" style="flex:1"><span class="nt">bulk-stream<span class="tag" style="margin-left:6px">按需 0..N 条</span></span><span class="nd">每次 bundle 传输单开一条，传完即关。大、吞吐型。与事件流帧交错，互不头阻。</span></div>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            两类 stream <strong>共享连接命运</strong>：连接断则全断 → 重连一次、<code>hello</code> 带水位续事件、未完成的 bundle 整段重传。
+            <strong>没有「control 活 / bulk 死」的半通态</strong>——这正是不拆两条物理连接换来的简单性。
+          </div>
+        </div>
+
+        <h3 id="schema-frames">帧信封</h3>
+        <p>control-stream 上每个帧是 <code>Request</code> / <code>Reply</code> / <code>Event</code> 三者之一；bulk-stream 上是一段 <code>Bundle*</code> 序列。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>帧</th><th>方向</th><th>字段</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>Request</code></td><td>→ / ←</td>
+                <td><code>id</code> string(ULID)·<code>op</code> enum·<code>body</code></td>
+                <td><code>op</code> ∈ <code>hello</code>(←) / <code>input</code> / <code>respond</code> / <code>control</code> / <code>fs.list</code> / <code>fs.read</code>（除 hello 外均 →）。<code>id</code> 供 reply 回指。</td>
+              </tr>
+              <tr>
+                <td><code>Reply</code></td><td>← / →</td>
+                <td><code>reId</code> string·<code>ok</code> bool·<code>result?</code>·<code>error?</code></td>
+                <td><code>reId</code> 回指对应 <code>Request.id</code>，方向相反。<code>error</code> 复用 <a href="api.html#shapes">错误信封</a> <code>{code,message,retryable}</code>。</td>
+              </tr>
+              <tr>
+                <td><code>Event</code></td><td>←</td>
+                <td><code>eventId</code> string·<code>localSeq</code> int·<code>payload</code></td>
+                <td>driver 单向推、<strong>不需 reply</strong>。<code>payload</code> 是 engine-neutral <a href="protocol.html">协议事件</a>；CP 落库时盖 <a href="#seq">global seq</a>。<code>eventId</code> 供 delta 折叠。</td>
+              </tr>
+              <tr>
+                <td><code>BundleBegin</code></td><td>→ / ←</td>
+                <td><code>bundleId</code>·<code>kind</code> enum·<code>byteLen</code>·<code>sha256</code>·<code>manifest?</code></td>
+                <td><code>kind</code> ∈ <code>bootstrap</code>(→) / <code>restore</code>(→) / <code>checkpoint</code>(←)。<code>sha256</code> 整体校验，<code>manifest</code> = 路径→大小清单。</td>
+              </tr>
+              <tr>
+                <td><code>BundleChunk</code></td><td>→ / ←</td>
+                <td><code>bundleId</code>·<code>idx</code> int·<code>bytes</code></td>
+                <td>有序分片。方向同本次 <code>BundleBegin</code>。</td>
+              </tr>
+              <tr>
+                <td><code>BundleEnd</code></td><td>→ / ←</td>
+                <td><code>bundleId</code>·<code>ok</code> bool·<code>error?</code></td>
+                <td>收尾。<code>ok=false</code> 或 sha256 不符 → 整段作废、重传（bundle 是幂等单元）。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="s-wake">场景 ① 拨入 · 绑定 · 注入</h3>
+        <p>沙箱 <code>create</code> 后 driver 自启拨出，这条连接上的<strong>第一组消息</strong>。CP 在 <code>Welcome</code>（即 hello 的 reply）里分流「<strong>瞬时重连</strong>」与「<strong>冷唤醒</strong>」：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>步</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>←</td><td><code>Request{op:hello, body:{driverVersion, protocol, bindCredential}}</code></td><td>持烘入镜像的静态凭证拨入 + <a href="sandbox.html#constraints">版本握手</a>。</td></tr>
+              <tr><td>2</td><td>→</td><td><code>Reply{ok, result:{pid, mode, resendFromLocalSeq?}}</code></td><td>CP 据 <a href="#trust">create-time 绑定</a>认出这是哪个待命进程，钉死身份。<code>mode</code> ∈ <code>resume</code>/<code>restore</code>。版本不兼容 → <code>Reply{ok:false, error}</code>，拒连。</td></tr>
+              <tr><td>3a</td><td>←</td><td><code>Event</code> 重放（仅 <code>mode:resume</code>）</td><td><strong>同一 driver 还活着</strong>的网络抖动重连：driver 从 <code>resendFromLocalSeq</code> 重放自己缓冲区里的事件，CP 据已存 seq 去重。无需灌 bundle。</td></tr>
+              <tr><td>3b</td><td>→</td><td><code>BundleBegin{kind:bootstrap|restore}</code> + chunks + <code>BundleEnd</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：CP 经 bulk 灌 skill 闭包 + per-process auth +（首次）初始输入 /（唤醒）最新检查点。</td></tr>
+              <tr><td>4</td><td>—</td><td>driver 拉起 harness</td><td>cwd = 进程目录；之后进入场景 ②。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">两种「续上」别混</span>
+          <strong>瞬时重连</strong>靠 driver 端缓冲 + <code>resendFromLocalSeq</code> 重放（局部序，便宜）；<strong>跨休眠唤醒</strong>是新 driver、localSeq 归零，靠
+          <a href="#hibernate">检查点 restore</a> 续，连续性来自 CP 侧不断攀升的 global seq。<code>localSeq</code> 只在一次运行内有意义。
+        </div>
+
+        <h3 id="s-stream">场景 ② 事件流 · 输入 · 审批 · 控制</h3>
+        <p>进程运行期的主干。事件单向上行，其余都是 CP 发起的 <code>Request</code>/<code>Reply</code>：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>子场景</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>实时事件</td><td>←</td><td><code>Event{localSeq, eventId, payload}</code> ×N</td><td>harness 产出经 driver 翻成协议事件，持续上行。前端按 <a href="api.html#stream">SSE</a> 收 CP 扇出的全局序版本。</td></tr>
+              <tr><td>用户输入</td><td>→<br>←</td><td><code>Request{op:input, body:{item}}</code> → <code>Reply{ok}</code><br>随后 <code>Event{payload: user 消息}</code></td><td><strong>echo-from-stream</strong>：输入被 driver 注入 input.md 流，再以一条 <code>user</code> 事件回灌——所有 viewer（含发起方）都从同一条事件流看到它，<a href="protocol.html">语义统一</a>。</td></tr>
+              <tr><td>审批</td><td>→<br>←</td><td><code>Request{op:respond, body:{actionId, decision}}</code> → <code>Reply{ok}</code></td><td>应答先前一条 <code>requires_action</code> 事件，放行/拒绝某次工具调用。</td></tr>
+              <tr><td>控制</td><td>→<br>←</td><td><code>Request{op:control, body:{signal}}</code> → <code>Reply{ok}</code></td><td><code>signal</code> ∈ <code>interrupt</code>（打断当前回合）/ <code>checkpoint-now</code> / <code>hibernate-prepare</code>。后两者会触发场景 ④ 的 bulk 回流。</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="s-fs">场景 ③ 目录实时读</h3>
+        <p>UI 浏览<a href="state.html">进程目录</a>时（运行中），CP 当场打到 driver 的 cwd——纯请求/应答，可脏读：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>方向</th><th>帧</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>→</td><td><code>Request{op:fs.list, body:{path}}</code> → <code>Reply{ok, result:{entries:[{name,kind,size,mtime}]}}</code></td><td>列目录。</td></tr>
+              <tr><td>→</td><td><code>Request{op:fs.read, body:{path, range?}}</code> → <code>Reply{ok, result:{bytes, truncated}}</code></td><td>读文件，可带 range；大文件标 <code>truncated</code>。半写文件也能读（<a href="#dir-read">看可脏</a>）。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">休眠态走不到这条</span>
+          进程休眠时没有沙箱、连接已断，<code>fs.*</code> 无对端。此时 UI 的目录读由 CP <strong>直接从检查点快照</strong>应答（北向 API 内部完成），不进 B 平面。见 <a href="#dir-read">目录读取</a>。
+        </div>
+
+        <h3 id="s-ckpt">场景 ④ 检查点 · 休眠回流</h3>
+        <p>耐久真相靠检查点经 bulk 上行到 CP。两种触发，同一条 bulk 路径：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>触发</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>自主（quiescent 点）</td><td>←</td><td><code>BundleBegin{kind:checkpoint}</code> + chunks + <code>BundleEnd</code></td><td>driver 在 <a href="state.html#checkpoint">一致点</a>自发推一份检查点；<strong>无需 Request</strong>，driver 直接开 bulk-stream。CP 收齐校验后置为新的耐久真相。</td></tr>
+              <tr><td><code>control:checkpoint-now</code></td><td>→ 然后 ←</td><td>先 <code>Reply{ok}</code>，driver 随即推 checkpoint bulk</td><td>CP 主动要一份（如分享前、迁移前）。</td></tr>
+              <tr><td><code>control:hibernate-prepare</code></td><td>→ 然后 ←</td><td>driver 落最后一份 checkpoint bulk → <code>Reply{ok}</code></td><td>CP 收到 ok 后调 <a href="#resource-plane">provider.destroy</a>（A 平面，<strong>不在本连接上</strong>）→ 连接随沙箱销毁而断。这是连接的正常终点。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note ok">
+          <span class="note-label">连接的两种终结</span>
+          <strong>正常</strong>：<code>hibernate-prepare</code> → 末次 checkpoint 落地 → destroy → 断（进程完好休眠）。
+          <strong>异常</strong>：连接意外断 = driver/沙箱死。<strong>不抢救</strong>——进程恢复到<a href="state.html#checkpoint">上一个检查点</a>，下次唤醒走场景 ①-3b。两条路都收敛到「检查点是唯一真相」。
+        </div>
 
         <h2 id="hibernate">休眠 = destroy，唤醒 = create + 灌检查点</h2>
         <p>

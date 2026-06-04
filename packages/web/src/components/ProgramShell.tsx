@@ -1,5 +1,14 @@
 import { createSignal, onCleanup, onMount, For, Show, type Component, type JSX } from 'solid-js';
+import { createStore, produce } from 'solid-js/store';
 import { highlightFile } from '../lib/highlight';
+import { auth } from '../stores/auth';
+
+/* ── share (demo / mock) ──────────────────────────────────────────────
+   Per-process sharing: owner can add members as editor (read+write) or
+   viewer (read-only). Stand-in for /proc/:pid/shares*. Mock data so the
+   share button + 分享管理 panel are visible. */
+type ShareRole = 'editor' | 'viewer';
+interface Member { userId: string; name: string; role: ShareRole; }
 
 /* ──────────────────────────────────────────────────────────────────────
    ProgramShell — the universal window body for ANY aprog program.
@@ -256,6 +265,25 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
   const activeProc = () => p.procs.find((x) => x.active) ?? p.procs[0];
   const dormant = () => activeProc()?.dot === 'hibernating';
 
+  /* ── share (demo) ── current user is owner of the attached process, so the
+     分享 button shows and the panel is editable. Mock member list. */
+  const myRole = () => 'owner' as const;
+  const [shareOpen, setShareOpen] = createSignal(false);
+  const [members, setMembers] = createStore<Member[]>([
+    { userId: 'ada',  name: 'Ada',  role: 'editor' },
+    { userId: 'lin',  name: 'Lin',  role: 'viewer' },
+  ]);
+  const [shareName, setShareName] = createSignal('');
+  const [shareRole, setShareRole] = createSignal<ShareRole>('editor');
+  const addMember = () => {
+    const n = shareName().trim();
+    if (!n) return;
+    setMembers(produce((m) => m.push({ userId: n.toLowerCase(), name: n, role: shareRole() })));
+    setShareName('');
+  };
+  const removeMember = (userId: string) => setMembers(members.filter((x) => x.userId !== userId));
+  const setMemberRole = (userId: string, role: ShareRole) => setMembers((x) => x.userId === userId, 'role', role);
+
   /* composer: Enter sends, Ctrl/Cmd+Enter (and Shift+Enter) inserts a newline */
   const [draft, setDraft] = createSignal('');
   const send = () => {
@@ -363,19 +391,6 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
             >
               <span class={`state-dot ${dotClass(proc.dot)}`} />
               <span class="meta-label">{proc.name}</span>
-              <Show when={proc.version}>
-                <span class="sb-ver">v{proc.version}</span>
-              </Show>
-              <button
-                class="sb-row-life"
-                title={proc.dot === 'running' ? '休眠 · 释放沙箱' : '唤醒 · 关联沙箱'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  proc.dot === 'running' ? p.onHibernate?.(proc.pid) : p.onWake?.(proc.pid);
-                }}
-              >
-                <Show when={proc.dot === 'running'} fallback={<PowerIcon />}><MoonIcon /></Show>
-              </button>
             </div>
           )}</For>
         </div>
@@ -384,6 +399,45 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
 
       {/* ── CENTER: execution (tabs + active content) ── */}
       <div class="dz-main">
+        {/* conversation header: attached proc + version + lifecycle + members + 分享 */}
+        <div class="dz-toolbar">
+          <span class="dzt-name">
+            <span class={`state-dot ${dormant() ? 'hibernating' : 'attached'}`} />
+            <span class="dzt-title">{activeProc()?.name ?? p.procTitle}</span>
+            <Show when={activeProc()?.version}>
+              <span class="dzt-ver">v{activeProc()!.version}</span>
+            </Show>
+          </span>
+          <span class="dzt-right">
+            <Show when={activeProc()}>
+              <button
+                class="dzt-life"
+                title={dormant() ? '唤醒 · 关联沙箱' : '休眠 · 释放沙箱'}
+                onClick={() => { const a = activeProc(); if (!a) return; dormant() ? p.onWake?.(a.pid) : p.onHibernate?.(a.pid); }}
+              >
+                <Show when={dormant()} fallback={<MoonIcon />}><PowerIcon /></Show>
+                {dormant() ? '唤醒' : '休眠'}
+              </button>
+            </Show>
+            <Show when={members.length > 0}>
+              <span class="dzt-members" title={`${members.length} 位协作者`}>
+                <For each={members.slice(0, 3)}>{(m) => (
+                  <span class={`dzt-ava role-${m.role}`} title={`${m.name} · ${m.role === 'editor' ? '可写' : '只读'}`}>{m.name.slice(0, 1)}</span>
+                )}</For>
+                <Show when={members.length > 3}><span class="dzt-ava more">+{members.length - 3}</span></Show>
+              </span>
+            </Show>
+            <Show when={myRole() === 'owner'}>
+              <button class="dzt-share" title="分享" onClick={() => setShareOpen(true)}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="3.5" r="2" /><circle cx="4" cy="8" r="2" /><circle cx="12" cy="12.5" r="2" />
+                  <path d="M5.8 7 L10.2 4.5 M5.8 9 L10.2 11.5" />
+                </svg>
+                分享
+              </button>
+            </Show>
+          </span>
+        </div>
         <Show when={p.openFiles.length > 0}>
           <div class="dv-tabs">
             <div class={`dv-tab chat ${!p.viewFile ? 'active' : ''}`} onClick={() => p.onShowChat?.()}>
@@ -510,6 +564,54 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
             <div class="spawn-actions">
               <button class="btn" onClick={cancel}>取消</button>
               <button class="btn primary" onClick={submit} disabled={!name().trim()}>创建</button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* ── share / manage members (owner only) ── */}
+      <Show when={shareOpen()}>
+        <div class="spawn-overlay" onClick={() => setShareOpen(false)}>
+          <div class="spawn-dialog share-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>分享「{activeProc()?.name ?? p.procTitle}」</h3>
+            <p class="spawn-hint">被分享的人直接进入这个进程（无需接收），并在消息中心收到通知. 只有你（owner）能分享、改权限或移除.</p>
+
+            <div class="share-add">
+              <input
+                class="spawn-input"
+                value={shareName()}
+                placeholder="用户名 / 邮箱"
+                onInput={(e) => setShareName(e.currentTarget.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addMember(); }}
+              />
+              <select class="share-rolesel" value={shareRole()} onChange={(e) => setShareRole(e.currentTarget.value as ShareRole)}>
+                <option value="editor">可写</option>
+                <option value="viewer">只读</option>
+              </select>
+              <button class="btn primary" onClick={addMember} disabled={!shareName().trim()}>分享</button>
+            </div>
+
+            <div class="share-list">
+              <div class="share-row owner">
+                <span class="share-ava role-owner">我</span>
+                <span class="share-who"><span class="share-name">{auth.user()?.displayName ?? '我'}</span><span class="share-sub">owner · 创建者</span></span>
+                <span class="share-roletag">owner</span>
+              </div>
+              <For each={members}>{(m) => (
+                <div class="share-row">
+                  <span class={`share-ava role-${m.role}`}>{m.name.slice(0, 1)}</span>
+                  <span class="share-who"><span class="share-name">{m.name}</span><span class="share-sub">{m.userId}</span></span>
+                  <select class="share-rolesel sm" value={m.role} onChange={(e) => setMemberRole(m.userId, e.currentTarget.value as ShareRole)}>
+                    <option value="editor">可写</option>
+                    <option value="viewer">只读</option>
+                  </select>
+                  <button class="share-remove" title="移除" onClick={() => removeMember(m.userId)}>✕</button>
+                </div>
+              )}</For>
+            </div>
+
+            <div class="spawn-actions">
+              <button class="btn primary" onClick={() => setShareOpen(false)}>完成</button>
             </div>
           </div>
         </div>

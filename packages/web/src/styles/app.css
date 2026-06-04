@@ -823,3 +823,88 @@ kbd { font-family: var(--font-mono); font-size: 11px; font-weight: 500; backgrou
 .art-tier-price { font-size: 28px; font-weight: 700; letter-spacing: -1px; margin: 6px 0 14px; }
 .art-tier-line { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.08); margin-bottom: 8px; }
 .art-tier-line.short { width: 60%; }
+
+/* ─── notification center (tray bell + panel + toasts) ──────────────── */
+.notify-wrap { position: relative; display: flex; align-items: center; }
+.tb-bell { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--text-2); transition: background 0.12s; }
+.tb-bell:hover { background: rgba(255,255,255,0.06); }
+.tb-bell svg { width: 16px; height: 16px; }
+.bell-badge { position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--close-red); color: #fff; font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
+.notify-panel {
+  position: absolute; bottom: calc(100% + 10px); right: 0;
+  width: 340px; max-height: 60vh; display: flex; flex-direction: column;
+  background: rgba(43,43,43,0.94);
+  backdrop-filter: blur(40px) saturate(150%); -webkit-backdrop-filter: blur(40px) saturate(150%);
+  border: 1px solid rgba(255,255,255,0.10); border-radius: 10px;
+  box-shadow: rgba(0,0,0,0.45) 0 12px 36px -6px; padding: 8px; z-index: 1100;
+}
+.np-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; }
+.np-title { font-size: 14px; font-weight: 600; color: var(--fg); }
+.np-clear { font-size: 12px; color: var(--accent); padding: 2px 6px; border-radius: 5px; }
+.np-clear:hover { background: rgba(255,255,255,0.06); }
+.np-list { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.np-empty { padding: 24px; text-align: center; color: var(--text-3); font-size: 13px; }
+.np-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 9px 10px; border-radius: 7px; transition: background 0.10s; }
+.np-item:hover { background: rgba(255,255,255,0.05); }
+.np-item.unread { background: rgba(76,194,255,0.07); }
+.np-kind { flex-shrink: 0; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px; margin-top: 1px; }
+.np-kind.k-share  { color: #8ad6ff; background: rgba(76,194,255,0.16); }
+.np-kind.k-reply  { color: #9be08e; background: rgba(108,203,95,0.16); }
+.np-kind.k-action { color: #ffd95e; background: rgba(252,225,0,0.14); }
+.np-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.np-item-title { font-size: 13px; color: var(--fg); line-height: 1.35; }
+.np-item-body { font-size: 12px; color: var(--text-3); }
+.np-item-ts { font-size: 11px; color: var(--text-4); }
+.np-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-top: 6px; }
+
+.toast-layer { position: fixed; right: 12px; bottom: 60px; display: flex; flex-direction: column; gap: 10px; z-index: 1200; pointer-events: none; }
+.toast {
+  position: relative; pointer-events: auto; width: 300px; padding: 12px 32px 12px 14px;
+  background: rgba(43,43,43,0.96); backdrop-filter: blur(40px) saturate(150%); -webkit-backdrop-filter: blur(40px) saturate(150%);
+  border: 1px solid rgba(255,255,255,0.10); border-radius: 9px;
+  box-shadow: rgba(0,0,0,0.5) 0 12px 32px -8px; cursor: default;
+  animation: toast-in 0.22s ease;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+.toast-title { font-size: 13px; font-weight: 600; color: var(--fg); line-height: 1.4; }
+.toast-body { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.toast-ts { font-size: 11px; color: var(--text-4); margin-top: 4px; }
+.toast-x { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 5px; color: var(--text-3); font-size: 11px; }
+.toast-x:hover { background: rgba(255,255,255,0.08); }
+
+/* ─── conversation header: members + 分享 ───────────────────────────── */
+.dz-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; height: 40px; flex-shrink: 0; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.dzt-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dzt-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.dzt-members { display: inline-flex; }
+.dzt-ava { width: 22px; height: 22px; margin-left: -6px; border-radius: 50%; border: 1.5px solid var(--win-bg); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; background: #5a6b8c; }
+.dzt-ava:first-child { margin-left: 0; }
+.dzt-ava.role-editor { background: #3a7d4d; }
+.dzt-ava.role-viewer { background: #6a6f7a; }
+.dzt-ava.more { background: rgba(255,255,255,0.12); color: var(--text-2); }
+.dzt-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dzt-ver { flex-shrink: 0; font-size: 11px; font-weight: 500; color: var(--text-3); font-family: var(--font-mono); padding: 1px 6px; border-radius: 5px; background: rgba(255,255,255,0.06); }
+.dzt-share, .dzt-life { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 6px; font-size: 12.5px; color: var(--fg); background: rgba(255,255,255,0.06); border: 1px solid var(--line-2); transition: background 0.12s; }
+.dzt-share:hover, .dzt-life:hover { background: rgba(255,255,255,0.11); }
+.dzt-share svg, .dzt-life svg { width: 14px; height: 14px; }
+.dzt-life { color: var(--text-2); }
+
+/* ─── share dialog ──────────────────────────────────────────────────── */
+.share-dialog { width: 440px; }
+.share-add { display: flex; gap: 8px; margin-bottom: 16px; }
+.share-add .spawn-input { flex: 1; }
+.share-rolesel { height: 34px; padding: 0 8px; border-radius: var(--r-3); background: rgba(255,255,255,0.05); border: 1px solid var(--line-2); color: var(--fg); font-size: 13px; }
+.share-rolesel.sm { height: 28px; font-size: 12px; }
+.share-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; margin-bottom: 16px; }
+.share-row { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 7px; }
+.share-row:hover { background: rgba(255,255,255,0.04); }
+.share-ava { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #fff; background: #5a6b8c; }
+.share-ava.role-owner { background: var(--accent); color: var(--accent-on); }
+.share-ava.role-editor { background: #3a7d4d; }
+.share-ava.role-viewer { background: #6a6f7a; }
+.share-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.share-name { font-size: 13px; color: var(--fg); }
+.share-sub { font-size: 11.5px; color: var(--text-3); font-family: var(--font-mono); }
+.share-roletag { font-size: 12px; color: var(--text-3); padding-right: 6px; }
+.share-remove { width: 26px; height: 26px; border-radius: 6px; color: var(--text-3); font-size: 12px; flex-shrink: 0; }
+.share-remove:hover { background: rgba(255,69,58,0.16); color: var(--danger); }
