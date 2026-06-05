@@ -90,15 +90,8 @@ function layoutGraph(fam: Family) {
   for (const b of fam.branches) {
     const l = lane.get(b.id)!;
     for (const c of b.checkpoints) nodes.push({ branchId: b.id, lane: l, row: 0, label: c.label, ago: c.ago, isLive: false });
-    if (b.live) {
-      const top = b.checkpoints.reduce((m, c) => Math.max(m, c.order), 0);
-      nodes.push({ branchId: b.id, lane: l, row: 0, label: '进行中', ago: '未存档', isLive: true });
-      (nodes[nodes.length - 1] as GraphNode & { order?: number }).order = top + 5;
-    }
   }
-  // attach order for sort (live nodes carry it inline; checkpoints by lookup)
   const orderOf = (n: GraphNode): number => {
-    if (n.isLive) return (n as GraphNode & { order?: number }).order ?? 0;
     const b = fam.branches.find((x) => x.id === n.branchId)!;
     return b.checkpoints.find((c) => c.label === n.label && c.ago === n.ago)?.order ?? 0;
   };
@@ -304,12 +297,10 @@ const SyncIcon: Component = () => (
     <path d="M13 7 A5 5 0 1 0 12.5 10" /><path d="M13 3.5 V7 H9.5" />
   </svg>
 );
-/* 进度树/分支图标 — 标准 git-branch 字形 (Lucide)，从 24px 缩放到 16px viewBox */
+/* 进度树/分支图标 — 标准 git-branch 字形 (GitHub Octicons)，三圆：左上/左下/右上 */
 const BranchIcon: Component = () => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M10 4 a6 6 0 0 0 -6 6 V2" />
-    <circle cx="12" cy="4" r="2" />
-    <circle cx="4" cy="12" r="2" />
+  <svg viewBox="0 0 16 16" fill="currentColor">
+    <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
   </svg>
 );
 
@@ -466,9 +457,6 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
   /* a single checkpoint switcher popover for one branch (only-read 跳转查看) */
   const checkpointSwitcher = (b: Branch, proc: ProcInfo) => (
     <div class="ckpt-pop" onClick={(e) => e.stopPropagation()}>
-      <Show when={b.live}>
-        <div class="ckpt-item live"><span class="ckpt-dot live" /><span class="ckpt-label">进行中（未存档）</span></div>
-      </Show>
       <For each={b.checkpoints}>{(c, i) => (
         <div class="ckpt-item">
           <span class="ckpt-dot" />
@@ -631,7 +619,6 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
         {/* conversation header: attached proc + version + lifecycle + members + 分享 */}
         <div class="dz-toolbar">
           <span class="dzt-name">
-            <span class={`state-dot ${dormant() ? 'hibernating' : 'attached'}`} />
             <span class="dzt-title">{activeProc()?.name ?? p.procTitle}</span>
             <Show when={activeProc()?.version}>
               <span class="dzt-ver">v{activeProc()!.version}</span>
@@ -643,7 +630,7 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
                   title="当前存档点 · 点击看存档点与进度树"
                   onClick={() => setSwitcherFor(switcherFor() === activeBranch()!.id ? null : activeBranch()!.id)}
                 >
-                  <span class="ckpt-dot" />{activeBranch()!.current}<Show when={activeBranch()!.live}><span class="dzt-live">进行中</span></Show>
+                  {activeBranch()!.current}
                 </button>
                 <Show when={switcherFor() === activeBranch()!.id}>
                   <div class="dzt-ckpt-pop">{checkpointSwitcher(activeBranch()!, activeProc()!)}</div>
@@ -655,16 +642,6 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
             </Show>
           </span>
           <span class="dzt-right">
-            <Show when={activeProc()}>
-              <button
-                class="dzt-life"
-                title={dormant() ? '唤醒 · 关联沙箱' : '休眠 · 释放沙箱'}
-                onClick={() => { const a = activeProc(); if (!a) return; dormant() ? p.onWake?.(a.pid) : p.onHibernate?.(a.pid); }}
-              >
-                <Show when={dormant()} fallback={<MoonIcon />}><PowerIcon /></Show>
-                {dormant() ? '唤醒' : '休眠'}
-              </button>
-            </Show>
             <Show when={members.length > 0}>
               <span class="dzt-members" title={`${members.length} 位协作者`}>
                 <For each={members.slice(0, 3)}>{(m) => (
@@ -682,12 +659,21 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
                 分享
               </button>
             </Show>
+            <Show when={activeProc()}>
+              <button
+                class="dzt-life"
+                title={dormant() ? '唤醒 · 关联沙箱' : '休眠 · 释放沙箱'}
+                onClick={() => { const a = activeProc(); if (!a) return; dormant() ? p.onWake?.(a.pid) : p.onHibernate?.(a.pid); }}
+              >
+                <Show when={dormant()} fallback={<MoonIcon />}><PowerIcon /></Show>
+                {dormant() ? '唤醒' : '休眠'}
+              </button>
+            </Show>
           </span>
         </div>
         <Show when={p.openFiles.length > 0}>
           <div class="dv-tabs">
             <div class={`dv-tab chat ${!p.viewFile ? 'active' : ''}`} onClick={() => p.onShowChat?.()}>
-              <span class={`state-dot ${dormant() ? 'hibernating' : 'attached'}`} />
               <span class="dv-tab-name">对话</span>
             </div>
             <For each={p.openFiles}>{(f) => (
