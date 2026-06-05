@@ -89,63 +89,145 @@
           会话记录是含思考/工具/回复的<strong>完整转录</strong>。用户消息在两处都出现，但服务的对象不同——前者驱动执行，后者驱动界面。
         </div>
 
-        <h2 id="checkpoint">检查点：耐久性是平台的事，不是程序的事</h2>
+        <h2 id="checkpoint">检查点：耐久性归平台，一致性归程序</h2>
         <p>
-          沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠的是<strong>检查点</strong>——把进程目录的 state 子集
-          经 <a href="interaction.html#data-plane">B 平面</a>流回控制平面。关键在职责分层：
+          沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠<strong>检查点</strong>——把进程目录的 state 子集
+          经 <a href="interaction.html#data-plane">B 平面</a>流回控制平面。但「什么时候算一个能安全 resume 的点」，<strong>平台判断不了，只有上层程序知道</strong>。所以职责这么分：
         </p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>关注点</th><th>归谁</th><th>具体</th></tr></thead>
             <tbody>
-              <tr><td>状态的<strong>内容与结构</strong></td><td>程序 / state 库</td><td>meta / input / execution-state 怎么组织、程序自己逻辑怎么 resume</td></tr>
-              <tr><td>状态的<strong>耐久性</strong></td><td><strong>平台 / driver</strong></td><td><strong>何时</strong>快照、怎么传、怎么恢复。对内容无知</td></tr>
+              <tr><td>状态的<strong>内容与结构</strong></td><td>程序 / state 库</td><td>meta / input / execution-state 怎么组织、自己逻辑怎么 resume</td></tr>
+              <tr><td>状态的<strong>一致性</strong>（何时算干净）</td><td><strong>程序</strong></td><td>在语义一致的点<strong>主动调检查点工具</strong>标记一个 commit。平台无从判断这个</td></tr>
+              <tr><td>状态的<strong>耐久性</strong></td><td>平台 / driver</td><td>怎么传、怎么恢复、多久才真同步一次（debounce）。对内容无知</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="note bad">
-          <span class="note-label">检查点不归程序控制</span>
-          上层程序<strong>无法、也不该</strong>决定何时做检查点。它是平台机制，由 <strong>driver 用 harness-specific 的手段</strong>实现——
-          比如 Claude Agent SDK 在回复结束时的 hook，driver 接住后<strong>按配置</strong>决定要不要同步（这只是一种方式）。程序不参与，也不需要「为检查点而 flush」。
-        </div>
-
-        <h3 id="quiescent">检查点落在 quiescent 点</h3>
-        <p>
-          自然的保存点是 <strong>quiescent 点</strong>：harness 已回复完、正在等用户下一条输入。此刻 agent 不在写盘，加上 state 库<strong>原子落盘</strong>（写临时文件再 rename），
-          盘面自然是个一致、可 resume 的点。它是「每个回合结束」的<strong>子集</strong>（多了「之后转入空闲」这个条件），因此比每回合都存稀疏。
-        </p>
         <div class="note ok">
-          <span class="note-label">quiescent 点 = 自然的休眠点</span>
-          进程空闲等人，恰好也是<strong>最该让出沙箱</strong>的时刻。于是「做检查点」和「<a href="interaction.html#hibernate">hibernate-prepare</a>」在同一时刻发生——
-          <strong>休眠在机制上就是「在 quiescent 点做检查点 + 顺手让出沙箱」</strong>，两者天然合一。
+          <span class="note-label">平台只提供两件基础设施</span>
+          这一节的总纲：<strong>进程一致性主要是上层程序的事</strong>，平台只给两样最小的底座——① <strong>持久化进程目录</strong>（把 state 子集搬到控制平面、崩溃后灌回），
+          ② 一个<strong>检查点工具</strong>，供程序在它认为一致的时刻调用。其余（什么算一致、外部副作用怎么对齐、resume 怎么续）全是程序的语义责任。
         </div>
 
-        <h3 id="cadence">节奏是配置项</h3>
-        <p>检查点频率是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆，平台配置：</p>
+        <h3 id="two-grades">两种「一致」：无撕裂 vs 语义一致</h3>
+        <p>把「一致」拆开，才看清为什么非得程序来定：</p>
         <div class="tbl-wrap">
           <table>
-            <thead><tr><th>配置</th><th>同步成本</th><th>崩溃丢失窗口</th></tr></thead>
+            <thead><tr><th>层级</th><th>含义</th><th>谁能判断</th></tr></thead>
             <tbody>
-              <tr><td>每个 quiescent 点</td><td>高</td><td>最小（最多一组对话的算力）</td></tr>
-              <tr><td>每 N 个 quiescent / 每 T 分钟</td><td>中</td><td>中</td></tr>
-              <tr><td>仅显式休眠时</td><td>最低</td><td>最大（整段运行的算力）</td></tr>
+              <tr><td><strong>无撕裂</strong>（tear-free）</td><td>没在写盘中途、盘面原子（写临时文件再 rename）</td><td>平台 / driver 可观测（agent 空闲那刻）</td></tr>
+              <tr><td><strong>语义一致</strong>（coherent）</td><td>state/ 此刻是「我进展到哪」的<strong>完整忠实描述</strong>，从这恢复能正确续</td><td><strong>只有程序知道</strong></td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="note warn">
+          <span class="note-label">turn-end 只是无撕裂，不等于语义一致</span>
+          曾经的设计拿「harness 回复完、转入空闲」这个 quiescent 点当检查点时机——它确实<strong>无撕裂</strong>，但程序的 state 更新常<strong>跨多个 turn</strong>
+          （一个逻辑操作写到一半就让出回合）。turn-end 落在中间，快照恢复出来不会损坏、却是个<strong>语义半成品</strong>。所以判断一致的权威必须是程序，不是平台的猜测。
+        </div>
+
+        <h3 id="ckpt-tool">检查点是给程序的工具，平台只做 debounce</h3>
+        <p>
+          于是检查点反过来了：平台把它做成一个<strong>工具</strong>（就像别的平台能力——赋予 harness 的一种操作，类似 CLI 命令），
+          程序在语义一致处<strong>主动调一次</strong> = 「我现在干净，这是个合法续点」。类比数据库的 <code>COMMIT</code>——程序说「一致了」，存储层自己决定何时真正落盘。两个决定就此分开：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>决定</th><th>归谁</th><th>怎么做</th></tr></thead>
+            <tbody>
+              <tr><td><strong>此刻一致吗</strong>（commit mark）</td><td>程序</td><td>调检查点工具喊一声。可能落在 turn 边界，但判据是语义、不是空闲</td></tr>
+              <tr><td><strong>现在值得真传吗</strong>（成本）</td><td>平台 / driver</td><td>对 mark 做 <strong>debounce</strong>，累计若干个才把<strong>那一刻冻结的</strong> state 子集推回 CP</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>debounce 是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>策略</th><th>同步成本</th><th>崩溃丢失窗口</th></tr></thead>
+            <tbody>
+              <tr><td>每个 mark 都同步</td><td>高</td><td>最小（最多回退一个 mark）</td></tr>
+              <tr><td>每 N 个 mark / 每 T 分钟</td><td>中</td><td>中</td></tr>
+              <tr><td>仅休眠时同步</td><td>最低</td><td>最大（整段运行）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">两个边角</span>
+          <strong>① 冻结点</strong>：debounce 到「第 N 个 mark 才传」，传的必须是<strong>某个 mark 的瞬时态</strong>——mark 时冻结 state/（或只在程序 idle 时传），不能半旧半新。
+          <strong>② liveness 兜底</strong>：程序若<strong>从不</strong>调工具，崩溃就全丢回 bootstrap。基线是<strong>程序责任</strong>（state 技能在 loop 纪律里要求周期性 mark）；平台<em>可选</em>在太久没 mark 时于 idle 拍一张无撕裂快照当粗兜底，但干净的点永远来自程序的 mark。
+        </div>
+        <div class="note ok">
+          <span class="note-label">休眠 = 一次 mark + 让出沙箱</span>
+          进程空闲等人，恰好也是<strong>最该让出沙箱</strong>的时刻。<a href="interaction.html#hibernate">hibernate-prepare</a> 会<strong>强制把最近的 mark 同步掉</strong>再 destroy——
+          所以<strong>休眠在机制上就是「确保最新 mark 落地 + 顺手让出沙箱」</strong>。CP 也可在分享 / 迁移前主动 <code>checkpoint-now</code> 强制一次。
+        </div>
+
+        <h3 id="external">系统外副作用：程序记游标，平台不回退</h3>
+        <p>
+          检查点能把进程<strong>倒带</strong>到上一个 mark，但倒带不了已经逃出进程目录的<strong>外部副作用</strong>——典型是 <code>git push</code>：推上远端的 commit 立刻、不可逆地耐久了，平台 rewind 不了它。
+        </p>
+        <p>
+          场景：程序开发一个 git 项目，某轮 ① 改码 ② commit + push（远端到 C）③ 进度记进 state/ ④ 检查点同步。崩溃若卡在 ②④ 之间——
+          push 活下来、记录随沙箱死，恢复回到上一个 mark（还在 B），<strong>进程记忆与远端世界岔开</strong>。这个双写窗口<strong>结构上消不掉</strong>（换顺序只把缝挪到另一边），
+          <strong>平台层没有更好的办法</strong>。真正的一致由<strong>程序语义</strong>兜，两条纪律：
+        </p>
+        <ul>
+          <li><strong>记游标</strong>：push 后把 commit hash 记进 state/（跟着检查点原子持久化）——这就是 git 版的 <code>input_cursor</code>。</li>
+          <li><strong>恢复签出记录的 hash，而非分支</strong>：分支 tip 是<strong>可变外部引用</strong>（可能被那次逃逸的 push 或协作者推动）；签出记录的<strong>不可变 hash</strong>，工作树与进程状态就都落在 B、彼此自洽，堵死「工作树静默超前于我的记忆」这种最坏的腐坏。</li>
+        </ul>
+        <div class="note ok">
+          <span class="note-label">远端孤儿无害——只关心内部是否自洽</span>
+          恢复后签出 B、重做出 C′，远端那个孤儿 C「挂着就挂着」：只要程序<strong>独占这条分支</strong>（agent 自己的 WIP 分支），<code>push --force</code> 用 C′ 盖掉 C，孤儿变 unreferenced 被 GC。
+          正确性底线是<strong>恢复后内部自洽</strong>——记游标 + 签出 hash 已经保证。「恢复即对账」（认领 C、跳过重做）只是<strong>省重复劳动的可选优化</strong>，非必需。
+          唯一会真咬人的是<strong>共享分支且他人已 pull</strong>（改写已发布历史），超出独占 WIP 分支的场景。
         </div>
 
         <h3 id="restore">恢复 = 纯 resume，没有「回退语义」</h3>
         <p>
-          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康检查点（新沙箱热恢复 / 经 B 灌回检查点）。这里<strong>没有任何回退语义要设计</strong>：
+          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱热恢复 / 经 B 灌回检查点）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
         </p>
         <ul>
           <li>底层 harness 启动后<strong>就是普通 resume</strong>，它不知道、也不关心「丢了一段活」。</li>
-          <li>检查点之后到崩溃前那几条输入，<strong>控制平面 eager 持久化着</strong>（输入很小、一到就存，是耐久脊梁）；恢复后当<strong>普通新输入重投</strong>给那个正在等输入的 harness，它当第一次收到来处理。没有重放逻辑、没有补偿、没有回退事件。</li>
-          <li><strong>唯一代价</strong>：丢失那段活若产生过<strong>系统外副作用</strong>（发邮件、写外部库），重跑会重做。这<strong>明确划在范围外</strong>——aprog 只管系统内状态，不管系统外。</li>
+          <li>上个 mark 到崩溃前那几条输入，<strong>控制平面 eager 持久化着</strong>（输入很小、一到就存，是耐久脊梁）；恢复后当<strong>普通新输入重投</strong>给正在等输入的 harness，它当第一次收到来处理。没有重放、没有补偿、没有回退事件。</li>
+          <li>系统<strong>外</strong>副作用（git push、发邮件、调外部 API）不靠平台回退，靠程序的游标 + 幂等纪律对齐，见 <a href="#external">上一节</a>。协议保证仍是 <strong>at-least-once，不是 exactly-once</strong>。</li>
         </ul>
         <p>
-          于是两类状态用两种节奏，互补：<strong>输入</strong>（轻、是脊梁）发出即存；<strong>执行状态 / 会话</strong>（重）在 quiescent 点按配置检查点。
+          于是两类状态两种节奏，互补：<strong>输入</strong>（轻、是脊梁）发出即存；<strong>执行状态 / 会话</strong>（重）在程序 mark 处按 debounce 检查点。
           <strong>状态永不删除</strong>——退出只是没有沙箱关联，目录与历史完整保留。具体的 spawn / hibernate / wake / exit 调用链见 <a href="flows.html">生命周期流程</a>。
         </p>
+
+        <h2 id="branches">版本化进程目录 → 分支</h2>
+        <p>
+          既然检查点是一串<strong>带名字的存档点</strong>（程序 mark 时可带 label，像 <code>git commit -m</code>），那进程目录天然就是控制平面上一个<strong>被版本化的仓库</strong>。
+          从某个旧存档点<strong>岔一条分支</strong>去试别的方向，进程历史就从「线」变成「树」。底层就是给进程目录做版本管理，<strong>UI 上不暴露任何 git 术语</strong>（见 <a href="window.html#branches">工作窗口 · 分支与进度树</a>）。
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>进程概念</th><th>版本化对应</th></tr></thead>
+            <tbody>
+              <tr><td>一个检查点 mark</td><td>一次 commit（label = commit message）</td></tr>
+              <tr><td><strong>分支</strong>（从存档点岔开试新方向）</td><td>branch</td></tr>
+              <tr><td>倒带到某存档点</td><td>checkout / reset</td></tr>
+              <tr><td>唤醒</td><td>checkout 分支 tip 灌进沙箱</td></tr>
+              <tr><td>运行中沙箱里的活态</td><td>dirty working tree（崩溃丢这截、回到上一 commit）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note ok">
+          <span class="note-label">两棵耦合的版本树：superproject ↔ submodule</span>
+          注意有<strong>两棵独立的 git</strong>：① <strong>进程目录</strong>——平台在控制平面上版本化（外层）；② <strong>项目代码</strong>——程序在项目自己的远端版本化（内层）。
+          二者靠 <a href="#external">记录的 commit hash 游标</a>钉在一起：外层每个 commit 里存着一个指向内层的 SHA——正是 <strong>superproject 钉住 submodule</strong> 的形状。
+          于是平台 fork 外层（branch 进程目录）<strong>免费、纯在 CP 上</strong>；但要让内层也分叉，得靠程序在 resume 时把项目 repo <strong>从那个 SHA 另开一条 git 分支</strong>（平台对 git 无知，只传一个「你是 fork」信号）。
+        </div>
+        <p>
+          <strong>运行单位是「分支」</strong>，不是进程：列表里每条分支是一条独立可 attach / 可运行 / 可<a href="#branches">分享</a>的执行线，<strong>可并行</strong>；「进程」退化成把同家族分支兜在一起的<strong>分组</strong>。
+          主分支没有自己的名字——它就是这个进程；只有支线在创建时起名。
+        </p>
+        <div class="note">
+          <span class="note-label">没有 merge</span>
+          外层机械上能 merge，但「合并两条 agent 跑出来的状态 + 两条代码分支」<strong>语义上不成立</strong>——所以<strong>只 branch、不 merge</strong>。分支用来做<strong>分支尝试</strong>（同一起点试不同走法），不是用来最终汇合。
+        </div>
 
         <div class="pager" data-pager></div>
       </article>

@@ -74,15 +74,22 @@
 
         <h2 id="proclist">进程列表（左）</h2>
         <p>
-          当前程序的所有进程。每行显示状态指示圆点 + 进程名。顶部是“进程”标题、进程数和一个 <strong>＋</strong>（新建进程）。
-          点某个进程即 attach 到它，对话区和目录区随之整体切换（不混合）。
+          列表的<strong>单位是「分支」（执行线），不是进程</strong>。一个进程可以有多条并行分支（见 <a href="#branches">分支与进度树</a>），所以「进程」在这里只是把同家族的分支兜在一起的<strong>分组</strong>。
+          每行显示状态圆点 + 名字。点某条分支即 attach 到它，对话区和目录区随之整体切换（不混合）。
         </p>
         <p>
-          <strong>新建进程</strong>：点 ＋ 弹出一个表单，目前只填一个名称（CPU/内存/沙箱配置等后续再加）。
-          每个新进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个独立目录。
+          <strong>渐进式展开</strong>，不分叉就不啰嗦：
+        </p>
+        <ul>
+          <li><strong>没有支线</strong>（绝大多数情况）：一个进程就<strong>一行</strong>，直接显示进程名——<strong>主分支不另起名字，它就是这个进程</strong>。</li>
+          <li><strong>开了支线后</strong>：这一行下方<strong>缩进</strong>挂出支线行（带 <code>⤷</code> 标记），显示<strong>创建时起的支线名</strong>。一层为止，不做无限树。</li>
+        </ul>
+        <p>
+          列表只保留<strong>圆点 + 名字</strong>，存档点 / 进度树 / 开支线都不挤进来，移到<a href="#conversation">对话区标题栏</a>。
+          <strong>新建进程</strong>：点顶部 ＋ 填个名称，是 <code>~/.aprog/&lt;pid&gt;/</code> 下一个独立目录。
         </p>
         <p>
-          列表里<strong>也包含别人分享给你的进程</strong>（进程与用户<a href="#share">一对多</a>），可加一个小标记区分「我创建的 / 共享给我的」与角色（可写 / 只读）。
+          列表里<strong>也包含别人分享给你的分支</strong>（<a href="#share">分享下沉到分支</a>），可加小标记区分「我创建的 / 共享给我的」与角色（可写 / 只读）。
         </p>
 
         <h2 id="states">进程两态：运行与休眠</h2>
@@ -112,10 +119,15 @@
           harness 产出的东西归为三类：<strong>思考流</strong>、<strong>工具调用</strong>、<strong>回复</strong>，加上用户消息。
           这些事件如何从引擎流到这里，见 <a href="protocol.html">事件协议与会话</a>。
         </p>
+        <p>
+          标题栏承载这条分支的元信息：<strong>状态点 + 名字 + 程序版本 + 当前存档点 chip + 进度树按钮 + 休眠/唤醒 + 协作者 + 分享</strong>。其中：
+        </p>
         <ul>
           <li><strong>输入框</strong>：Enter 发送，Ctrl+Enter 换行，无发送按钮、无提示语。</li>
           <li><strong>打开文件</strong>时主区顶部才出现标签栏：第一个标签是“对话”，其余是只读文件标签。</li>
-          <li><strong>分享按钮</strong>：头部一个 <strong>⤴ 分享</strong>（仅 owner 可见），点开<a href="#share">分享面板</a>。</li>
+          <li><strong>当前存档点 chip</strong>（<code>⬤ 某存档点 · 进行中</code>）：点开是这条分支的<strong>存档点切换器</strong>（只读跳转查看 / 开支线 / 看进度树）。</li>
+          <li><strong>进度树按钮</strong>（标准 git-branch 字形）：一键直达整棵<a href="#branches">进度树</a>，看全部分支。</li>
+          <li><strong>分享按钮</strong>（仅 owner 可见）：分享的是<strong>这条分支</strong>，见 <a href="#share">分享面板</a>。</li>
           <li><strong>只读成员</strong>：以 <em>viewer</em> 身份进来的人，<strong>输入框、[允许]/[拒绝]、打断都禁用</strong>，只能看。</li>
         </ul>
 
@@ -130,9 +142,30 @@
           支持语法高亮；子目录默认只展开一级，有缩进引导线，文件夹开/合图标不同。
         </p>
 
-        <h2 id="share">共享与分享管理</h2>
+        <h2 id="branches">分支与进度树</h2>
         <p>
-          进程可分享给别人，<strong>一对多</strong>。分享是 <strong>owner 专属</strong>的能力，分两档权限：
+          进程历史不是一条线，而是一棵<strong>树</strong>：在任意<strong>存档点</strong>可以<strong>开一条支线</strong>去试别的走法，主线不受影响。底层是给<a href="state.html#branches">进程目录做版本化</a>，
+          但<strong>界面全程不出现 git 术语</strong>——只说 存档点 / 主线 / 支线 / 进行中 / 进度树。
+        </p>
+        <ul>
+          <li><strong>存档点</strong>：程序在语义一致处自己 mark 的点（可带 label），是合法续点。一条分支有自己<strong>线性</strong>的存档点历史。</li>
+          <li><strong>开支线</strong>：从某存档点岔出一条独立执行线，<strong>创建时起名</strong>（主分支不起名、就是进程名）。新支线即出现在<a href="#proclist">列表</a>缩进处。</li>
+          <li><strong>倒带到某存档点</strong>（回到此处）：<strong>毁灭性</strong>，放弃其后进度，需二次确认。</li>
+        </ul>
+        <p>
+          <strong>进度树</strong>用 <strong>gitgraph 形态</strong>呈现：竖向时间轴，每条分支一条<strong>彩色泳道</strong>，存档点是<strong>圆点</strong>，支线从父存档点<strong>曲线岔出</strong>，存档点按时间跨泳道交错。
+          <strong>无外框</strong>——分支再多也清爽。顶部一排<strong>分支名 chip</strong>（gitgraph legend）：点某条分支名，<strong>只高亮它及其祖先、其余淡出</strong>，即按分支筛选查看各存档点。
+        </p>
+        <div class="note">
+          <span class="note-label">从任何分支都能看全貌</span>
+          进度树属于<strong>进程（整棵版本树）</strong>，不属于某条分支——不管你站在哪条分支，标题栏的进度树按钮打开的都是<strong>同一份全貌</strong>，只是「你在这」高亮在当前分支。
+          唯一例外：<strong>被分享进来的分支</strong>（你是 sharee）只看到它那条线 + 岔开前的共享祖先，看不到没分享给你的兄弟支线。
+        </div>
+
+        <h2 id="share">分享：下沉到分支</h2>
+        <p>
+          分享的<strong>原子单位是「分支」</strong>，不是整个进程——你真正协作的是一条带活对话的执行线。「分享进程」会有歧义（哪条分支？）。
+          分享一条分支 = 给对方<strong>这条执行线的对话 + 状态 + 它自己的存档点历史</strong>（含岔开前的共享祖先），但看不到兄弟支线。分两档权限：
         </p>
         <div class="tbl-wrap">
           <table>
@@ -145,11 +178,15 @@
           </table>
         </div>
         <ul>
-          <li><strong>分享面板</strong>（点对话区 ⤴ 分享）：列出<strong>已分享给谁、各是什么角色</strong>，可加人（选 editor/viewer）、切换角色、移除——owner 在这里<strong>统一管理</strong>一个进程的所有共享。</li>
-          <li><strong>对方无需接收</strong>：分享后直接出现在对方的<a href="#proclist">进程列表</a>里，不用同意；但对方会在<a href="#notify">消息中心</a>收到一条「X 把进程分享给你」。</li>
+          <li><strong>分享面板</strong>（点对话区 ⤴ 分享）：列出<strong>这条分支已分享给谁、各是什么角色</strong>，可加人（选 editor/viewer）、切换角色、移除——owner 在这里<strong>统一管理</strong>。同进程的其它分支<strong>不受影响</strong>。</li>
+          <li><strong>对方无需接收</strong>：分享后这条分支直接出现在对方的<a href="#proclist">列表</a>里，不用同意；但对方会在<a href="#notify">消息中心</a>收到一条「X 把分支分享给你」。</li>
           <li><strong>随时改 / 撤</strong>：owner 可把 editor 降成 viewer、或移除；被移除后对方列表里这条立即消失。</li>
           <li><strong>被共享方不能再分享</strong>：只有 owner 看得到分享按钮。</li>
         </ul>
+        <div class="note warn">
+          <span class="note-label">待定 · sharee 开支线归谁</span>
+          被分享方（editor）若<strong>从这条分支再开支线</strong>，新支线落在同一个进程（版本树）里——但它<strong>归谁所有</strong>、能不能反过来分享，是分享 × 分支交叉出来的开放问题（倾向：新支线继承进程 owner，sharee 只在其上有 editor 权）。尚未定。
+        </div>
         <div class="note">
           <span class="note-label">底层为什么简单</span>
           所有用户的输入都先到控制平面再下发沙箱，<strong>底层 harness 不区分谁发的</strong>（都算「用户」）。所以多人同写不需要复杂协调，详见 <a href="api.html#sharing">控制平面 API · 共享与权限</a>。

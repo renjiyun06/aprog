@@ -10,6 +10,137 @@ import { auth } from '../stores/auth';
 type ShareRole = 'editor' | 'viewer';
 interface Member { userId: string; name: string; role: ShareRole; }
 
+/* ── branch + checkpoint model (demo / mock) ───────────────────────────
+   列表的单位是「分支」(执行线)，不是进程。进程只是分组——一个被版本化的
+   进程目录。每条分支有自己的线性「存档点」历史；从某个存档点可以岔出新分支
+   去试别的方向，主线/支线各自独立运行。底层用版本化进程目录实现，但 UI 里
+   不出现任何 git 术语 (main / branch / commit …)。 */
+interface Checkpoint { id: string; label: string; ago: string; order: number; }
+interface Branch {
+  id: string;
+  name: string;            // 主线 / 支线 · xxx
+  isMain: boolean;
+  dot: 'running' | 'hibernating';
+  current: string;         // 当前存档点 label
+  live: boolean;           // 有未存档的进行中进度
+  forkFromLabel?: string;  // 支线：从哪个存档点岔开
+  checkpoints: Checkpoint[];
+}
+interface Family { process: string; branches: Branch[]; }
+
+/* one showcase family with a real fork (acme); other procs fall back to a
+   single 主线 derived from the proc (see familyFor). */
+const FAMILY: Record<number, Family> = {
+  4102: {
+    process: 'acme · 官网重设计',
+    branches: [
+      { id: 'b-main', name: '主线', isMain: true, dot: 'running', current: 'hero 调暖', live: true,
+        checkpoints: [
+          { id: 'k7', label: 'hero 调暖', ago: '2 分钟前', order: 70 },
+          { id: 'k6', label: '定价 3 档', ago: '1 小时前', order: 60 },
+          { id: 'k5', label: '首屏 hero', ago: '2 小时前', order: 50 },
+          { id: 'k4', label: '选定模板 + 设计系统', ago: '3 小时前', order: 40 },
+          { id: 'k3', label: '品牌简报', ago: '昨天', order: 30 },
+        ] },
+      { id: 'b-warm', name: '激进暖色版', isMain: false, dot: 'hibernating',
+        current: '大胆配色试验', live: false, forkFromLabel: '定价 3 档',
+        checkpoints: [
+          { id: 'w2', label: '大胆配色试验', ago: '40 分钟前', order: 68 },
+          { id: 'w1', label: '从「定价 3 档」岔开', ago: '45 分钟前', order: 62 },
+        ] },
+    ],
+  },
+};
+
+function familyFor(proc: ProcInfo): Family {
+  const f = FAMILY[proc.pid];
+  if (f) return f;
+  return {
+    process: proc.name,
+    branches: [{
+      id: `b-${proc.pid}`, name: '主线', isMain: true, dot: proc.dot,
+      current: proc.dot === 'hibernating' ? '最近进度' : '进行中',
+      live: proc.dot === 'running',
+      checkpoints: [
+        { id: `${proc.pid}-c3`, label: '最近进度', ago: '刚刚', order: 30 },
+        { id: `${proc.pid}-c2`, label: '中途存档', ago: '较早', order: 20 },
+        { id: `${proc.pid}-c1`, label: '初始化', ago: '更早', order: 10 },
+      ],
+    }],
+  };
+}
+
+/* ── gitgraph layout (进度树) ─────────────────────────────────────────
+   竖向时间轴：每条分支一条彩色泳道，存档点是点，支线从父存档点曲线岔出。
+   无外框——分支多了也清爽（标准 gitgraph 形态）。 */
+const LANE_COLORS = ['#4cc2ff', '#a78bfa', '#3fb950', '#f0883e', '#ff6b9d', '#e3b341'];
+const ROW_H = 34, LANE_W = 18, PAD_T = 16, GRAPH_PAD_L = 16, DOT_R = 4.5;
+
+interface GraphNode { branchId: string; lane: number; row: number; label: string; ago: string; isLive: boolean; }
+interface GraphPath { d: string; color: string; branchId: string; }
+
+function layoutGraph(fam: Family) {
+  const lane = new Map<string, number>();
+  fam.branches.forEach((b, i) => lane.set(b.id, i)); // main is branches[0] → lane 0
+  const colorOf = (bid: string) => LANE_COLORS[(lane.get(bid) ?? 0) % LANE_COLORS.length];
+  const xOf = (l: number) => GRAPH_PAD_L + l * LANE_W;
+  const yOf = (row: number) => PAD_T + row * ROW_H + ROW_H / 2;
+
+  const nodes: GraphNode[] = [];
+  for (const b of fam.branches) {
+    const l = lane.get(b.id)!;
+    for (const c of b.checkpoints) nodes.push({ branchId: b.id, lane: l, row: 0, label: c.label, ago: c.ago, isLive: false });
+    if (b.live) {
+      const top = b.checkpoints.reduce((m, c) => Math.max(m, c.order), 0);
+      nodes.push({ branchId: b.id, lane: l, row: 0, label: '进行中', ago: '未存档', isLive: true });
+      (nodes[nodes.length - 1] as GraphNode & { order?: number }).order = top + 5;
+    }
+  }
+  // attach order for sort (live nodes carry it inline; checkpoints by lookup)
+  const orderOf = (n: GraphNode): number => {
+    if (n.isLive) return (n as GraphNode & { order?: number }).order ?? 0;
+    const b = fam.branches.find((x) => x.id === n.branchId)!;
+    return b.checkpoints.find((c) => c.label === n.label && c.ago === n.ago)?.order ?? 0;
+  };
+  nodes.sort((a, b) => orderOf(b) - orderOf(a));
+  nodes.forEach((n, i) => (n.row = i));
+  const posOf = (n: GraphNode) => ({ x: xOf(n.lane), y: yOf(n.row) });
+
+  const paths: GraphPath[] = [];
+  for (const b of fam.branches) {
+    const bn = nodes.filter((n) => n.branchId === b.id); // globally sorted → order desc within branch
+    for (let i = 0; i < bn.length - 1; i++) {
+      const a = posOf(bn[i]), c = posOf(bn[i + 1]);
+      paths.push({ d: `M${a.x} ${a.y} L${c.x} ${c.y}`, color: colorOf(b.id), branchId: b.id });
+    }
+    if (!b.isMain && b.forkFromLabel) {
+      const parent = nodes.find((n) => n.label === b.forkFromLabel && n.branchId !== b.id);
+      const oldest = bn[bn.length - 1];
+      if (parent && oldest) {
+        const p = posOf(parent), o = posOf(oldest);
+        const my = (p.y + o.y) / 2;
+        paths.push({ d: `M${p.x} ${p.y} C ${p.x} ${my}, ${o.x} ${my}, ${o.x} ${o.y}`, color: colorOf(b.id), branchId: b.id });
+      }
+    }
+  }
+  const width = GRAPH_PAD_L + fam.branches.length * LANE_W;
+  const height = PAD_T * 2 + nodes.length * ROW_H;
+  return { nodes, paths, width, height, xOf, yOf, colorOf };
+}
+
+/* the lineage of a branch = itself + ancestor branches up to the root (for filter). */
+function lineageOf(fam: Family, bid: string): Set<string> {
+  const set = new Set<string>([bid]);
+  let cur = fam.branches.find((b) => b.id === bid);
+  while (cur && !cur.isMain && cur.forkFromLabel) {
+    const parent: Branch | undefined = fam.branches.find((pb) => pb.id !== cur!.id && pb.checkpoints.some((c) => c.label === cur!.forkFromLabel));
+    if (!parent) break;
+    set.add(parent.id);
+    cur = parent;
+  }
+  return set;
+}
+
 /* ──────────────────────────────────────────────────────────────────────
    ProgramShell — the universal window body for ANY aprog program.
 
@@ -173,6 +304,14 @@ const SyncIcon: Component = () => (
     <path d="M13 7 A5 5 0 1 0 12.5 10" /><path d="M13 3.5 V7 H9.5" />
   </svg>
 );
+/* 进度树/分支图标 — 标准 git-branch 字形 (Lucide)，从 24px 缩放到 16px viewBox */
+const BranchIcon: Component = () => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10 4 a6 6 0 0 0 -6 6 V2" />
+    <circle cx="12" cy="4" r="2" />
+    <circle cx="4" cy="12" r="2" />
+  </svg>
+);
 
 /* ── recursive directory tree node (default collapsed; indent guides) ── */
 const TreeNode: Component<{
@@ -251,8 +390,6 @@ const EventView: Component<{ e: SessionEvent }> = (props) => (
   </Show>
 );
 
-const dotClass = (d: ProcInfo['dot']) => (d === 'hibernating' ? 'hibernating' : 'running');
-
 export const ProgramShell: Component<ProgramShellProps> = (p) => {
   const [spawning, setSpawning] = createSignal(false);
   const [name, setName] = createSignal('');
@@ -283,6 +420,91 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
   };
   const removeMember = (userId: string) => setMembers(members.filter((x) => x.userId !== userId));
   const setMemberRole = (userId: string, role: ShareRole) => setMembers((x) => x.userId === userId, 'role', role);
+
+  /* ── branch + checkpoint view state (demo) ── which branch of the attached
+     process is selected; which row's 存档点 switcher is open; which process's
+     进度树 overlay is open. */
+  const [activeBranchId, setActiveBranchId] = createSignal<string | null>(null);
+  const [switcherFor, setSwitcherFor] = createSignal<string | null>(null);
+  const [treeFor, setTreeFor] = createSignal<ProcInfo | null>(null);
+  const [filterBranch, setFilterBranch] = createSignal<string | null>(null);
+  /* forks created in-session (demo) merge into the proc's family so a newly
+     opened 支线 shows up immediately in the list + 进度树. */
+  const [extraForks, setExtraForks] = createStore<Record<number, Branch[]>>({});
+  const famOf = (proc: ProcInfo): Family => {
+    const b = familyFor(proc);
+    const ex = extraForks[proc.pid];
+    return ex && ex.length ? { process: b.process, branches: [...b.branches, ...ex] } : b;
+  };
+  /* 主分支没有自己的名字——它就是进程，直接用进程名；只有支线有用户起的名字。 */
+  const branchLabel = (fam: Family, b: Branch) => (b.isMain ? fam.process : b.name);
+  const activeFamily = () => { const a = activeProc(); return a ? famOf(a) : null; };
+  const activeBranch = () => {
+    const fam = activeFamily(); if (!fam) return null;
+    return fam.branches.find((b) => b.id === activeBranchId()) ?? fam.branches[0];
+  };
+
+  /* 开支线 (create branch) dialog — named at creation; forks from a checkpoint. */
+  const [forkCtx, setForkCtx] = createSignal<{ proc: ProcInfo; from: string } | null>(null);
+  const [forkName, setForkName] = createSignal('');
+  const openFork = (proc: ProcInfo, from: string) => { setForkName(''); setSwitcherFor(null); setTreeFor(null); setForkCtx({ proc, from }); };
+  const createFork = () => {
+    const ctx = forkCtx(); const nm = forkName().trim();
+    if (!ctx || !nm) return;
+    const id = `fk-${ctx.proc.pid}-${extraForks[ctx.proc.pid]?.length ?? 0}`;
+    const parentOrder = famOf(ctx.proc).branches.flatMap((b) => b.checkpoints).find((c) => c.label === ctx.from)?.order ?? 100;
+    setExtraForks(ctx.proc.pid, (prev) => [...(prev ?? []), {
+      id, name: nm, isMain: false, dot: 'hibernating', current: '未运行', live: false,
+      forkFromLabel: ctx.from,
+      checkpoints: [{ id: `${id}-0`, label: `从「${ctx.from}」岔开`, ago: '刚刚', order: parentOrder + 1 }],
+    }]);
+    p.onAttach?.(ctx.proc.pid);
+    setActiveBranchId(id);
+    setForkCtx(null);
+  };
+
+  /* a single checkpoint switcher popover for one branch (only-read 跳转查看) */
+  const checkpointSwitcher = (b: Branch, proc: ProcInfo) => (
+    <div class="ckpt-pop" onClick={(e) => e.stopPropagation()}>
+      <Show when={b.live}>
+        <div class="ckpt-item live"><span class="ckpt-dot live" /><span class="ckpt-label">进行中（未存档）</span></div>
+      </Show>
+      <For each={b.checkpoints}>{(c, i) => (
+        <div class="ckpt-item">
+          <span class="ckpt-dot" />
+          <span class="ckpt-label">{c.label}</span>
+          <Show when={i() === 0 && !b.live}><span class="ckpt-now">现在</span></Show>
+          <span class="ckpt-ago">{c.ago}</span>
+          <button class="ckpt-act" title="只读查看此存档点">查看</button>
+          <button class="ckpt-act fork" title="从这开一条支线" onClick={() => openFork(proc, c.label)}>开支线</button>
+        </div>
+      )}</For>
+      <button class="ckpt-tree-btn" onClick={() => { setSwitcherFor(null); setTreeFor(proc); }}>
+        <BranchIcon /> 看进度树
+      </button>
+    </div>
+  );
+
+
+  /* one branch row in the sidebar. grouped = rendered inside a multi-branch
+     group (shows branch name); otherwise the row IS the process (shows process
+     name) — progressive disclosure: single-branch procs look like before. */
+  /* the sidebar row stays minimal — dot + name only. 干线显示进程名、支线显示
+     自己的名字（缩进 + ⤷）. 存档点 / 进度树 / 开支线 都不在列表里，移到工作区. */
+  const branchRow = (proc: ProcInfo, fam: Family, b: Branch, grouped: boolean) => {
+    const selected = () => !!proc.active && activeBranch()?.id === b.id;
+    return (
+      <div
+        class={`sb-row clickable ${selected() ? 'active' : ''}`}
+        onClick={() => { p.onAttach?.(proc.pid); setActiveBranchId(b.id); }}
+        title={b.dot === 'hibernating' ? '休眠 · 未关联沙箱' : '运行中 · 已关联沙箱'}
+      >
+        <Show when={grouped}><span class="sb-fork-mark">⤷</span></Show>
+        <span class={`state-dot ${b.dot}`} />
+        <span class="meta-label">{grouped ? b.name : fam.process}</span>
+      </div>
+    );
+  };
 
   /* composer: Enter sends, Ctrl/Cmd+Enter (and Shift+Enter) inserts a newline */
   const [draft, setDraft] = createSignal('');
@@ -383,16 +605,23 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
           </span>
         </div>
         <div class="sb-list">
-          <For each={p.procs}>{(proc) => (
-            <div
-              class={`sb-row clickable ${proc.active ? 'active' : ''}`}
-              onClick={() => p.onAttach?.(proc.pid)}
-              title={proc.dot === 'hibernating' ? '休眠 · 未关联沙箱' : '运行中 · 已关联沙箱'}
-            >
-              <span class={`state-dot ${dotClass(proc.dot)}`} />
-              <span class="meta-label">{proc.name}</span>
-            </div>
-          )}</For>
+          <For each={p.procs}>{(proc) => {
+            const fam = famOf(proc);
+            const main = fam.branches.find((b) => b.isMain) ?? fam.branches[0];
+            const forks = fam.branches.filter((b) => !b.isMain);
+            return (
+              <div class="sb-proc">
+                {/* trunk row = the process itself (no "主线" label, just its name) */}
+                {branchRow(proc, fam, main, false)}
+                {/* forks (named at creation) indent beneath the trunk */}
+                <Show when={forks.length > 0}>
+                  <div class="sb-forks">
+                    <For each={forks}>{(b) => branchRow(proc, fam, b, true)}</For>
+                  </div>
+                </Show>
+              </div>
+            );
+          }}</For>
         </div>
         <div class="sb-resize" onPointerDown={onSidebarResize} />
       </aside>
@@ -406,6 +635,23 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
             <span class="dzt-title">{activeProc()?.name ?? p.procTitle}</span>
             <Show when={activeProc()?.version}>
               <span class="dzt-ver">v{activeProc()!.version}</span>
+            </Show>
+            <Show when={activeBranch()}>
+              <span class="dzt-ckpt-wrap">
+                <button
+                  class={`dzt-ckpt ${switcherFor() === activeBranch()!.id ? 'on' : ''}`}
+                  title="当前存档点 · 点击看存档点与进度树"
+                  onClick={() => setSwitcherFor(switcherFor() === activeBranch()!.id ? null : activeBranch()!.id)}
+                >
+                  <span class="ckpt-dot" />{activeBranch()!.current}<Show when={activeBranch()!.live}><span class="dzt-live">进行中</span></Show>
+                </button>
+                <Show when={switcherFor() === activeBranch()!.id}>
+                  <div class="dzt-ckpt-pop">{checkpointSwitcher(activeBranch()!, activeProc()!)}</div>
+                </Show>
+              </span>
+              <button class="dzt-tree" title="进度树 · 看全部分支" onClick={() => { setSwitcherFor(null); setTreeFor(activeProc()!); }}>
+                <BranchIcon />
+              </button>
             </Show>
           </span>
           <span class="dzt-right">
@@ -573,8 +819,8 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
       <Show when={shareOpen()}>
         <div class="spawn-overlay" onClick={() => setShareOpen(false)}>
           <div class="spawn-dialog share-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>分享「{activeProc()?.name ?? p.procTitle}」</h3>
-            <p class="spawn-hint">被分享的人直接进入这个进程（无需接收），并在消息中心收到通知. 只有你（owner）能分享、改权限或移除.</p>
+            <h3>分享「{(() => { const f = activeFamily(); const b = activeBranch(); return f && b ? branchLabel(f, b) : (activeProc()?.name ?? p.procTitle); })()}」</h3>
+            <p class="spawn-hint">分享的是<strong>这一条分支(执行线)</strong>，不是整个进程——同进程的其它分支不受影响. 被分享的人直接进入(无需接收)、在消息中心收到通知. 只有你(owner)能分享、改权限或移除.</p>
 
             <div class="share-add">
               <input
@@ -612,6 +858,92 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
 
             <div class="spawn-actions">
               <button class="btn primary" onClick={() => setShareOpen(false)}>完成</button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* ── 进度树 (process family) — checkpoints as nodes, forks branch off.
+           No git terms; 存档点 / 主线 / 支线 / 进行中 only. ── */}
+      <Show when={treeFor()}>
+        {(() => {
+          const fam = famOf(treeFor()!);
+          const g = layoutGraph(fam);
+          const lin = () => (filterBranch() ? lineageOf(fam, filterBranch()!) : null);
+          const dim = (bid: string) => { const s = lin(); return !!s && !s.has(bid); };
+          return (
+            <div class="spawn-overlay" onClick={() => { setTreeFor(null); setFilterBranch(null); }}>
+              <div class="spawn-dialog tree-dialog" onClick={(e) => e.stopPropagation()}>
+                <h3>{fam.process} · 进度树</h3>
+                {/* branch filter (gitgraph-style legend): click a name to view只这条线 */}
+                <div class="pt-legend">
+                  <button class={`pt-chip ${!filterBranch() ? 'on' : ''}`} onClick={() => setFilterBranch(null)}>全部</button>
+                  <For each={fam.branches}>{(b) => (
+                    <button
+                      class={`pt-chip ${filterBranch() === b.id ? 'on' : ''}`}
+                      onClick={() => setFilterBranch(filterBranch() === b.id ? null : b.id)}
+                    >
+                      <span class="pt-chip-dot" style={{ background: g.colorOf(b.id) }} />{branchLabel(fam, b)}
+                    </button>
+                  )}</For>
+                </div>
+                {/* the gitgraph: SVG lanes/dots/curves behind absolutely-placed label rows */}
+                <div class="pt-graph" style={{ height: `${g.height}px` }}>
+                  <svg class="pt-svg" width={g.width} height={g.height} style={{ flex: `0 0 ${g.width}px` }}>
+                    <For each={g.paths}>{(pa) => (
+                      <path d={pa.d} fill="none" stroke={pa.color} stroke-width="2" stroke-linecap="round" opacity={dim(pa.branchId) ? 0.12 : 1} />
+                    )}</For>
+                    <For each={g.nodes}>{(n) => (
+                      <circle
+                        cx={g.xOf(n.lane)} cy={g.yOf(n.row)} r={n.isLive ? DOT_R - 0.8 : DOT_R}
+                        fill={n.isLive ? 'var(--win-bg)' : g.colorOf(n.branchId)}
+                        stroke={g.colorOf(n.branchId)} stroke-width={n.isLive ? 1.6 : 0}
+                        stroke-dasharray={n.isLive ? '2.4 2' : ''} opacity={dim(n.branchId) ? 0.16 : 1}
+                      />
+                    )}</For>
+                  </svg>
+                  <div class="pt-rows">
+                    <For each={g.nodes}>{(n) => (
+                      <div class="pt-row" classList={{ dim: dim(n.branchId) }} style={{ top: `${g.yOf(n.row) - ROW_H / 2}px`, height: `${ROW_H}px` }}>
+                        <span class="pt-row-lbl" classList={{ live: n.isLive }}>{n.label}</span>
+                        <span class="pt-row-ago">{n.ago}</span>
+                        <Show when={!n.isLive}>
+                          <button class="pt-fork-btn" title="从这开一条支线" onClick={() => openFork(treeFor()!, n.label)}>从这开支线</button>
+                        </Show>
+                      </div>
+                    )}</For>
+                  </div>
+                </div>
+                <p class="pt-foot">点存档点旁的 <span class="pt-k">从这开支线</span> 岔一条新线；点上方分支名只看那一条；<span class="pt-k danger">回到此处</span> 会放弃其后进度(需确认).</p>
+                <div class="spawn-actions">
+                  <button class="btn primary" onClick={() => { setTreeFor(null); setFilterBranch(null); }}>关闭</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </Show>
+
+      {/* ── 开支线 (create a named branch from a checkpoint) ── */}
+      <Show when={forkCtx()}>
+        <div class="spawn-overlay" onClick={() => setForkCtx(null)}>
+          <div class="spawn-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>开支线</h3>
+            <p class="spawn-hint">从存档点「<strong>{forkCtx()!.from}</strong>」岔出一条独立的执行线去试别的方向，<strong>不影响原来那条</strong>. 主分支不用起名（它就是这个进程），支线才需要一个名字.</p>
+            <div class="spawn-field">
+              <label>支线名称</label>
+              <input
+                class="spawn-input"
+                ref={(el) => queueMicrotask(() => el.focus())}
+                value={forkName()}
+                placeholder="例如: 试无密码登录 / 激进配色"
+                onInput={(e) => setForkName(e.currentTarget.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') createFork(); if (e.key === 'Escape') setForkCtx(null); }}
+              />
+            </div>
+            <div class="spawn-actions">
+              <button class="btn" onClick={() => setForkCtx(null)}>取消</button>
+              <button class="btn primary" onClick={createFork} disabled={!forkName().trim()}>开支线</button>
             </div>
           </div>
         </div>

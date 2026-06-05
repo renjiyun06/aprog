@@ -1,23 +1,35 @@
-// Driver 抽象。常驻沙箱，是「引擎差异的吸收层」——control-plane/前端只认 @aprog/protocol。
+// Driver · 顶层编排（引擎无关）。把脊柱模块 + 一个 EngineAdapter 接起来，
+// 跑完一个进程在一次运行内的全生命周期。常驻沙箱，是「引擎差异的吸收层」——
+// control-plane / 前端只认 @aprog/protocol。
 //
-// 四项职责（见 docs/harness.html、docs/interaction.html#seq）：
-//   ① 翻译   把引擎原生事件映射成 aprog 的 turn/user/item.* 事件
-//   ② 定序   保证一次运行内事件的局部顺序；全局 seq 由 control-plane 落库时盖（driver 不盖）
-//   ③ 映射 id 取引擎稳定标识（message.id:block / tool_use.id / item_id）作 ItemId
-//   ④ 兜策略  auto-approve 审批、echo 用户输入、in-flight 快照
+// 模块构成（本会话讨论的 7 模块分解；锚点见 docs/harness.html、docs/interaction.html#schema）：
+//   Channel 链路 · Sequencer 定序 · HarnessSupervisor 进程监管
+//   · FsServer 目录服务 · BundleIO 大块 · EngineAdapter 引擎适配（唯一引擎相关）
+//   （帧路由 Dispatcher 是 Channel 的内部职责，未单列接口。）
 
-import type { Event } from '@aprog/protocol';
+import type { DriverChannel } from './channel.ts';
+import type { Sequencer } from './sequencer.ts';
+import type { HarnessSupervisor } from './supervisor.ts';
+import type { FsServer } from './fs.ts';
+import type { BundleIO } from './bundle.ts';
+import type { EngineAdapter } from './engine.ts';
 
-/** 一个引擎适配器：消费某 harness 的原生事件，产出 aprog 事件（未盖全局 seq）。 */
-export interface EngineAdapter {
-  readonly name: 'claude' | 'codex';
-  /** 启动引擎并把其事件流翻译为 aprog 事件。 */
-  run(prompt: string): AsyncIterable<Omit<Event, 'seq'>>;
+/** Driver 组装所需的全部模块。 */
+export interface DriverDeps {
+  channel: DriverChannel;
+  sequencer: Sequencer;
+  supervisor: HarnessSupervisor;
+  fs: FsServer;
+  bundle: BundleIO;
+  adapter: EngineAdapter;
 }
 
-/** Driver 把 adapter 的输出（局部有序、未盖全局 seq）经 DriverChannel 上行给 control-plane。 */
 export interface Driver {
-  attach(adapter: EngineAdapter): void;
-  /** control-plane 下发的用户输入；Driver 把它 echo 成 user 事件注入流。 */
-  submitInput(content: string): void;
+  /**
+   * 跑完整生命周期：
+   *   dial 握手 → (resume: 重放缓冲 | restore: 收 bundle 灌注) → 起 harness
+   *   → 泵事件上行 + 路由下行（input/control/fs）→ 直到连接终结
+   *     （hibernate-prepare 落末次 checkpoint 后正常断 / 意外断 = 下次唤醒恢复到上一检查点）。
+   */
+  run(): Promise<void>;
 }

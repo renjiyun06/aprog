@@ -270,12 +270,12 @@
         </div>
 
         <h3 id="s-ckpt">场景 ④ 检查点 · 休眠回流</h3>
-        <p>耐久真相靠检查点经 bulk 上行到 CP。两种触发，同一条 bulk 路径：</p>
+        <p>耐久真相靠检查点经 bulk 上行到 CP。三种触发，同一条 bulk 路径：</p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>触发</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td>自主（quiescent 点）</td><td>←</td><td><code>BundleBegin{kind:checkpoint}</code> + chunks + <code>BundleEnd</code></td><td>driver 在 <a href="state.html#checkpoint">一致点</a>自发推一份检查点；<strong>无需 Request</strong>，driver 直接开 bulk-stream。CP 收齐校验后置为新的耐久真相。</td></tr>
+              <tr><td><strong>程序 mark</strong>（checkpoint 工具）</td><td>←</td><td><code>BundleBegin{kind:checkpoint}</code> + chunks + <code>BundleEnd</code></td><td><strong>主要来源</strong>：harness 内的程序在<a href="state.html#ckpt-tool">语义一致点</a>调检查点工具 → 经 harness↔driver 传回 driver；driver 据 <strong>debounce</strong> 决定是否真推（无需 CP Request，直接开 bulk-stream）。CP 收齐校验后置为新的耐久真相。</td></tr>
               <tr><td><code>control:checkpoint-now</code></td><td>→ 然后 ←</td><td>先 <code>Reply{ok}</code>，driver 随即推 checkpoint bulk</td><td>CP 主动要一份（如分享前、迁移前）。</td></tr>
               <tr><td><code>control:hibernate-prepare</code></td><td>→ 然后 ←</td><td>driver 落最后一份 checkpoint bulk → <code>Reply{ok}</code></td><td>CP 收到 ok 后调 <a href="#resource-plane">provider.destroy</a>（A 平面，<strong>不在本连接上</strong>）→ 连接随沙箱销毁而断。这是连接的正常终点。</td></tr>
             </tbody>
