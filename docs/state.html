@@ -137,9 +137,17 @@
             <thead><tr><th>决定</th><th>归谁</th><th>怎么做</th></tr></thead>
             <tbody>
               <tr><td><strong>此刻一致吗</strong>（commit mark）</td><td>程序</td><td>调检查点工具喊一声。可能落在 turn 边界，但判据是语义、不是空闲</td></tr>
-              <tr><td><strong>现在值得真传吗</strong>（成本）</td><td>平台 / driver</td><td>对 mark 做 <strong>debounce</strong>，累计若干个才把<strong>那一刻冻结的</strong> state 子集推回 CP</td></tr>
+              <tr><td><strong>何时真捕获 + 真传</strong></td><td>平台 / driver</td><td>mark 只<strong>武装</strong>；真正捕获推迟到 <strong>harness 结束本回合回复（<code>turn.end</code>）</strong>、盘面静止时。再按 <strong>debounce</strong> 决定多久真推回 CP</td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="note warn">
+          <span class="note-label">关键 · 调用 ≠ 检查点：mark 武装，<code>turn.end</code> 才捕获</span>
+          程序调检查点工具时<strong>引擎还在跑、盘还在被写</strong>——此刻去拍快照会和正在进行的写<strong>竞态、撕裂</strong>。所以这个调用只是个 <strong>mark / 意向</strong>，
+          driver 把它挂起，<strong>等 harness 把这轮回复说完（<code>turn.end</code>、转入等待输入）</strong>、盘面 settled，才捕获——这才同时拿到<strong>语义一致（程序 mark）+ 无撕裂（回合结束）</strong>。
+          driver 是 harness 父进程、看着事件流，<code>turn.end</code> 对它是个明确信号。
+          <br><strong>安全网（兜底）</strong>：driver 还要盯 mark 之后到 <code>turn.end</code> 之间——若 agent 又调了<strong>修改性工具</strong>（write/edit/写盘的 bash，区别于只读的 read/search/list），
+          说明被 mark 标记的干净点<strong>之后又被改脏</strong>，这次<strong>不算检查点</strong>，等下一个干净的 mark。这逼出程序纪律：<strong>写在前、mark 在后、紧接着让出回合</strong>。正常程序本就该如此，安全网只抓「mark 完又乱写」。
         </div>
         <p>debounce 是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆：</p>
         <div class="tbl-wrap">
@@ -153,9 +161,8 @@
           </table>
         </div>
         <div class="note">
-          <span class="note-label">两个边角</span>
-          <strong>① 冻结点</strong>：debounce 到「第 N 个 mark 才传」，传的必须是<strong>某个 mark 的瞬时态</strong>——mark 时冻结 state/（或只在程序 idle 时传），不能半旧半新。
-          <strong>② liveness 兜底</strong>：程序若<strong>从不</strong>调工具，崩溃就全丢回 bootstrap。基线是<strong>程序责任</strong>（state 技能在 loop 纪律里要求周期性 mark）；平台<em>可选</em>在太久没 mark 时于 idle 拍一张无撕裂快照当粗兜底，但干净的点永远来自程序的 mark。
+          <span class="note-label">liveness 兜底</span>
+          程序若<strong>从不</strong>调工具，崩溃就全丢回 bootstrap。基线是<strong>程序责任</strong>（state 技能在 loop 纪律里要求周期性 mark）；平台<em>可选</em>在太久没干净 mark 时，于某个 <code>turn.end</code> 拍一张无撕裂快照当粗兜底，但干净的点永远来自程序的 mark。
         </div>
         <div class="note ok">
           <span class="note-label">休眠 = 一次 mark + 让出沙箱</span>
