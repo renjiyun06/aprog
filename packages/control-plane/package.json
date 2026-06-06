@@ -13,6 +13,6 @@
   },
   "dependencies": {
     "@aprog/protocol": "workspace:*",
-    "@daytonaio/sdk": "^0.183.0"
+    "@aprog/sandbox": "workspace:*"
   }
 }

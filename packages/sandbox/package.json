@@ -1,0 +1,24 @@
+{
+  "name": "@aprog/sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aprog 沙箱层（A 平面）：provider（运行时 create/destroy，厂商隔离）+ baker（烘镜像，按构建模型分策略），中间只用不透明 ImageRef 衔接。打镜像是构建期/CLI 的事，control-plane 运行时只消费 ImageRef。",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "aprog-bake": "./src/cli.ts"
+  },
+  "scripts": {
+    "bake": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aprog/log": "workspace:*",
+    "@daytonaio/sdk": "^0.183.0"
+  }
+}

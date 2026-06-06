@@ -12,8 +12,8 @@
 import { Daytona } from '@daytonaio/sdk';
 import type { SandboxProvider } from '../provider.ts';
 import type { ImageRef, Resources, SandboxHandle } from '../types.ts';
-import type { DaytonaConfig } from '../../config.ts';
-import { createLogger, type Logger } from '../../log.ts';
+import type { DaytonaConfig } from '../config.ts';
+import { createLogger, type Logger } from '@aprog/log';
 import {
   SandboxConfigError,
   SandboxNotFoundError,

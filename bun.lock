@@ -14,7 +14,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@aprog/protocol": "workspace:*",
-        "@daytonaio/sdk": "^0.183.0",
+        "@aprog/sandbox": "workspace:*",
       },
     },
     "packages/driver": {
@@ -24,9 +24,24 @@
         "@aprog/protocol": "workspace:*",
       },
     },
+    "packages/log": {
+      "name": "@aprog/log",
+      "version": "0.0.0",
+    },
     "packages/protocol": {
       "name": "@aprog/protocol",
       "version": "0.0.0",
+    },
+    "packages/sandbox": {
+      "name": "@aprog/sandbox",
+      "version": "0.0.0",
+      "bin": {
+        "aprog-bake": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@aprog/log": "workspace:*",
+        "@daytonaio/sdk": "^0.183.0",
+      },
     },
     "packages/web": {
       "name": "@aprog/web",
@@ -53,7 +68,11 @@
 
     "@aprog/driver": ["@aprog/driver@workspace:packages/driver"],
 
+    "@aprog/log": ["@aprog/log@workspace:packages/log"],
+
     "@aprog/protocol": ["@aprog/protocol@workspace:packages/protocol"],
+
+    "@aprog/sandbox": ["@aprog/sandbox@workspace:packages/sandbox"],
 
     "@aprog/web": ["@aprog/web@workspace:packages/web"],
 

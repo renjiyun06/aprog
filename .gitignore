@@ -6,5 +6,10 @@ dist/
 # runtime data (进程目录快照等不进 git)
 /var/lib/aprog/
 
+# secrets / local env (绝不入库：DAYTONA_API_KEY 等凭据)
+.env
+.env.*
+!.env.example
+
 # editor / os
 .DS_Store

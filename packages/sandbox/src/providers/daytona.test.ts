@@ -18,8 +18,8 @@ import {
   SandboxUnavailableError,
   SandboxValidationError,
 } from '../errors.ts';
-import { createLogger, type LogRecord } from '../../log.ts';
-import type { DaytonaConfig } from '../../config.ts';
+import { createLogger, type LogRecord } from '@aprog/log';
+import type { DaytonaConfig } from '../config.ts';
 import type { ImageRef, Resources, SandboxHandle } from '../types.ts';
 
 const cfg: DaytonaConfig = {

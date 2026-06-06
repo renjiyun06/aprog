@@ -1,0 +1,15 @@
+{
+  "name": "@aprog/log",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "结构化、分级 JSON 日志。跨子系统共用的基础设施（control-plane / sandbox / bake CLI 等），零依赖。",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

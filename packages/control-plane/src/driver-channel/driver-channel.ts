@@ -9,7 +9,7 @@
 // 落地硬约束：必须多路复用——几十 MB 的 bundle 绝不能头部阻塞实时事件流。
 
 import type { Event } from '@aprog/protocol';
-import type { SandboxHandle } from '../sandbox/index.ts';
+import type { SandboxHandle } from '@aprog/sandbox';
 
 /** 带内控制信号。 */
 export type ControlSignal = 'interrupt' | 'checkpoint-now' | 'hibernate-prepare';

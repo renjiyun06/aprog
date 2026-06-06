@@ -10,7 +10,7 @@
 import { test, expect, describe } from 'bun:test';
 import { DaytonaProvider } from './daytona.ts';
 import { SandboxError } from '../errors.ts';
-import type { DaytonaConfig } from '../../config.ts';
+import type { DaytonaConfig } from '../config.ts';
 import type { ImageRef, Resources } from '../types.ts';
 
 const RUN = !!process.env.DAYTONA_API_KEY;

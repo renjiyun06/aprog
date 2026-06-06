@@ -14,6 +14,12 @@ import type { ImageRef, Resources } from './types.ts';
  * 快照策略据此 boot→exec 安装→save。
  */
 export interface BakeSpec {
+  /**
+   * 镜像名（content-hash tag，如 `aprog-sandbox:<sha12>`）。由 bake 策略层算好传入。
+   * ImageRef-always：通常恒有值——Daytona 等无匿名镜像，且让 SandboxProvider.create 的
+   * ImageRef 契约在 dev/prod、各厂商间保持一致。可选仅为给「支持匿名构建」的策略留口子。
+   */
+  name?: string;
   /** 基础镜像，必须钉死 tag（Daytona 等不接受 latest）。 */
   base: string;
   /** 引擎运行时的安装命令（Claude Agent SDK / Codex），作为 RUN 注入。 */
@@ -32,4 +38,22 @@ export interface ImageBaker {
   readonly strategy: 'declarative' | 'dockerfile' | 'snapshot';
   /** 烘镜像，返回不透明 ImageRef 供 SandboxProvider.create 消费。 */
   bake(spec: BakeSpec): Promise<ImageRef>;
+}
+
+/**
+ * 厂商分叉接缝。declarative 策略下 Daytona / E2B / Modal 步骤顺序相同、只是 SDK 方言不同——
+ * DeclarativeBaker 持步骤骨架（厂商无关），把这 4 个动词 + finalize 交给各厂商的 ImageBuilder 实现。
+ * 详见 docs/sandbox.html#seam。
+ */
+export interface ImageBuilder {
+  /** 基础镜像。 */
+  base(image: string): void;
+  /** 一条 RUN。 */
+  run(cmd: string): void;
+  /** 把本地目录注入镜像（Daytona addLocalDir / E2B copy）。 */
+  copyDir(local: string, dest: string): void;
+  /** 环境变量。 */
+  env(vars: Record<string, string>): void;
+  /** 物化：注册/构建镜像，返回不透明 ImageRef。name 为镜像名（content-hash），res 为资源规格。 */
+  finalize(name: string | undefined, res: Resources | undefined): Promise<ImageRef>;
 }

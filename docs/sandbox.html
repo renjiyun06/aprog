@@ -23,8 +23,9 @@
         <h1>沙箱与镜像</h1>
         <p class="lead">
           沙箱是进程的临时算力——可销毁、可替换。aprog 当前用 Daytona，但从第一行代码起就把它关在一个
-          <strong>provider 抽象</strong>后面，因为之后还要接别的厂商。这页讲清楚两件事：怎么把厂商差异隔离干净，
-          以及一个 aprog 沙箱镜像里到底烘了什么、怎么烘。
+          <strong>provider 抽象</strong>后面，因为之后还要接别的厂商。整层独立成包 <code>@aprog/sandbox</code>，
+          与 control-plane / driver / protocol 平级。这页讲清楚三件事：怎么把厂商差异隔离干净、
+          一个 aprog 沙箱镜像里到底烘了什么怎么烘，以及<strong>「打镜像」为什么是构建期的事、不归运行时服务器</strong>。
         </p>
 
         <h2 id="provider">沙箱是可替换层：两半抽象</h2>
@@ -46,13 +47,49 @@
           </div>
           <div class="dgm-cap">
             运行时那半统一；烘镜像这半分流。<code>SandboxProvider</code> 不管镜像怎么来的，只认 <code>ImageRef</code>——
-            这就是厂商隔离的边界。上层（进程编排）只从 <code>sandbox/</code> 的单一出口取，永不直接 import 某个厂商。
+            这就是厂商隔离的边界。上层只从 <code>@aprog/sandbox</code> 的单一出口取，永不直接 import 某个厂商。
           </div>
         </div>
         <div class="note">
           <span class="note-label">为什么这样切</span>
           如果只抽象「运行时」而把烘镜像也塞进同一个接口，Daytona 的声明式 <code>addLocalDir</code> 和 Morph 的「跑起来再存快照」
           根本无法共用一个方法签名。把烘焙拎出去、用 <code>ImageRef</code> 解耦，运行时接口才能对几乎所有厂商保持干净。
+        </div>
+
+        <h2 id="package">包边界：谁依赖、烘焙在哪一侧</h2>
+        <p>
+          <code>@aprog/sandbox</code> 是 A 平面的全部，独立成包。它管<strong>四件事</strong>，其中前两件是<strong>运行时</strong>用的、后两件是<strong>构建期</strong>用的：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>职责</th><th>内容</th><th>何时用</th></tr></thead>
+            <tbody>
+              <tr><td><strong>provider 运行时</strong></td><td><code>SandboxProvider</code>（create/destroy）+ 各厂商实现（<code>DaytonaProvider</code> / <code>E2BProvider</code>）+ <code>DaytonaConfig</code> 等入参契约 + 沙箱错误归一（<code>SandboxError</code>）</td><td>运行时</td></tr>
+              <tr><td><strong>不透明 ImageRef</strong></td><td>运行时与烘焙之间唯一的衔接物——provider 只认它，不关心怎么烘出来的</td><td>运行时</td></tr>
+              <tr><td><strong>baker 策略</strong></td><td><code>ImageBaker</code> + <code>BakeSpec</code> + 三策略实现（declarative / dockerfile / snapshot）</td><td>构建期</td></tr>
+              <tr><td><strong>bake 政策层 + CLI</strong></td><td><code>assembleSpec</code>（意图→BakeSpec）、<code>contentHash</code>（自算 sha12）、<code>pickBaker</code>（provider→策略）、<code>bake</code>；命令行入口 <code>aprog-bake</code></td><td>构建期 / CI</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
+            <div class="node c-muted" style="min-width:150px"><span class="nt">@daytonaio/sdk · @aprog/log</span><span class="nd">厂商 SDK（下沉到此，不再污染 control-plane）+ 共享结构化日志</span></div>
+            <div class="ar"><span class="albl">依赖</span><span class="gly">→</span></div>
+            <div class="node c-sandbox" style="min-width:170px"><span class="nt">@aprog/sandbox</span><span class="nd">provider + baker + bake 政策层/CLI</span></div>
+            <div class="ar"><span class="albl">被依赖</span><span class="gly">←</span></div>
+            <div class="node c-cp" style="min-width:180px"><span class="nt">@aprog/control-plane</span><span class="nd">运行时<strong>只</strong>用 create/destroy + <code>ImageRef</code> + <code>DaytonaConfig</code> 类型（共两处 import）</span></div>
+          </div>
+          <div class="dgm-cap">
+            control-plane 依赖 <code>@aprog/sandbox</code>，但<strong>只碰运行时那一侧</strong>——耦合面收敛为两处类型 import
+            （<code>config.ts</code> 取 <code>DaytonaConfig</code>、<code>driver-channel.ts</code> 取 <code>SandboxHandle</code>），且<strong>不再直接抱厂商 SDK</strong>。
+          </div>
+        </div>
+        <div class="note ok">
+          <span class="note-label">打镜像是构建期的事，不归运行时服务器</span>
+          运行中的 control-plane 在 spawn/wake 热路径上<strong>只消费</strong>一个已烘好的命名 <code>ImageRef</code>，<strong>从不现场烘镜像</strong>。
+          prod 下镜像由 CI 调 <code>aprog-bake</code> 预烘成命名 snapshot；dev 下才 on-the-fly 现烘。
+          bake 与 provider 共用厂商 SDK 与 <code>ImageRef</code>，所以同包内聚；但由 CLI / CI 触发、而非服务器在请求里调用——
+          这正是把它从 control-plane 抽出来的理由。
         </div>
 
         <h2 id="caps">厂商分档</h2>
@@ -127,9 +164,10 @@
           </table>
         </div>
         <p>
-          aprog 主路径走 <strong>declarative</strong>（Daytona 首个实现）：镜像定义就是仓库里一段 TS、和 control-plane 同栈同类型，
-          不用自建 registry，命名 snapshot 永久缓存。代价是多语言工具的<strong>编译必须在镜像外</strong>先做完——这恰好把
-          Go/Rust/Python 的 toolchain 挡在镜像之外，更干净。流程：
+          aprog 主路径走 <strong>declarative</strong>（Daytona 首个实现）：镜像定义就是包里一段 TS、同栈同类型，
+          不用自建 registry，命名 snapshot 永久缓存。<code>BakeSpec</code> 由政策层 <code>assembleSpec</code> 组装、<code>aprog-bake</code> CLI 驱动，
+          provider 无关的那部分（base/engines/localBins/env）逐字段映射到各厂商 builder（Daytona <code>addLocalDir</code> / E2B <code>copy</code>）。
+          代价是多语言工具的<strong>编译必须在镜像外</strong>先做完——这恰好把 Go/Rust/Python 的 toolchain 挡在镜像之外，更干净。流程：
         </p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
@@ -146,6 +184,132 @@
           </div>
         </div>
 
+        <h2 id="seam">厂商分叉：策略持骨架，ImageBuilder 填方言</h2>
+        <p>
+          baker <strong>按构建模型分文件，不按厂商分</strong>——<code>declarative</code> 一个策略服务 Daytona / E2B 2.0 / Modal。
+          那同属 declarative 的几家，差异（<code>addLocalDir</code> vs <code>copy</code>、<code>snapshot.create</code> vs <code>build</code>）在哪里收？
+          答案是<strong>再下一层的 <code>ImageBuilder</code> 接缝</strong>：<code>DeclarativeBaker</code> 自己<strong>不认识任何厂商</strong>，
+          只懂 declarative 该按什么<strong>顺序</strong>拼、注入到哪个<strong>约定目录</strong>、<a href="#constraints">怎么命名</a>；
+          真正碰厂商 SDK 的，只有各自的 <code>ImageBuilder</code> 实现。
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-data" style="min-width:170px"><span class="nt">DeclarativeBaker</span><span class="nd">一份步骤骨架，厂商无关</span></div>
+            <div class="ar"><span class="albl">注入 newBuilder()</span><span class="gly">→</span></div>
+            <div class="dgm-stack tight" style="min-width:230px">
+              <div class="node c-sandbox"><span class="nt">DaytonaImageBuilder</span><span class="nd"><code>addLocalDir</code> · <code>snapshot.create</code> → id=snapshot 名</span></div>
+              <div class="node c-sandbox"><span class="nt">E2BImageBuilder</span><span class="nd"><code>copy</code> · <code>build({alias})</code> → id=template alias</span></div>
+            </div>
+          </div>
+          <div class="dgm-cap">策略横向少数几个（按模型）；厂商在每个模型内部靠「注入不同 <code>ImageBuilder</code>」纵向分叉。共性沉在骨架里复用一次。</div>
+        </div>
+        <p>接缝就是一张厂商无关的「动词表」，外加一个产出不透明 <code>ImageRef</code> 的 <code>finalize</code>：</p>
+        <pre><code>// ① 分叉接缝：厂商无关的动词表
+interface ImageBuilder {
+  base(image: string): void;
+  run(cmd: string): void;
+  copyDir(local: string, dest: string): void;
+  env(vars: Record&lt;string, string&gt;): void;
+  finalize(name: string | undefined, res: Resources): Promise&lt;ImageRef&gt;;
+}
+
+// ② 策略：只懂 declarative 的步骤顺序，不碰任何 SDK
+class DeclarativeBaker implements ImageBaker {
+  constructor(private newBuilder: () =&gt; ImageBuilder) {}   // ← 注入，不 new 具体厂商
+  async bake(spec: BakeSpec) {
+    const b = this.newBuilder();
+    b.base(spec.base);
+    for (const e of spec.engines)   b.run(e);
+    for (const d of spec.localBins) b.copyDir(d, '/opt/aprog/bin');  // 注入约定
+    for (const c of spec.commands)  b.run(c);
+    if (spec.env) b.env(spec.env);
+    return b.finalize(spec.name, spec.resources);            // 共享骨架到此为止
+  }
+}</code></pre>
+        <p>两家各填一个 <code>ImageBuilder</code>，跟自己的 provider 同文件（都碰同一套厂商 SDK）。动词逐字对应：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th><code>ImageBuilder</code> 动词</th><th>Daytona（<code>@daytonaio/sdk</code>）</th><th>E2B（<code>e2b</code> 2.0）</th></tr></thead>
+            <tbody>
+              <tr><td><code>base</code></td><td><code>Image.base(x)</code></td><td><code>Template().fromImage(x)</code></td></tr>
+              <tr><td><code>run</code></td><td><code>.runCommands(cmd)</code></td><td><code>.runCmd(cmd)</code></td></tr>
+              <tr><td><code>copyDir</code></td><td><code>.addLocalDir(local, dest)</code></td><td><code>.copy(local, dest)</code></td></tr>
+              <tr><td><code>env</code></td><td><code>.env(vars)</code></td><td><code>.setEnvs(vars)</code></td></tr>
+              <tr><td><code>finalize</code></td><td><code>snapshot.create({name, image, resources})</code> → id=snapshot 名</td><td><code>build(t, {alias:name})</code> → id=template alias</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>政策层 <code>pickBaker</code> 用一行把 provider 映射到「策略 + 对应 builder 工厂」：</p>
+        <pre><code>function pickBaker(provider: ProviderId): ImageBaker {
+  switch (provider) {
+    case 'daytona': return new DeclarativeBaker(() =&gt; new DaytonaImageBuilder());
+    case 'e2b':     return new DeclarativeBaker(() =&gt; new E2BImageBuilder());
+    case 'morph':   return new SnapshotBaker(/* … */);
+  }
+}</code></pre>
+        <div class="note ok">
+          <span class="note-label">加一家厂商有多便宜</span>
+          <strong>同模型新厂商</strong>（如 Modal，也是 declarative）= 只写一个 <code>ModalImageBuilder</code>（填那 5 个动词）+ <code>pickBaker</code> 加一行，
+          <code>DeclarativeBaker</code> 一字不改。<strong>不同模型的厂商</strong>（只收 Dockerfile）= 走 <code>DockerfileBaker</code> 那条线，与 declarative 无关。
+          这就是 <code>bakers/</code> 永远只有 3~4 个文件、不随接入厂商数膨胀的原因。
+        </div>
+        <div class="note ok">
+          <span class="note-label">落地状态：Daytona 这条已实现</span>
+          <code>ImageBuilder</code> 接缝 + <code>DeclarativeBaker</code> + <code>DaytonaImageBuilder</code> 已落代码、真实 Daytona 端到端验证通过（烘出 active snapshot 后自清理；见集成测试 <code>daytona-builder.integration.test.ts</code>）。
+          <code>DockerfileBaker</code> / <code>SnapshotBaker</code> / <code>E2BImageBuilder</code> 仍是桩。当初列的两处不对称，实现时已拍板：
+          <strong>① on-the-fly → 改为 ImageRef-always</strong>——Daytona 的 <code>snapshot.create</code> 的 <code>name</code> 必填、无匿名镜像，所以 <code>bake</code> 恒产出命名 <code>ImageRef</code>，<code>provider.create</code> 契约两家一致；dev/prod 之分退化为缓存/可变性策略。
+          <strong>② resources 归属 → 归 bake</strong>——随 <code>snapshot.create({resources})</code> 烘进 snapshot（贴 Daytona 模型）。
+        </div>
+
+        <h2 id="layout">代码组织：按「耦合对象」放实现者</h2>
+        <p>
+          <code>@aprog/sandbox</code> 的文件布局遵循一条原则：<strong>接口放包根（厂商无关契约），实现者按「它绑了谁」落目录</strong>。
+          决定一个文件难不难改、能不能脱离网络单测的，是<strong>它耦合了哪家厂商的 SDK</strong>——所以「跟你耦合的东西放一起」。
+        </p>
+        <pre><code>src/
+  ── 接口/契约（包根，厂商无关）──
+  provider.ts      SandboxProvider          (create/destroy)
+  baker.ts         ImageBaker + ImageBuilder
+  types.ts         ImageRef / Resources / SandboxHandle / ProviderId
+  errors.ts        SandboxError 体系 + mapDaytonaError
+  config.ts        DaytonaConfig 等 provider 入参契约
+
+  ── 实现者（按耦合对象分目录）──
+  providers/       ← 按厂商分（碰各家 SDK）
+    daytona.ts          DaytonaProvider       implements SandboxProvider
+    daytona-builder.ts  DaytonaImageBuilder   implements ImageBuilder   ← 注意在这
+    e2b.ts              E2BProvider           (桩)
+  bakers/          ← 按构建模型分（厂商无关策略）
+    declarative.ts      DeclarativeBaker      implements ImageBaker
+    dockerfile.ts       DockerfileBaker       (桩)
+    snapshot.ts         SnapshotBaker         (桩)
+
+  ── 装配 / 出口 ──
+  bake.ts          assembleSpec / contentHash / pickBaker / bake   （缝合两轴）
+  cli.ts           aprog-bake 入口
+  index.ts         单一公共出口</code></pre>
+        <p><code>providers/</code> 与 <code>bakers/</code> 是<strong>两条不同的分类轴</strong>，原因前文已述：运行时是 per-厂商，烘焙策略是 per-构建模型。接口 → 实现者 → 落点：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>接口</th><th>实现者</th><th>落在</th><th>为什么</th></tr></thead>
+            <tbody>
+              <tr><td><code>SandboxProvider</code></td><td><code>DaytonaProvider</code> / <code>E2BProvider</code></td><td><code>providers/&lt;厂商&gt;.ts</code></td><td>运行时 per-厂商，各自抱自己的 SDK</td></tr>
+              <tr><td><code>ImageBaker</code></td><td><code>DeclarativeBaker</code> / <code>DockerfileBaker</code> / <code>SnapshotBaker</code></td><td><code>bakers/&lt;模型&gt;.ts</code></td><td>策略 per-构建模型、厂商无关；一个 declarative 服务多家</td></tr>
+              <tr><td><code>ImageBuilder</code></td><td><code>DaytonaImageBuilder</code></td><td><strong><code>providers/</code></strong> daytona-builder.ts</td><td>名义属烘焙，但<strong>绑 Daytona SDK</strong> → 跟厂商放，不跟策略放</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">最能说明问题的一个：DaytonaImageBuilder</span>
+          按<strong>名字</strong>它是 builder、属烘焙，似乎该进 <code>bakers/</code>；按<strong>耦合</strong>它绑死 Daytona SDK，所以进 <code>providers/</code>。
+          <strong>我们按耦合放</strong>——于是 <code>bakers/declarative.ts</code> 保持一行厂商 SDK 都不碰（纯策略骨架），Daytona 的方言全锁进 <code>providers/daytona*.ts</code>。
+          <code>ImageBuilder</code> 这个<strong>接口</strong>留在 <code>baker.ts</code>（它是烘焙契约），但它的 <strong>Daytona 实现</strong>跟 Daytona 待一起。
+        </div>
+        <p>
+          两轴在装配层 <code>bake.ts</code> 的 <code>pickBaker</code> 交汇：<code>case 'daytona'</code> 取 <code>bakers/</code> 的策略、注入 <code>providers/</code> 的 builder。
+          收益：<strong>任一厂商的 SDK 改动只震荡 <code>providers/&lt;它&gt;</code>，策略与契约纹丝不动</strong>。
+        </p>
+
         <h2 id="constraints">约束与版本</h2>
         <p>下面几条来自 Daytona 文档实证，必须内化进设计（不是假设）：</p>
         <ul>
@@ -155,9 +319,9 @@
           <li><strong>镜像大小 / 注入 context 上限 Daytona 未公布</strong>——capability binary 多了镜像会变大，得早测。</li>
         </ul>
         <div class="note ok">
-          <span class="note-label">dev / prod 对称</span>
-          dev 期 <code>daytona.create({ image })</code> <strong>on-the-fly</strong> 构建（24h 缓存），改完工具重跑即生效、不注册 snapshot；
-          prod 才 <code>snapshot.create</code> 按 content-hash 命名注册<strong>永久 snapshot</strong>，可复现、冷启动稳。这和 driver 的 dev/prod 烘法完全对称。
+          <span class="note-label">命名：ImageRef-always</span>
+          <code>BakeSpec.name</code> <strong>恒有值</strong>（<code>aprog-sandbox:&lt;sha12&gt;</code>，由 <code>contentHash</code> 自算）——Daytona 无匿名镜像，且让 <code>provider.create</code> 的 <code>ImageRef</code> 契约统一。
+          <code>snapshot.create</code> 据此注册命名 snapshot，可复现、冷启动稳。<strong>dev/prod 不在「有没有 name」</strong>，而在缓存/可变性策略：同一 content-hash 重烘即<strong>幂等覆盖</strong>，prod 视作不可变。
         </div>
         <div class="note warn">
           <span class="note-label">版本握手</span>
