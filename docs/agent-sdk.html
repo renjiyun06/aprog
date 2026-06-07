@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Agent SDK 事件模型 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="agent-sdk">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">协议与会话</div>
+        <h1>Claude Agent SDK 事件模型</h1>
+        <p class="lead">
+          <a href="protocol.html">事件流协议</a>是 engine-neutral 的抽象；这页是它落在 <strong>Claude Agent SDK</strong>
+          上的<strong>地面真相</strong>——SDK 到底吐什么、字段叫什么、哪些是稳定标识。Driver 正是把这套原生事件归一成
+          aprog 事件流的那一层（映射汇总见 <a href="harness.html#claude">Harness 适配 · Claude</a>，这里给出它依赖的全部底层细节）。
+        </p>
+        <div class="note">
+          <span class="note-label">两层 API,别混</span>
+          Agent SDK(TS 包 <code>@anthropic-ai/claude-agent-sdk</code>)的 <code>query()</code> 在外层吐
+          <strong>SDKMessage</strong>;开了逐字流式后,它把<strong>原生 Messages API 流事件</strong>(<code>message_start</code>/<code>content_block_delta</code>…)
+          原样裹在 <code>stream_event</code> 里透出来。aprog 的 <code>item.*</code> 增量几乎全来自后者。本页字段以 TS SDK 为准(见 <a href="#version">版本</a>)。
+        </div>
+
+        <h2 id="version">用哪个包 / 哪个版本</h2>
+        <p>aprog 固定用 <strong>TypeScript</strong> 版 Agent SDK。一句话锁定:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>包</th><th>是什么</th><th>版本(2026-06-06 查)</th></tr></thead>
+          <tbody>
+            <tr><td><code>@anthropic-ai/claude-agent-sdk</code> ✅</td><td><strong>本页说的 Agent SDK</strong>(<code>query()</code> / <code>canUseTool</code> / 流事件)</td><td>latest <strong>0.3.167</strong>(单一 <code>0.3.x</code> 线;<code>dist-tags.latest = next = 0.3.167</code>)——<strong>用这个</strong></td></tr>
+            <tr><td><code>@anthropic-ai/claude-code</code></td><td>Claude Code <strong>CLI</strong>(SDK 早期曾并在此名下,现已分家)</td><td>2.1.167 —— 不是 SDK,别装错</td></tr>
+            <tr><td><code>@anthropic-ai/sdk</code></td><td>基础 <strong>Messages API</strong> SDK(更底层,Agent SDK 之下)</td><td>0.101.0 —— 不同物,别混</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok">
+          <span class="note-label">没有"多版本"分叉,只有改过名</span>
+          Agent SDK 只有一条 <code>0.3.x</code> 主线(2025-09-27 首发,持续高频小版本到 0.3.167)。所谓"多个版本"是历史<strong>改名</strong>:它早期叫
+          <code>@anthropic-ai/claude-code</code>,后来那个名字归了 CLI,SDK 独立成 <code>@anthropic-ai/claude-agent-sdk</code>。
+          版本演进只在 <a href="#sources">CHANGELOG</a> 里(无文档分版);唯一的版本门槛提示是 <code>extractFromBunfs()</code> 需 <code>v0.3.144+</code>。
+          依赖固定到 <strong>latest(当前 0.3.167)</strong>;<code>0.3.x</code> 迭代快,升级前对一下官方 TS 参考。
+        </div>
+        <p>官方文档里那张「<strong>几个版本</strong>」其实是<strong>四种用 Claude 构建的面</strong>(不是 SDK 的版本号)——别搞混。aprog 是「自托管版 Managed Agents」:自己出 sandbox,sandbox 内引擎用 <strong>Agent SDK</strong>:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>面</th><th>是什么</th><th>包 / 接口</th><th>agent loop 谁跑</th></tr></thead>
+          <tbody>
+            <tr><td>Client SDK</td><td>裸 Messages API,<strong>自己写 tool loop</strong></td><td><code>@anthropic-ai/sdk</code></td><td>你</td></tr>
+            <tr><td><strong>Agent SDK</strong> ✅</td><td>库,内置 agent loop + 工具执行,跑在你进程里</td><td><code>@anthropic-ai/claude-agent-sdk</code></td><td>SDK(你进程内)</td></tr>
+            <tr><td>Claude Code CLI</td><td>同一引擎,交互式命令行</td><td><code>@anthropic-ai/claude-code</code></td><td>CLI</td></tr>
+            <tr><td>Managed Agents</td><td>托管 REST API,Anthropic 跑 loop + sandbox</td><td>REST <code>/v1/sessions</code></td><td>Anthropic</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="query"><code>query()</code> 与 SDKMessage 顶层信封</h2>
+        <p>
+          入口是 <code>query({ prompt, options })</code>,返回一个异步迭代器 <code>AsyncGenerator&lt;SDKMessage&gt;</code>。每条消息按 <code>type</code> 字段判别:
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>type</code></th><th>何时出现</th><th>字段(名 : 类型)</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>system</code></td>
+              <td>会话开头一次(<code>subtype:"init"</code>);上下文压实时(<code>subtype:"compact_boundary"</code>)</td>
+              <td><code>type</code>、<code>subtype:"init"|"compact_boundary"</code>、<code>session_id:string</code>、<code>uuid:string</code>。<code>init</code> 另带本次会话元信息:<code>model</code>、<code>cwd</code>、<code>tools:string[]</code>、<code>permissionMode</code>、<code>mcp_servers</code>、<code>slash_commands</code> 等;<code>compact_boundary</code> 另带 <code>compact_metadata:{ trigger:"manual"|"auto", pre_tokens:number }</code></td>
+            </tr>
+            <tr>
+              <td><code>assistant</code></td>
+              <td>每条助手消息<strong>完成后</strong>(coalesced 全量)</td>
+              <td><code>type</code>、<code>message:BetaMessage</code>(内含 <code>id:string</code>、<code>role:"assistant"</code>、<code>content:ContentBlock[]</code>、<code>model:string</code>、<code>stop_reason</code>、<code>usage</code>)、<code>parent_tool_use_id:string|null</code>、<code>session_id:string</code>、<code>uuid:string</code></td>
+            </tr>
+            <tr>
+              <td><code>user</code></td>
+              <td>用户输入,以及<strong>工具结果回灌</strong>(SDK 把 <code>tool_result</code> 当 user 消息送回)</td>
+              <td><code>type</code>、<code>message</code>(<code>role:"user"</code>、<code>content</code> 可含 <code>tool_result</code> 块)、<code>parent_tool_use_id:string|null</code>、<code>session_id:string</code>、<code>uuid:string</code></td>
+            </tr>
+            <tr>
+              <td><code>stream_event</code></td>
+              <td>逐字增量,<strong>仅</strong>在 <code>includePartialMessages</code> 开启时</td>
+              <td><code>type</code>、<code>event:BetaRawMessageStreamEvent</code>(原生流事件,见 <a href="#raw">内层</a>)、<code>parent_tool_use_id:string|null</code>、<code>session_id:string</code>、<code>uuid:string</code></td>
+            </tr>
+            <tr>
+              <td><code>result</code></td>
+              <td>整次 <code>query()</code> <strong>收尾一次</strong></td>
+              <td><code>type</code>、<code>subtype:"success"|"error_max_turns"|"error_during_execution"</code>、<code>is_error:boolean</code>、<code>num_turns:number</code>、<code>duration_ms:number</code>、<code>total_cost_usd:number</code>、<code>usage:{ input_tokens, output_tokens, cache_creation_input_tokens?, cache_read_input_tokens? }</code>、<code>result:string</code>(仅 success)、<code>session_id:string</code>、<code>uuid:string</code></td>
+            </tr>
+          </tbody>
+        </table></div>
+        <div class="dgm-cap" style="margin-top:.4rem">
+          TS 类型名:<code>SDKSystemMessage</code> / <code>SDKAssistantMessage</code> / <code>SDKUserMessage</code> / <code>SDKPartialAssistantMessage</code>(即 <code>stream_event</code>)/ <code>SDKResultMessage</code>;
+          压实边界另有独立的 <code>SDKCompactBoundaryMessage</code>(<code>type:"compact_boundary"</code>)。
+        </div>
+
+        <h2 id="partial">逐字流式:<code>includePartialMessages</code> 与 stream_event</h2>
+        <p>
+          不开 partial,<code>query()</code> 只在每条助手消息<strong>完成后</strong>吐一条 <code>assistant</code>——没有"正在打字"。
+          开了之后,SDK 额外吐 <code>stream_event</code>,其 <code>.event</code> 就是原生 Anthropic 流事件本体。两者并存:
+        </p>
+        <ul>
+          <li><strong>实时</strong>取自 <code>stream_event</code> 流(细到 token)——喂 aprog 的 <code>item.delta</code>;</li>
+          <li><strong>权威全量</strong>取自随后的 <code>assistant</code> 消息(已 coalesced)——喂 aprog 的 <code>item.end</code>,<strong>不靠拼 delta</strong>。</li>
+        </ul>
+        <pre><code>// TS:同一次 query 里两类消息交替到达
+for await (const m of query({ prompt, options: { includePartialMessages: true } })) {
+  if (m.type === "stream_event") handleRaw(m.event);   // 逐字增量
+  else if (m.type === "assistant") finalize(m.message); // 权威定稿
+  else if (m.type === "result")    closeTurn(m);        // 用量收尾
+}</code></pre>
+
+        <h2 id="raw">原生 Messages API 流事件序列</h2>
+        <p><code>stream_event.event</code> 严格遵循 Anthropic Messages API 的 SSE 顺序。一条助手消息的事件骨架:</p>
+        <pre><code>message_start            → { message: { id:"msg_…", role, content:[], usage } }
+  content_block_start    → { index:0, content_block:{ type:"text"|"thinking"|"tool_use", … } }
+  content_block_delta*   → { index:0, delta:{ type:"text_delta", text:"…" } }
+  content_block_stop     → { index:0 }
+  content_block_start    → { index:1, content_block:{ type:"tool_use", id:"toolu_…", name, input:{} } }
+  content_block_delta*   → { index:1, delta:{ type:"input_json_delta", partial_json:"{\"q\":" } }
+  content_block_stop     → { index:1 }
+message_delta            → { delta:{ stop_reason }, usage:{ output_tokens } }   // output_tokens 是累计
+message_stop             → {}</code></pre>
+        <div class="dgm-cap" style="margin-top:.4rem">
+          还可能穿插 <code>ping</code>(保活,忽略)与 <code>error</code>(如 <code>overloaded_error</code>)。<strong>完成边界</strong>:
+          <code>content_block_stop</code> 收一个块、<code>message_stop</code> 收整条消息——直接对应 aprog 的 item 结束 / turn 结束。
+        </div>
+        <p>逐个原生事件的字段:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>事件</th><th>字段</th></tr></thead>
+          <tbody>
+            <tr><td><code>message_start</code></td><td><code>type</code>、<code>message:{ id:string, type:"message", role:"assistant", model:string, content:[], stop_reason:null, stop_sequence:null, usage:{ input_tokens, output_tokens, … } }</code></td></tr>
+            <tr><td><code>content_block_start</code></td><td><code>type</code>、<code>index:number</code>、<code>content_block</code>(按类型分三种,见下表)</td></tr>
+            <tr><td><code>content_block_delta</code></td><td><code>type</code>、<code>index:number</code>、<code>delta</code>(四种之一,见 <a href="#delta">四种 delta</a>)</td></tr>
+            <tr><td><code>content_block_stop</code></td><td><code>type</code>、<code>index:number</code></td></tr>
+            <tr><td><code>message_delta</code></td><td><code>type</code>、<code>delta:{ stop_reason:string, stop_sequence:string|null }</code>、<code>usage:{ output_tokens:number }</code>(<strong>累计值</strong>)</td></tr>
+            <tr><td><code>message_stop</code></td><td><code>type</code>(无其它字段)</td></tr>
+            <tr><td><code>ping</code> / <code>error</code></td><td><code>ping</code>:仅 <code>type</code>;<code>error</code>:<code>type</code>、<code>error:{ type:string, message:string }</code></td></tr>
+          </tbody>
+        </table></div>
+        <p><code>content_block_start.content_block</code> 按 <code>type</code> 分三类(这是 aprog item_type 的来源):</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>content_block.type</code></th><th>字段</th><th>对应 aprog 项</th></tr></thead>
+          <tbody>
+            <tr><td><code>text</code></td><td><code>type</code>、<code>text:""</code>(起始为空,靠 <code>text_delta</code> 填)</td><td><code>reply</code></td></tr>
+            <tr><td><code>thinking</code></td><td><code>type</code>、<code>thinking:""</code>、<code>signature:""</code></td><td><code>thinking</code></td></tr>
+            <tr><td><code>tool_use</code></td><td><code>type</code>、<code>id:"toolu_…"</code>、<code>name:string</code>、<code>input:{}</code>(起始为空,靠 <code>input_json_delta</code> 填)</td><td><code>tool</code>——Driver 再据 <code>name</code> 细分:Bash→<code>command</code>、Edit/Write→<code>file_change</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="delta">四种 delta 载荷</h2>
+        <p>每个 <code>content_block_delta</code> 按 <code>delta.type</code> 判别,载荷各不相同:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>delta.type</code></th><th>载荷字段</th><th>用途 / 对应 aprog patch</th></tr></thead>
+          <tbody>
+            <tr><td><code>text_delta</code></td><td><code>text: string</code></td><td>回复正文增量 → <code>reply</code> 项的 <code>{kind:"text"}</code></td></tr>
+            <tr><td><code>thinking_delta</code></td><td><code>thinking: string</code></td><td>思考增量 → <code>thinking</code> 项的 <code>{kind:"text"}</code></td></tr>
+            <tr><td><code>input_json_delta</code></td><td><code>partial_json: string</code></td><td>工具入参的 JSON <strong>分片</strong>(非对象!需累计到 <code>content_block_stop</code> 再 parse) → <code>tool</code> 项的 <code>{kind:"tool_args"}</code></td></tr>
+            <tr><td><code>signature_delta</code></td><td><code>signature: string</code></td><td>思考块的完整性签名,在思考块 <code>stop</code> 前给出;<strong>非正文</strong>,随定稿保留即可</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note warn">
+          <span class="note-label">thinking 默认可能为空</span>
+          较新 Opus 默认 <code>thinking.display:"omitted"</code>——块结构照旧出现,但 <code>thinking_delta</code> 的文本为空,只剩 <code>signature_delta</code>。
+          要实时展示推理,Driver 侧需把 <code>display</code> 设为 <code>"summarized"</code>(见 <a href="#sources">资料来源</a>)。
+        </div>
+
+        <h2 id="ids">三个标识:把 delta 折成一条的锚</h2>
+        <p>aprog 的 <code>id</code>(逻辑分组)直接取自 SDK 的稳定标识。三者各管一段:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>SDK 标识</th><th>出处</th><th>性质 / aprog 用法</th></tr></thead>
+          <tbody>
+            <tr><td><code>message.id</code></td><td><code>message_start.message.id</code>(<code>msg_…</code>),在 partials 与最终 <code>assistant</code> 间<strong>稳定</strong></td><td>把整条消息的事件锚到一起;是 delta↔定稿的身份桥</td></tr>
+            <tr><td><code>index</code></td><td>每个 <code>content_block_*</code> 上的 0 基序号,同一块的所有 delta <strong>不变</strong></td><td>区分一条消息里的多个块;aprog 用 <code>message.id:index</code> 作 thinking/reply 项的 <code>id</code></td></tr>
+            <tr><td><code>tool_use.id</code></td><td><code>content_block_start.content_block.id</code>(<code>toolu_…</code>)</td><td>工具调用的稳定引用;aprog <code>tool</code> 项直接用它作 <code>id</code>,并据此把后续 <code>tool_result</code> 回挂</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok">
+          <span class="note-label">seq 不来自 SDK</span>
+          SDK 只保证<strong>一次运行内</strong>的到达顺序,<strong>没有</strong>跨生命周期的全局序号。aprog 的 <code>seq</code> 由 control-plane 落库时盖
+          (单调、跨沙箱/休眠连续)——这正是"流归进程不归沙箱"在适配层的体现,详见 <a href="protocol.html#stream">事件流协议</a> 与 <a href="interaction.html#seq">沙箱交互界面 · seq</a>。
+        </div>
+
+        <h2 id="tools">工具生命周期与 canUseTool 审批回调</h2>
+        <p>一次工具调用在流上分两段,跨越两条 SDK 消息:</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-driver"><span class="nt">① 模型发起(assistant 流内)</span><span class="nd"><code>content_block_start</code> type=<code>tool_use</code>(带 <code>id</code>/<code>name</code>)→ <code>input_json_delta</code>* 累计入参 → <code>content_block_stop</code></span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-cp"><span class="nt">② 结果回灌(下一条 user 消息)</span><span class="nd"><code>user</code> 消息里的 <code>tool_result</code> 块,按 <code>tool_use_id</code> 对应回 ① 的调用。内置工具(Bash/Read/Edit)同理</span></div>
+          </div>
+          <div class="dgm-cap">所以 aprog <code>tool</code> 项的 <code>result</code> 不来自模型流,而来自这条回灌的 <code>user</code> 消息——Driver 按 <code>tool_use_id</code> 挂回同一项。</div>
+        </div>
+        <p>
+          执行前,SDK 可走 <strong>permission 回调</strong> <code>canUseTool</code> 征询是否放行:
+        </p>
+        <pre><code>// TS 签名
+async function canUseTool(
+  toolName: string,
+  input: Record&lt;string, any&gt;,
+  options: { signal: AbortSignal; suggestions?: PermissionUpdate[] }
+): Promise&lt;PermissionResult&gt;
+
+type PermissionResult =
+  | { behavior: "allow"; updatedInput: Record&lt;string, any&gt; }   // 可改写入参
+  | { behavior: "deny";  message: string }                       // 拒因回灌给模型</code></pre>
+        <div class="note">
+          <span class="note-label">aprog 自动放行</span>
+          产品形态<strong>自动批准</strong>一切操作:Driver 的 <code>canUseTool</code> 恒回 <code>allow</code>,审批<strong>不进 aprog 流</strong>
+          (协议里没有 allow/deny 事件)。这与 Codex 那种"审批往返"的差异,统一被 Driver 吸收——见
+          <a href="harness.html#approvals">跨 harness 裁决 · 审批</a>。
+        </div>
+
+        <h2 id="result">回合收尾:result 与 usage</h2>
+        <p>
+          一次 <code>query()</code> 以一条 <code>result</code> 收尾(<code>SDKResultMessage</code>),aprog 映射成 <code>turn.end</code>:
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>subtype</code></td><td><code>"success"</code> / <code>"error_max_turns"</code> / <code>"error_during_execution"</code> … → 连同 message <code>stop_reason</code> 归一成 <code>turn.end.stop_reason</code></td></tr>
+            <tr><td><code>usage</code></td><td><code>{ input_tokens, output_tokens, cache_creation_input_tokens?, cache_read_input_tokens? }</code> — 全程总账</td></tr>
+            <tr><td><code>total_cost_usd</code></td><td>整次运行累计成本</td></tr>
+            <tr><td><code>num_turns</code> / <code>duration_ms</code> / <code>is_error</code></td><td>回合数 / 墙钟耗时 / 是否出错</td></tr>
+          </tbody>
+        </table></div>
+        <div class="dgm-cap" style="margin-top:.4rem">
+          用量有两处:流中的 <code>message_delta.usage.output_tokens</code> 是<strong>累计</strong>(可做实时进度);
+          最终账目在 <code>result.usage</code>。aprog <code>turn.end.usage</code> 取后者。
+        </div>
+
+        <h2 id="session">会话与 resume</h2>
+        <p>
+          每条 SDK 消息带 <code>session_id</code>;SDK 自身支持续接(<code>options.resume: sessionId</code> 或 <code>options.continue</code>),
+          会话落在 <code>~/.claude/projects/&lt;cwd&gt;/&lt;session-id&gt;.jsonl</code>。
+        </p>
+        <div class="note">
+          <span class="note-label">引擎私有,不权威</span>
+          这个 <code>.jsonl</code> 是<strong>引擎私有缓存</strong>,不是 aprog 的数据源——aprog 的唯一真相是 control-plane 上那条带全局 <code>seq</code> 的流
+          (见 <a href="protocol.html#one-stream">实时与持久是同一条流</a> 与 <a href="state.html#layers">三层数据</a>)。SDK 的 resume 只在引擎层面用;
+          aprog 的跨沙箱续命靠进程目录回灌,不依赖它。
+        </div>
+
+        <h2 id="mapping">归一回 aprog</h2>
+        <p>
+          以上原生事件,Driver 全部吸收成 engine-neutral 的 aprog 事件——前端永远只认 aprog 流,不知底下是 Claude 还是 Codex。
+          完整对照表(含 Codex 并列)见 <a href="harness.html#claude">Harness 适配</a>。一句话总结 Driver 在 Claude 这条线上做的归一:
+        </p>
+        <ul>
+          <li><strong>顺序号合成</strong>:SDK 无全局 seq → control-plane 落库盖。</li>
+          <li><strong>身份归一</strong>:<code>message.id:index</code> / <code>tool_use.id</code> → aprog <code>id</code>。</li>
+          <li><strong>用户回显</strong>:SDK 流式输入<strong>不回显</strong>用户消息 → Driver 自发 <code>user</code> 事件(echo-from-stream)。</li>
+          <li><strong>审批自动</strong>:<code>canUseTool</code> 恒 allow,不进流。</li>
+          <li><strong>子代理归属</strong>:<code>parent_tool_use_id</code> → aprog 信封的可选 <code>parent</code>(前端据此折子树,见 <a href="protocol.html#shape">协议 · parent</a>)。</li>
+          <li><strong>停止原因</strong>:message <code>stop_reason</code> + <code>result.subtype</code> → <code>turn.end.stop_reason</code>。</li>
+          <li><strong>上下文压缩</strong>:<code>compact_boundary</code> → aprog <code>compaction</code> 事件(流不删减,仅如实记录)。</li>
+        </ul>
+        <div class="note ok">
+          <span class="note-label">双向覆盖已闭合</span>
+          补上 <code>parent</code> / <code>stop_reason</code> / <code>compaction</code> 后,协议对 Claude SDK <strong>双向自洽</strong>:aprog 每个事件都能从 SDK 产出;SDK 每个事件要么被覆盖,要么是配置(<code>init</code> 元信息归 <code>meta.yml</code>)/保活(<code>ping</code>)/审批(自动放行)等<strong>故意不进流</strong>的项。
+        </div>
+
+        <h2 id="sources">资料来源</h2>
+        <ul>
+          <li>Agent SDK(TS,权威):<code>code.claude.com/docs/en/agent-sdk/typescript</code></li>
+          <li>实时流式输出:<code>code.claude.com/docs/en/agent-sdk/streaming-output</code></li>
+          <li>权限与工具:<code>code.claude.com/docs/en/agent-sdk/permissions</code>、<code>…/user-input</code></li>
+          <li>会话:<code>code.claude.com/docs/en/agent-sdk/sessions</code></li>
+          <li>Messages API 流式(原生事件):<code>platform.claude.com/docs/en/build-with-claude/streaming</code></li>
+          <li>版本:<code>npm view @anthropic-ai/claude-agent-sdk</code>(本页记录于 2026-06-06,latest 0.3.167)</li>
+        </ul>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

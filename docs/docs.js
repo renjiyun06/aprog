@@ -37,6 +37,7 @@
       items: [
         { page: 'protocol',     label: '事件流协议' },
         { page: 'harness',      label: 'Harness 适配' },
+        { page: 'agent-sdk',    label: 'Claude Agent SDK 事件模型' },
       ],
     },
     {
@@ -131,6 +132,10 @@
       let activeId = heads[0].id;
       for (const h of heads) {
         if (h.getBoundingClientRect().top <= top) activeId = h.id; else break;
+      }
+      // 边界:最后一节太短时,它的 top 永远到不了阈值——滚到页面底部就强制选中末项。
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+        activeId = heads[heads.length - 1].id;
       }
       links.forEach((l) => l.classList.remove('active'));
       (byId[activeId] || []).forEach((l) => l.classList.add('active'));

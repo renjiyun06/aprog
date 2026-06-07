@@ -69,19 +69,131 @@
           产品形态<strong>自动批准</strong>引擎的所有操作，所以协议里没有 allow/deny 事件——审批由 Driver 自动应答、不进流（Codex 那种审批往返见 <a href="harness.html#approvals">Harness 适配</a>）。
         </div>
 
+        <h2 id="shape">每类的字段</h2>
+        <p>信封字段（每个事件都有）：<code>seq:number</code>（全局单调，control-plane 盖）、<code>ts:string</code>（ISO-8601，Driver 盖）、<code>parent?:ItemId</code>（子代理归属，可选，主流为空——见下）、<code>raw?:unknown</code>（引擎原始载荷，可选——见下「保真兜底」）。其余按 <code>kind</code>：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>kind</code></th><th>字段</th></tr></thead>
+          <tbody>
+            <tr><td><code>turn.start</code></td><td><code>turn:TurnId</code></td></tr>
+            <tr><td><code>user</code></td><td><code>id:ItemId</code>、<code>content:string</code></td></tr>
+            <tr><td><code>item.start</code></td><td><code>id:ItemId</code>、<code>item_type</code></td></tr>
+            <tr><td><code>item.delta</code></td><td><code>id:ItemId</code>、<code>patch:ItemPatch</code>（见下）</td></tr>
+            <tr><td><code>item.end</code></td><td><code>id:ItemId</code>、<code>value:ItemValue</code>（见下，<strong>已合并全量</strong>）</td></tr>
+            <tr><td><code>turn.end</code></td><td><code>turn:TurnId</code>、<code>stop_reason:StopReason</code>（见下）、<code>raw_stop_reason?:string</code>、<code>usage?:{ input?, output?, context_window?, extra? }</code></td></tr>
+            <tr><td><code>compaction</code></td><td><code>trigger:'auto'|'manual'</code>、<code>pre_tokens?:number</code>（引擎压缩了自己的上下文，见下）</td></tr>
+            <tr><td><code>error</code></td><td><code>severity:'fatal'|'transient'|'warning'</code>、<code>message:string</code>（见下）</td></tr>
+          </tbody>
+        </table></div>
+        <p><code>item.delta.patch</code>（delta 增量）与 <code>item.end.value</code>（end 全量）是<strong>同一个项的两种形态</strong>，按项类型一一对应：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>项类型</th><th><code>patch</code>（增量载荷）</th><th><code>value</code>（合并后全量）</th></tr></thead>
+          <tbody>
+            <tr><td><code>thinking</code></td><td><code>{ kind:"text", text }</code></td><td><code>{ item:"thinking", text, signature? }</code></td></tr>
+            <tr><td><code>reply</code></td><td><code>{ kind:"text", text }</code></td><td><code>{ item:"reply", text }</code></td></tr>
+            <tr><td><code>tool</code></td><td><code>{ kind:"tool_args", partial_json }</code></td><td><code>{ item:"tool", name, args, result? }</code></td></tr>
+            <tr><td><code>command</code></td><td><code>{ kind:"command_output", chunk }</code></td><td><code>{ item:"command", command, output, exit_code? }</code></td></tr>
+            <tr><td><code>file_change</code></td><td><code>{ kind:"file_change", diff }</code></td><td><code>{ item:"file_change", path, diff }</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="dgm-cap">权威类型见 <code>packages/protocol/src/events.ts</code> 与 <code>envelope.ts</code>。</div>
+
+        <p><code>turn.end.stop_reason</code>（<code>StopReason</code>）<strong>归一成「用户不同反应」的小集</strong>——取值粒度 = 用户会做出的不同动作的数量，不再细；引擎原词进 <code>raw_stop_reason</code>。用户关心“为什么停了”，所以建模进流：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>stop_reason</code></th><th>用户的反应</th><th>Claude 来源</th><th>Codex 来源</th></tr></thead>
+          <tbody>
+            <tr><td><code>completed</code></td><td>正常说完，轮到我</td><td><code>"end_turn"</code> / <code>"stop_sequence"</code></td><td><code>TurnComplete</code></td></tr>
+            <tr><td><code>interrupted</code></td><td>被打断/取代（中性）</td><td>用户中断</td><td><code>TurnAborted</code>：Interrupted / Replaced / ReviewEnded</td></tr>
+            <tr><td><code>limit</code></td><td><strong>可能没说完，要不要继续</strong></td><td><code>"max_tokens"</code> / <code>error_max_turns</code></td><td><code>TurnAborted</code>：BudgetLimited</td></tr>
+            <tr><td><code>refused</code></td><td>它拒答了，换个问法</td><td><code>"refusal"</code></td><td>—</td></tr>
+            <tr><td><code>error</code></td><td>它崩了</td><td><code>error_during_execution</code></td><td><code>Error</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="dgm-cap"><code>max_tokens</code> 与 <code>max_turns</code>（及 Codex 的 BudgetLimited）都塌进 <code>limit</code>——用户反应都是“撞天花板了，要不要继续”；<em>哪种</em>上限留给 <code>raw_stop_reason</code> 的调试视图。Claude 的 <code>tool_use</code> / <code>pause_turn</code> 不是回合结束（回合继续），不映射成 <code>turn.end</code>。</div>
+
+        <div class="note">
+          <span class="note-label">compaction ≠ 流的合并</span>
+          <code>compaction</code> 事件记录的是<strong>引擎压缩了它自己的上下文</strong>（context compaction），和前面说的“流的合并 / 读时投影”是两码事——<strong>事件流本身永不删减</strong>。它如实落在流里，只为让用户在历史里看到“此处之前的上下文被引擎压缩过”。取自 Claude 的 <code>compact_boundary</code> / <code>SDKCompactBoundaryMessage</code>（带 <code>trigger</code> / <code>pre_tokens</code>）。
+        </div>
+        <div class="note ok">
+          <span class="note-label">子代理：parent 字段</span>
+          每个事件信封可带可选 <code>parent:ItemId</code>——子代理（subagent）产生的事件，<code>parent</code> 指向派生它的 <strong>Agent 工具调用的 id</strong>（Claude 的 <code>parent_tool_use_id</code>）；主流（顶层 agent）事件为空。前端据此把子代理的 thinking/tool/reply 折叠成一棵<strong>子树</strong>，而不是摊平进主流。
+        </div>
+        <div class="note">
+          <span class="note-label">error 的 severity</span>
+          <code>error</code> 带严重级别，让 UI 区别对待，<strong>别把“正在重连”误报成“挂了”</strong>：<code>fatal</code> 致命、回合无法继续（红色，Codex <code>Error</code>）；<code>transient</code> 瞬时、系统正在自愈（黄色「重连中…」，Codex <code>StreamError</code>）；<code>warning</code> 继续了但需提示（黄色提示行，Codex <code>Warning</code>）。
+        </div>
+        <div class="note ok">
+          <span class="note-label">保真兜底：raw 字段，与「typed 收敛」之道</span>
+          协议要同时<strong>完美适配底层 harness</strong>（Claude / Codex）又<strong>保持自身抽象</strong>，靠的是一条生成规则：<strong>typed 字段只建模「用户该知道、且会据此行动」的东西，归一粒度 = 用户不同反应的数量；其余引擎丰富度原样进 <code>raw?:unknown</code>，携带而不建模。</strong>「完美适配」不等于「类型里建模一切」（那会毁掉抽象），而是<strong>一切都没丢</strong>——通用 UI 读 typed，高级检视器/调试/未来需求读 <code>raw</code>。Driver 在<strong>归一有损</strong>的事件（<code>item.end</code> / <code>turn.end</code> / <code>error</code> / <code>compaction</code>）上填 <code>raw</code>。用户的反应集是有限且引擎中性的（轮到我了吗 / 要不要继续 / 要担心吗 / 它怎么忘事了），贴合它，就同时贴合了所有 harness。
+        </div>
+
         <h2 id="one-stream">实时与持久是同一条流</h2>
         <p>
           这条流上既有 <strong>delta</strong>（细粒度，供“正在打字”的实时感），也有 <strong>item.end</strong>（coalesced 的完整条目）。
           所以<strong>不需要两套通道</strong>：
         </p>
         <ul>
-          <li><strong>实时</strong> = tail 流的末尾，delta 即推；</li>
-          <li><strong>持久</strong> = 流本身就是存档；老段做<strong>压实(compaction)</strong>——项完成后把它的 delta 折叠进 <code>item.end</code>、丢掉碎 delta。</li>
+          <li><strong>实时</strong> = tail 流的末尾，delta 即推 → “正在打字”；</li>
+          <li><strong>持久</strong> = <strong>原始流本身</strong>就是存档，<strong>跟进程目录一起落盘、一起持久化</strong>——<strong>不删 delta、不做破坏性压实</strong>。因为 <code>item.end</code> 已带合并全量，原始流既能逐字回放、又不增加历史读取成本（压实只是将来可选的冷段省空间优化，不改协议、可后加）。</li>
         </ul>
         <div class="note ok">
-          <span class="note-label">session.aprog.jsonl = 流的投影</span>
-          那个“干净的会话记录”不是第二份数据源，而是这条流<strong>压实后的样子</strong>（把同 id 的 delta 折叠成完整条目）。它可由流随时重建，留它只是为了给人/agent 省去每次折叠的开销。删了不丢信息。详见 <a href="state.html#layers">三层数据</a>。
+          <span class="note-label">session.aprog.jsonl = 流的读时投影</span>
+          那个“干净的会话记录”不是第二份数据源，而是把这条流<strong>合并后的样子</strong>（丢 delta、每个 <code>id</code> 取 <code>item.end</code>）。它由原始流<strong>随时按需重建</strong>，不必落地；留它只为给人/agent 省去每次折叠的开销。删了不丢信息。详见 <a href="state.html#layers">三层数据</a>。
         </div>
+
+        <h2 id="merge">合并：看历史给完整态，实时才打字</h2>
+        <p>
+          这条 delta 流<strong>可合并</strong>，因为每个 <code>patch</code> 都是对<strong>单个 <code>id</code> 缓冲区的追加</strong>（append-only）——没有乱序、没有冲突，合并就是顺序拼接，纯函数：
+        </p>
+        <ul>
+          <li><code>text</code> / <code>command_output</code> / <code>file_change</code>：直接<strong>拼接</strong>；</li>
+          <li><code>tool_args</code>：拼接 <code>partial_json</code> 分片，末尾一次 <code>JSON.parse</code>。</li>
+        </ul>
+        <p>更省事的是：<code>item.end.value</code> <strong>本身就是合并后的全量</strong>，所以<strong>已完成的项根本不用自己折叠</strong>——直接取 <code>value</code>。于是同一条流支持两种读法：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>读法</th><th>怎么读</th><th>呈现</th></tr></thead>
+          <tbody>
+            <tr><td>实时 attach</td><td>tail：<code>item.delta</code> 即推，<code>item.end</code> 到了定稿替换</td><td>逐字“打字”</td></tr>
+            <tr><td><strong>看历史（如休眠进程）</strong></td><td>丢 <code>turn.*</code> / <code>item.start</code> / <code>item.delta</code>，每个 <code>id</code> 只取 <code>item.end.value</code>，连同 <code>user</code> 按 <code>seq</code> 排</td><td><strong>直接给合并后的完整记录，不打字</strong></td></tr>
+          </tbody>
+        </table></div>
+        <div class="dgm-cap">休眠进程被打开 → control-plane 从持久化的原始流回放 → 历史段全是已合并的 <code>item.end</code>（看历史不打字）；用户若继续 attach 实时，只有尾部那个未完成项才回到 delta 播放。<code>seq</code> 保证所有界面拿到<strong>同一顺序</strong>。</div>
+
+        <h2 id="example">一个完整示例：一轮交互</h2>
+        <p>把上面所有概念串起来——用户问“为什么登录偶尔失败？”，引擎想一下、跑一次 Grep、再回复。<strong>线上的原始流</strong>（持久化落盘的就是它，逐字 delta 全在）：</p>
+        <pre><code>{"seq":41,"ts":"…","kind":"user","id":"u_41","content":"为什么登录偶尔失败？"}
+{"seq":42,"ts":"…","kind":"turn.start","turn":"t7"}
+{"seq":43,"ts":"…","kind":"item.start","id":"msg_a:0","item_type":"thinking"}
+{"seq":44,"ts":"…","kind":"item.delta","id":"msg_a:0","patch":{"kind":"text","text":"先翻登录"}}
+{"seq":45,"ts":"…","kind":"item.delta","id":"msg_a:0","patch":{"kind":"text","text":"相关代码"}}
+{"seq":46,"ts":"…","kind":"item.end","id":"msg_a:0","value":{"item":"thinking","text":"先翻登录相关代码","signature":"Eq…"}}
+{"seq":47,"ts":"…","kind":"item.start","id":"toolu_01","item_type":"tool"}
+{"seq":48,"ts":"…","kind":"item.delta","id":"toolu_01","patch":{"kind":"tool_args","partial_json":"{\"q\":\""}}
+{"seq":49,"ts":"…","kind":"item.delta","id":"toolu_01","patch":{"kind":"tool_args","partial_json":"login\"}"}}
+{"seq":50,"ts":"…","kind":"item.end","id":"toolu_01","value":{"item":"tool","name":"Grep","args":{"q":"login"},"result":"auth.ts:42  if (expired) renew()"}}
+{"seq":51,"ts":"…","kind":"item.start","id":"msg_b:0","item_type":"reply"}
+{"seq":52,"ts":"…","kind":"item.delta","id":"msg_b:0","patch":{"kind":"text","text":"是 token "}}
+{"seq":53,"ts":"…","kind":"item.delta","id":"msg_b:0","patch":{"kind":"text","text":"过期判断写反了。"}}
+{"seq":54,"ts":"…","kind":"item.end","id":"msg_b:0","value":{"item":"reply","text":"是 token 过期判断写反了。"}}
+{"seq":55,"ts":"…","kind":"turn.end","turn":"t7","stop_reason":"completed","usage":{"input":1840,"output":210,"context_window":42000}}</code></pre>
+        <p>读法：<code>id</code> 把碎片归组——<code>msg_a:0</code> 的两条 text delta（seq 44/45）合成 thinking 全文；<code>toolu_01</code> 的两段 <code>partial_json</code>（48/49）拼成 <code>{"q":"login"}</code>，工具结果在 <code>item.end</code>（50）补上；<code>msg_b:0</code> 同理。<strong>每个项的 <code>item.end</code> 都已是合并全量。</strong></p>
+        <p><strong>休眠后回看历史</strong>：丢掉 <code>turn.*</code> / <code>item.start</code> / <code>item.delta</code>，每个 <code>id</code> 只取 <code>item.end.value</code>、连同 <code>user</code> 按 <code>seq</code> 排——同一条流立刻变成<strong>合并好的完整记录</strong>（即 <a href="reference.html#session-schema">session.aprog.jsonl</a> 的样子），不打字：</p>
+        <pre><code>user      为什么登录偶尔失败？
+thinking  先翻登录相关代码
+tool      Grep {"q":"login"} → auth.ts:42  if (expired) renew()
+reply     是 token 过期判断写反了。</code></pre>
+        <div class="dgm-cap">同一段 seq 41–55：实时 attach 时逐字播 delta；休眠后回看只取那 4 条 <code>item.end</code> 直接成文。原始流一字未删，两种呈现都从它派生。</div>
+
+        <p>再看<strong>子代理 + 上下文压缩 + 停止原因</strong>怎么落在同一条流里——主代理派一个 <code>code-reviewer</code> 子代理（Agent 工具调用 <code>toolu_rev</code>），子代理内部的项都带 <code>parent:"toolu_rev"</code>；中途引擎压了一次上下文；回合带停止原因结束：</p>
+        <pre><code>{"seq":70,"ts":"…","kind":"item.start","id":"toolu_rev","item_type":"tool"}
+{"seq":71,"ts":"…","kind":"item.end","id":"toolu_rev","value":{"item":"tool","name":"Agent","args":{"agent":"code-reviewer"},"result":"见子代理产出"}}
+{"seq":72,"ts":"…","kind":"item.start","id":"msg_c:0","item_type":"thinking","parent":"toolu_rev"}
+{"seq":73,"ts":"…","kind":"item.end","id":"msg_c:0","parent":"toolu_rev","value":{"item":"thinking","text":"先看 auth.ts"}}
+{"seq":74,"ts":"…","kind":"item.start","id":"msg_c:1","item_type":"reply","parent":"toolu_rev"}
+{"seq":75,"ts":"…","kind":"item.end","id":"msg_c:1","parent":"toolu_rev","value":{"item":"reply","text":"第 42 行 expired 判断写反了"}}
+{"seq":76,"ts":"…","kind":"compaction","trigger":"auto","pre_tokens":152000}
+{"seq":77,"ts":"…","kind":"turn.end","turn":"t8","stop_reason":"completed","usage":{"input":2010,"output":180}}</code></pre>
+        <div class="dgm-cap"><code>parent:"toolu_rev"</code> 让前端把 seq 72–75 折成 <code>code-reviewer</code> 的<strong>子树</strong>（不摊平进主流）；<code>compaction</code>（seq 76）如实记录“引擎在此压了上下文”——<strong>流本身一字未删</strong>；<code>turn.end.stop_reason</code> 告诉用户回合为何结束。</div>
 
         <h2 id="recover">断线恢复</h2>
         <p>客户端只记一个数：<strong>已渲染到的最后一条事件的 <code>seq</code></strong>（游标）。重连时报上去，服务端在<strong>同一条订阅</strong>上：</p>

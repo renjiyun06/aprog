@@ -23,6 +23,19 @@ export interface Envelope {
   seq: Seq;
   /** ISO-8601 时间戳，Driver 盖。 */
   ts: string;
+  /**
+   * 子代理归属：本事件由哪个子代理(subagent)产生——值为派生它的 Agent 工具调用的 ItemId
+   * (取引擎稳定标识，Claude 即 `parent_tool_use_id`)。主流(顶层 agent)产生的事件为 undefined。
+   * 前端据此把子代理的 thinking/tool/reply 折叠成一棵子树，而非摊平进主流。
+   */
+  parent?: ItemId;
+  /**
+   * 引擎原始载荷：本事件归一前的 harness 原文（由 Driver 在归一有损的事件上填，如
+   * item.end / turn.end / error / compaction）。typed 字段是 aprog 赋予语义、据此渲染的投影；
+   * raw 是保真兜底——通用 UI 读 typed，高级检视器/调试/未来需求读 raw。
+   * 这样 typed 表面随「用户该知道什么」收敛，又对任何 harness 不丢任何信息。
+   */
+  raw?: unknown;
 }
 
 /** 重连订阅请求：从游标 seq「之后」开始，在同一条订阅上先 resync 再续 live。 */

@@ -41,7 +41,8 @@
         <h2 id="claude">Claude Agent SDK → aprog</h2>
         <p>
           开 <code>includePartialMessages: true</code> 后，<code>query()</code> 同时吐 <code>stream_event</code>（裹原生
-          Anthropic 流事件）与最终 <code>assistant</code>（coalesced）。映射：
+          Anthropic 流事件）与最终 <code>assistant</code>（coalesced）。下表是映射汇总；SDK 原生事件的逐字段细节见
+          <a href="agent-sdk.html">Claude Agent SDK 事件模型</a>。映射：
         </p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>aprog 事件</th><th>Claude SDK 来源</th></tr></thead>
@@ -56,8 +57,10 @@
             <tr><td><code>item.delta</code> tool(args)</td><td><code>content_block_delta</code>, <code>input_json_delta</code>(<code>partial_json</code>)</td></tr>
             <tr><td><code>item.end</code></td><td><code>content_block_stop</code> + 最终 <code>assistant</code> 消息对应 block（<strong>权威 coalesced</strong>）</td></tr>
             <tr><td><code>item.end</code> tool.result</td><td>随后的 <code>user</code> 消息里的 <code>tool_use_result</code>（按 <code>tool_use_id</code> 回挂）</td></tr>
-            <tr><td><code>turn.end</code></td><td><code>result</code>(SDKResultMessage：num_turns / total_cost_usd / usage)</td></tr>
+            <tr><td><code>turn.end</code></td><td><code>result</code>(SDKResultMessage：num_turns / total_cost_usd / usage)；<code>stop_reason</code> ← message <code>stop_reason</code> + <code>result.subtype</code><strong>归一</strong>（end_turn→completed、max_tokens/error_max_turns→limit、refusal→refused、error_during_execution→error），原词存 <code>raw_stop_reason</code></td></tr>
+            <tr><td><code>compaction</code></td><td><code>system(compact_boundary)</code> / <code>SDKCompactBoundaryMessage</code>（<code>trigger</code> / <code>pre_tokens</code>）</td></tr>
             <tr><td><code>id</code></td><td><code>message.id : block_index</code>（工具用 <code>tool_use.id</code>）</td></tr>
+            <tr><td><code>parent</code></td><td>子代理上下文消息的 <code>parent_tool_use_id</code>（= 派生它的 Agent 工具调用 id）</td></tr>
             <tr><td><code>seq</code></td><td>control-plane 落库时盖（Driver 只保证局部顺序）</td></tr>
           </tbody>
         </table></div>
@@ -84,8 +87,8 @@
             <tr><td><code>item.delta</code> command 输出</td><td><code>item/commandExecution/outputDelta</code></td><td><code>exec_command_output_delta</code>(stdout/stderr)</td><td>—（无）</td></tr>
             <tr><td><code>item.delta</code> tool(args)</td><td>(args 在 completed 整体给)</td><td>—（无）</td><td><code>function_call_arguments.delta</code></td></tr>
             <tr><td><code>item.end</code></td><td><code>item.completed</code></td><td><code>agent_message</code> / <code>exec_command_end</code> / <code>mcp_tool_call_end</code> …</td><td><code>output_item.done</code></td></tr>
-            <tr><td><code>turn.end</code></td><td><code>turn.completed</code>(usage)</td><td><code>task_complete</code></td><td><code>response.completed</code>(usage)</td></tr>
-            <tr><td><code>error</code></td><td><code>error</code> / <code>turn.failed</code> / <code>item.failed</code></td><td><code>error</code> / <code>stream_error</code></td><td><code>response.failed</code> / <code>error</code></td></tr>
+            <tr><td><code>turn.end</code></td><td><code>turn.completed</code>(usage) / <code>turn.aborted</code></td><td><code>task_complete</code> / <code>turn_aborted</code></td><td><code>response.completed</code>(usage)</td></tr>
+            <tr><td><code>error</code>(severity)</td><td><code>error</code>(fatal) / <code>turn.failed</code> / <code>item.failed</code></td><td><code>error</code>→fatal / <code>stream_error</code>→transient / <code>warning</code>→warning</td><td><code>response.failed</code> / <code>error</code></td></tr>
             <tr><td><code>id</code></td><td><code>itemId</code> / <code>call_id</code></td><td><code>item_id</code> / <code>call_id</code></td><td><code>item_id</code> / <code>call_id</code></td></tr>
             <tr><td><code>seq</code></td><td><strong>无 → 合成</strong></td><td><strong>无 → 合成</strong></td><td><code>sequence_number</code>(原生)</td></tr>
           </tbody>
@@ -106,7 +109,10 @@
             <tr><td><strong>用户回显</strong></td><td>不回显</td><td>原生回显</td><td>一律由 <strong>Driver 发 <code>user</code> 事件</strong>（echo-from-stream），去重引擎自带回显</td></tr>
             <tr><td><strong>工具 / 命令</strong></td><td>tool_use + 单独 tool_result 消息</td><td>命令三段 + 结构化结果</td><td>统一为 aprog <code>tool</code>/<code>command</code> 项：start → (args/output delta) → end(result)</td></tr>
             <tr><td><strong>思考 / 推理</strong></td><td>单流 thinking + 签名</td><td>并行摘要分段 + 原始 CoT</td><td><code>thinking</code> 项；需要时 delta 带 part 序保持不交错</td></tr>
-            <tr><td id="approvals"><strong>审批</strong></td><td>（默认放行）</td><td>审批往返(需回 Op)</td><td>自动批准：Driver <strong>自动应答</strong>，审批<strong>不进流</strong></td></tr>
+            <tr><td><strong>停止原因</strong></td><td>stop_reason + result.subtype</td><td>TurnComplete / TurnAborted{Interrupted/Replaced/BudgetLimited}</td><td><strong>归一成「用户反应」小集</strong> <code>completed/interrupted/limit/refused/error</code>；引擎原词存 <code>raw_stop_reason</code></td></tr>
+            <tr><td><strong>错误分级</strong></td><td>(多为 fatal)</td><td>Error / StreamError(重连) / Warning</td><td><code>error.severity</code> = <code>fatal/transient/warning</code>，让 UI 别把「重连中」报成「挂了」</td></tr>
+            <tr><td><strong>引擎多余的丰富度</strong></td><td>—</td><td>限流/budget/guardian/hook/rate_limit…</td><td>用户不据此行动的 → 不进 typed，原样进 <code>raw</code> / <code>usage.extra</code>（保真兜底，不污染抽象）</td></tr>
+            <tr><td id="approvals"><strong>审批</strong></td><td>（默认放行）</td><td>审批往返(需回 Op)</td><td>自动批准：Driver <strong>自动应答</strong>，审批<strong>不进流</strong>（设计上 harness 全控沙箱）</td></tr>
             <tr><td><strong>引擎私有会话</strong></td><td><code>~/.claude/.../&lt;id&gt;.jsonl</code> + resume</td><td>rollout JSONL + <code>codex resume</code></td><td>都是<strong>引擎私有缓存</strong>：不权威、不进快照（见 <a href="state.html#layers">三层数据</a>）</td></tr>
           </tbody>
         </table></div>
