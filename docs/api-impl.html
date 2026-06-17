@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>控制平面 API 实现 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="api-impl">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>控制平面 API 实现</h1>
+        <p class="lead">
+          <a href="api.html">控制平面 API</a> 定的是<strong>契约</strong>（端点、形状、错误码）；这页讲<strong>代码怎么分层</strong>去兑现它。
+          一句话：<strong>API 层是一张「翻译膜」，不是逻辑所在地</strong>——它只把 HTTP 翻成对子系统的调用，业务逻辑住在
+          <code>ProcessManager</code> / <code>stream/*</code> / <code>driver-channel</code> 这些子系统里。代码在
+          <code>packages/control-plane/src/api/</code>。
+        </p>
+
+        <div class="note">
+          <span class="note-label">现状</span>
+          本页描述的是<strong>骨架</strong>：目录结构、类型契约、路由器、中间件组合、一条请求的走法都已<strong>立起来且 <code>tsc</code> 通过</strong>；
+          但每个端点处理器的实体仍是 <code>throw 'not implemented'</code>——因为它们要调的子系统（<code>stream/*</code> 等）还没实现。
+          这正是「设计/结构先行，落地在后」的中间态。
+        </div>
+
+        <h2 id="layer">分层：翻译膜 + 子系统</h2>
+        <p>每个端点处理器做的事高度雷同，就五步——这五步<strong>不含业务逻辑</strong>：</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-frontend"><span class="nt">① 鉴权</span><span class="nd"><code>withAuth</code> → <code>authenticate(token)</code> → <code>User</code>（失败 401）</span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-frontend"><span class="nt">② 授权</span><span class="nd"><code>authorize(user, pid, need)</code> → 角色 ≥ 档位（非成员 403）</span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-frontend"><span class="nt">③ 校验</span><span class="nd">解析/校验入参（<code>parsePid</code>、body 形状）（非法 400）</span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-cp"><span class="nt">④ 调子系统</span><span class="nd"><code>deps.procs.spawn()</code> / <code>resyncThenLive()</code> / <code>channelFor(pid).sendInput()</code> …<strong>逻辑在这里</strong></span></div>
+            <div class="ar down"><span class="gly">↓</span></div>
+            <div class="node c-frontend"><span class="nt">⑤ 序列化</span><span class="nd"><code>json / created / accepted / noContent / paged</code> → 统一响应形状</span></div>
+          </div>
+          <div class="dgm-cap">
+            这跟 <a href="harness.html#transduce">driver 的 EngineAdapter</a> 是同一个模式：<strong>薄 I/O 壳 + 真核</strong>。
+            API 层只管翻译与守门（①②③⑤），真正干活的核（④）在子系统——换传输（REST→别的）不动逻辑，测逻辑不必起 HTTP。
+          </div>
+        </div>
+
+        <h2 id="files">文件布局</h2>
+        <p>按资源拆，对应 <a href="api.html#map">api.html 的端点分节</a>。<code>http.ts</code> 只当组装根，逻辑分散到 route 模块与中间件：</p>
+        <pre><code>api/
+  http.ts              组装根：起 Bun.serve、建路由表、mount 各 route、统一分发（薄）
+  router.ts            极小路由器：method + /:param 段 → handler + 路径参数
+  context.ts           核心类型：Deps（子系统接缝）/ User / Role / ReqCtx / AuthCtx / Handler
+  errors.ts            北面错误码 + ApiError + toErrorResponse + withErrors 包装器
+  respond.ts           响应序列化：json/created/accepted/noContent/paged + parsePid
+  middleware/
+    auth.ts            authenticate(token→User) · authorize(user,pid,need→Role) · withAuth 包装器
+  routes/
+    auth.ts            /auth/login · /auth/logout
+    programs.ts        /programs
+    proc.ts            /proc · spawn · wake · hibernate · input · interrupt · fs
+    shares.ts          /proc/:pid/shares*
+    notifications.ts   /notifications · /notifications/read
+  sse.ts               GET …/stream · /notifications/stream（流式，自成一路）</code></pre>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>文件</th><th>职责</th><th>为什么单列</th></tr></thead>
+          <tbody>
+            <tr><td><code>http.ts</code></td><td>组装根：mount 所有 route 模块、把请求分发给匹配的 handler、剥版本前缀</td><td>路由 ≠ 处理，二者分开；它薄到几十行</td></tr>
+            <tr><td><code>context.ts</code></td><td>定义 <code>Deps</code>——API 与子系统的<strong>唯一接缝</strong>；以及 <code>ReqCtx/AuthCtx</code> 与处理器签名</td><td>把"能调什么"收成一个注入点，便于测试替身</td></tr>
+            <tr><td><code>middleware/auth.ts</code></td><td><code>authenticate</code>（token→User）、<code>authorize</code>（pid→角色）、<code>withAuth</code></td><td>鉴权/授权是横切关注点，所有需登录路由共用</td></tr>
+            <tr><td><code>errors.ts</code></td><td>北面错误码枚举 + <code>ApiError</code> + <code>withErrors</code>（异常→错误信封）</td><td>错误形状统一在一处；<a href="api.html#q-errors">不复用南面 SandboxError</a></td></tr>
+            <tr><td><code>routes/*.ts</code></td><td>每组端点一个模块；各自 <code>mount(router)</code> 注册路由并就地决定要不要 <code>withAuth</code></td><td>auth 需求归各模块自管（如 login 不需 token）</td></tr>
+            <tr><td><code>sse.ts</code></td><td>两个 <code>text/event-stream</code> 长连端点 + <code>sseResponse</code> 帧格式化</td><td>流式 plumbing 异于普通请求/响应，混进 REST 会别扭</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="flow">一条请求的生命周期</h2>
+        <p>以 <code>POST /proc/:pid/input</code> 为例，看这五步怎么串起来（每条路由都套同样的洋葱）：</p>
+        <pre><code>Bun.serve.fetch(req)
+  → router.match('POST', '/proc/42/input')        // → { handler, params:{pid:'42'} }
+  → withErrors(                                    // 捕获下游任何 ApiError → 错误信封
+      withAuth(                                     // authenticate(token) → AuthCtx{ user }
+        input(ctx) {
+          const pid = parsePid(ctx)                 // 校验 :pid（非法 → 400 validation）
+          await authorize(ctx.user, pid, 'editor')  // 角色 ≥ editor（viewer → 403）
+          channelFor(pid).sendInput(item)           // ④ 调子系统：DriverChannel 下行
+          return accepted({ seq })                  // ⑤ 202 + 输入落库后的 seq
+        }))</code></pre>
+        <div class="note ok">
+          <span class="note-label">组合而非框架</span>
+          没有引入 Web 框架——<code>withErrors</code> / <code>withAuth</code> 只是<strong>函数包装函数</strong>，在每条路由 <code>mount</code> 时手工套上。
+          需登录就 <code>withErrors(withAuth(h))</code>，公开端点（如 login）就 <code>withErrors(h)</code>。一目了然，无魔法。
+        </div>
+
+        <h2 id="deps">Deps：API 与子系统的接缝</h2>
+        <p>
+          处理器不直接 new 任何东西，只通过 <code>ctx.deps</code> 调子系统。<code>http.ts</code> 在启动时把子系统装配进 <code>Deps</code> 注入：
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th><code>Deps</code> 成员</th><th>谁</th><th>服务哪些端点</th></tr></thead>
+          <tbody>
+            <tr><td><code>procs</code></td><td><code>ProcessManager</code></td><td>ps / spawn / wake / hibernate / 取 PCB</td></tr>
+            <tr><td><code>store</code></td><td><code>StreamStore</code></td><td>事件流回放（盖 seq、落库）</td></tr>
+            <tr><td><code>hub</code></td><td><code>StreamHub</code></td><td>事件流 live 扇出</td></tr>
+            <tr><td><code>channelFor(pid)</code></td><td>→ <code>DriverChannel</code></td><td>input / interrupt / fs（穿透 running 沙箱内 driver）</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note warn">
+          <span class="note-label">接缝现状：pending 占位</span>
+          <code>stream/*</code> 等子系统目前仍是接口、无实现，<code>http.ts</code> 暂用 <code>pending('StreamStore')</code> 这类
+          <strong>Proxy 占位</strong>注入——一旦被处理器触达就抛「子系统尚未装配」的清晰错误，而不是静默 <code>undefined</code>。
+          <code>procs</code> 是唯一已到位的（但其方法本身也还 <code>throw</code>）。
+        </div>
+
+        <h2 id="next">还没做 / 落地顺序</h2>
+        <ul>
+          <li><strong>已立</strong>：目录结构、<code>Deps</code>/<code>ReqCtx</code> 类型、路由器、<code>withErrors</code>/<code>withAuth</code> 组合、<code>sseResponse</code> 帧格式、错误信封、分页信封——全部 <code>tsc</code> 通过。</li>
+          <li><strong>桩</strong>：每个端点处理器体 = <code>throw 'not implemented'</code>，授权/鉴权同（需用户/会话存储）。</li>
+          <li><strong>前置依赖</strong>：处理器要调的子系统（<code>stream/store·hub·resync</code>、<code>process/manager·lifecycle</code>、<code>driver-channel</code>）多数还是接口——它们落地前，端点填不实。</li>
+          <li><strong>设计待定</strong>：几处端点行为还卡在 <a href="api.html#open">api.html 的开放问题</a>（Q2 wake 同步/异步、Q3 状态集、Q4 进程终结、Q5 input 返回/文件）。</li>
+        </ul>
+        <p>所以落地顺序：<strong>定开放问题 → 对齐 <code>ProcessRecord</code>/<code>ProcessState</code> 类型 → 实现子系统 → 把端点从桩填实</strong>。本骨架保证那一步到来时，只需在对应 <code>routes/*.ts</code> 里把 <code>throw</code> 换成真调用。</p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

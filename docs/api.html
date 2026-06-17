@@ -68,7 +68,7 @@
           <tbody>
             <tr><td>命令 / 写</td><td>REST（JSON over HTTP）。每个端点对应一个<a href="concepts.html">平台操作</a>：<code>ps / spawn / hibernate / wake / cat / ls</code>。</td></tr>
             <tr><td>实时事件流</td><td><strong>SSE</strong>：一条长连 <code>GET …/stream</code>，服务端推 <a href="protocol.html">协议</a> 事件（见 <a href="#stream">事件流端点</a>）。单向（server→client）。</td></tr>
-            <tr><td>反向（输入 / 决策 / 中断）</td><td>不复用 SSE，走独立的小 <code>POST</code>（<a href="#input">输入与交互</a>）。SSE 单向、这些是低频指令，拆开比塞进双工连接更简单。</td></tr>
+            <tr><td>反向（输入 / 中断）</td><td>不复用 SSE，走独立的小 <code>POST</code>（<a href="#input">输入与交互</a>）。SSE 单向、这些是低频指令，拆开比塞进双工连接更简单。</td></tr>
             <tr><td>鉴权</td><td>每个请求带 token（header）；SSE 同样带 token 起连。失败 <code>401</code>。进程<strong>按成员授权</strong>（一对多，成员都可读写；见 <a href="#q-tenancy">Q9</a>），非成员 <code>403</code>。</td></tr>
             <tr><td>标识</td><td><code>pid</code> 由控制平面分配，全局唯一、跨休眠/唤醒不变（沙箱可换、pid 不换）。客户端只认 pid。</td></tr>
             <tr><td>错误信封</td><td>非 2xx 统一 <code>{ "error": { "code": "...", "message": "...", "retryable": bool } }</code>。<code>code</code> 取自一套稳定枚举（待定，见 <a href="#q-errors">待确认 · 错误码</a>）。</td></tr>
@@ -92,7 +92,6 @@
             <tr><td><code>POST /proc/:pid/wake</code></td><td><code>wake</code></td><td>起沙箱 + 灌入 bundle（首次=bootstrap，之后=最新检查点）+ 运行/resume。<strong>首次运行与休眠后唤醒同一路径</strong>。pid 不变。</td></tr>
             <tr><td><code>GET  /proc/:pid/stream?from=&lt;seq&gt;</code></td><td><code>logs</code></td><td><strong>SSE</strong>：先 resync（<code>seq &gt; from</code>）再续 live（见 <a href="#stream">下文</a>）。</td></tr>
             <tr><td><code>POST /proc/:pid/input</code></td><td>—</td><td>投递用户输入：<code>{ kind:'message'|'file', content }</code> → 经 <a href="interaction.html#data-plane">DriverChannel.sendInput</a> 交给沙箱内 driver。<strong>落到哪、怎么消费是上层程序的事，平台不管。</strong></td></tr>
-            <tr><td><code>POST /proc/:pid/respond</code></td><td><code>allow</code>/<code>deny</code></td><td>对 <code>requires_action</code> 决策：<code>{ actionId, decision:'allow'|'deny' }</code>。</td></tr>
             <tr><td><code>POST /proc/:pid/interrupt</code></td><td>—</td><td>打断当前回合 → <code>DriverChannel.control('interrupt')</code>。</td></tr>
             <tr><td><code>GET  /proc/:pid/fs?path=&amp;op=list|read</code></td><td><code>ls</code>/<code>cat</code>/<code>get</code></td><td>只读进程目录：running 时实时穿透 driver，hibernating 时按检查点（见 <a href="#fs">下文</a>）。</td></tr>
             <tr><td colspan="3" style="background:var(--code-bg);font-weight:600">共享与权限（见 <a href="#sharing">共享</a>，仅 owner 可操作）</td></tr>
@@ -144,8 +143,6 @@
             <tr><td rowspan="3"><code>POST /proc/:pid/input</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
             <tr><td>body</td><td><code>kind</code></td><td><code>message</code>｜<code>file</code></td><td>✓</td><td>输入类型</td></tr>
             <tr><td>body</td><td><code>content</code></td><td>string</td><td>✓</td><td><code>message</code>=文本；<code>file</code>=文件内容（编码/传输方式见 <a href="#q-input">Q5</a>）</td></tr>
-            <tr><td rowspan="2"><code>POST /proc/:pid/respond</code></td><td>body</td><td><code>actionId</code></td><td>string</td><td>✓</td><td>取自流里那条 <code>requires_action</code> 事件</td></tr>
-            <tr><td>body</td><td><code>decision</code></td><td><code>allow</code>｜<code>deny</code></td><td>✓</td><td>放行 / 拒绝</td></tr>
             <tr><td><code>POST /proc/:pid/interrupt</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body</td></tr>
             <tr><td rowspan="3"><code>GET /proc/:pid/fs</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
             <tr><td>query</td><td><code>op</code></td><td><code>list</code>｜<code>read</code></td><td>✓</td><td>列目录 / 读文件</td></tr>
@@ -182,7 +179,6 @@
             <tr><td><code>POST /proc/:pid/wake</code></td><td>同步 <code>200</code>(running) / 异步 <code>202</code>(waking)，均回 ProcessRecord（见 <a href="#q-async">Q2</a>）</td><td><code>404</code>；<code>409</code> 已 running</td></tr>
             <tr><td><code>GET /proc/:pid/stream</code></td><td><code>200 text/event-stream</code>，<a href="#r-sse">SSE 帧</a></td><td><code>404</code>；<code>403</code> 非成员</td></tr>
             <tr><td><code>POST /proc/:pid/input</code></td><td><code>202</code> <a href="#r-ack">输入回执</a>（见 <a href="#q-input">Q5</a>）</td><td><code>404</code>；<code>409</code> 进程未运行</td></tr>
-            <tr><td><code>POST /proc/:pid/respond</code></td><td><code>204</code> 无体</td><td><code>404</code> 无此 actionId / 进程未运行</td></tr>
             <tr><td><code>POST /proc/:pid/interrupt</code></td><td><code>202</code> 无体</td><td><code>404</code>；<code>409</code> 进程未运行</td></tr>
             <tr><td><code>GET /proc/:pid/fs</code></td><td><code>200</code> <a href="#r-fs">fs 响应</a></td><td><code>404</code> 无此 pid/路径</td></tr>
             <tr><td><code>GET /proc/:pid/shares</code></td><td><code>200</code> <code>{ owner, shares: [<a href="#r-share">Share</a>] }</code></td><td><code>403</code> 非 owner</td></tr>
@@ -276,7 +272,7 @@
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
             <tr><td><code>id</code></td><td>string</td><td>通知 id（标已读用）</td></tr>
-            <tr><td><code>type</code></td><td><code>share</code>｜<code>reply</code>｜<code>action</code></td><td>类型（见 <a href="#notifications">消息中心</a>）</td></tr>
+            <tr><td><code>type</code></td><td><code>share</code>｜<code>reply</code></td><td>类型（见 <a href="#notifications">消息中心</a>）</td></tr>
             <tr><td><code>title</code></td><td>string</td><td>标题（如「张三把『落地页设计』分享给你」）</td></tr>
             <tr><td><code>procId</code></td><td>number?</td><td>关联进程（点通知可跳转 attach）</td></tr>
             <tr><td><code>fromUser</code></td><td>userId?</td><td>来源用户（<code>share</code> 类有）</td></tr>
@@ -339,14 +335,13 @@
           <tbody>
             <tr><td>attach 到运行中进程 → 对话区开实时流并渲染；断线重连带 <code>from=&lt;seq&gt;</code></td><td><code>GET /proc/:pid/stream</code></td></tr>
             <tr><td>底部输入框发消息 / 拖入文件</td><td><code>POST /proc/:pid/input</code></td></tr>
-            <tr><td>流里 <code>requires_action</code> 那行的 <strong>[allow] / [deny]</strong> 按钮</td><td><code>POST /proc/:pid/respond</code></td></tr>
             <tr><td>生成中点「打断 / 停止」</td><td><code>POST /proc/:pid/interrupt</code></td></tr>
             <tr><td>对话区头部点 <strong>分享</strong> 按钮（仅 owner 可见）→ 打开分享面板</td><td><code>GET /proc/:pid/shares</code></td></tr>
           </tbody>
         </table></div>
         <div class="note">
           <span class="note-label">viewer 的对话区</span>
-          <code>myRole=viewer</code> 时，对话区<strong>底部输入框、[allow]/[deny]、打断按钮全部禁用</strong>（只读）；<code>editor</code>/<code>owner</code> 才可写。分享按钮只在 <code>owner</code> 显示。
+          <code>myRole=viewer</code> 时，对话区<strong>底部输入框、打断按钮全部禁用</strong>（只读）；<code>editor</code>/<code>owner</code> 才可写。分享按钮只在 <code>owner</code> 显示。
         </div>
         <div class="note">
           <span class="note-label">唤醒进程的对话区</span>
@@ -444,15 +439,18 @@
         </div>
 
         <h2 id="input">输入与交互</h2>
-        <p>三个反向指令，都是小 <code>POST</code>，落到 <a href="interaction.html#data-plane">DriverChannel</a> 的对应方法：</p>
+        <p>两个反向指令，都是小 <code>POST</code>，落到 <a href="interaction.html#data-plane">DriverChannel</a> 的对应方法：</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>端点</th><th>映射</th><th>语义</th></tr></thead>
           <tbody>
             <tr><td><code>POST …/input</code></td><td><code>sendInput(item)</code></td><td>用户消息或文件，交给 driver。<strong>落到哪、怎么消费由上层程序决定，平台不管</strong>。输入由 driver echo 进事件流（<code>user</code> 事件），<strong>不</strong>在 POST 响应里回显内容。</td></tr>
-            <tr><td><code>POST …/respond</code></td><td><code>respond(actionId, decision)</code></td><td>对一条 <code>requires_action</code> 的 allow/deny。<code>actionId</code> 取自流里那条待决事件。</td></tr>
             <tr><td><code>POST …/interrupt</code></td><td><code>control('interrupt')</code></td><td>打断当前回合（相当于 Esc）。<code>checkpoint-now / hibernate-prepare</code> 是平台内部信号，<strong>不</strong>对客户端暴露。</td></tr>
           </tbody>
         </table></div>
+        <div class="note ok">
+          <span class="note-label">没有审批端点</span>
+          <strong>设计上 harness 全权控制整个沙箱、所有操作自动放行</strong>，所以协议里没有 <code>requires_action</code> 事件、北面也没有 <code>respond</code>(allow/deny) 端点——审批这件事在引擎启动姿势里就解决了，不在运行期往返（见 <a href="harness.html#approvals">跨 harness 裁决 · 审批</a>）。
+        </div>
         <div class="note ok" id="input-concurrency">
           <span class="note-label">多消息怎么处理：排队 vs 打断（对齐 Claude Agent SDK）</span>
           共享进程下多人可同时发消息，但<strong>harness 不区分谁发的</strong>——对它就是「用户」（SDK 的 user 消息只有 <code>role:"user"</code>、无 author），所以平台<strong>也不带发送者身份</strong>。
@@ -486,7 +484,7 @@
           进程与用户是<strong>一对多</strong>：owner（创建者）可把进程分享给别人。<a href="#input-concurrency">前面</a>已定底层不区分发送者，这里补<strong>权限粒度</strong>——分享方能精确控制对方能干什么。
         </p>
         <div class="tbl-wrap"><table>
-          <thead><tr><th>角色</th><th>读流 / 读 fs</th><th>发消息 / 决策 / 打断</th><th>分享给他人</th><th>改/撤权限</th></tr></thead>
+          <thead><tr><th>角色</th><th>读流 / 读 fs</th><th>发消息 / 打断</th><th>分享给他人</th><th>改/撤权限</th></tr></thead>
           <tbody>
             <tr><td><code>owner</code>（创建者）</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
             <tr><td><code>editor</code>（可读可写）</td><td>✓</td><td>✓</td><td>✗</td><td>✗</td></tr>
@@ -494,7 +492,7 @@
           </tbody>
         </table></div>
         <ul>
-          <li><strong>两档共享权限</strong>：<code>editor</code>（可读 + 可发消息）/ <code>viewer</code>（只读）。<code>viewer</code> 调 <code>input/respond/interrupt</code> 一律 <code>403</code>。</li>
+          <li><strong>两档共享权限</strong>：<code>editor</code>（可读 + 可发消息）/ <code>viewer</code>（只读）。<code>viewer</code> 调 <code>input/interrupt</code> 一律 <code>403</code>。</li>
           <li><strong>被共享方不能再分享</strong>：分享、改权限、撤回<strong>只有 owner 能做</strong>（<code>/shares*</code> 非 owner → <code>403</code>）。</li>
           <li><strong>无需「接收」</strong>：分享后对方<strong>直接进入</strong>（出现在他的进程列表），不需要同意；但会在<a href="#notifications">消息中心</a>收到一条「X 把进程 Y 分享给你」通知。</li>
           <li><strong>owner 可随时改/撤</strong>：<code>PATCH</code> 改档（editor⇄viewer）、<code>DELETE</code> 撤回；撤回后对方进程列表移除、活跃的 stream/fs 下次请求即 <code>403</code> 并断流。</li>
@@ -516,7 +514,6 @@
           <tbody>
             <tr><td><code>share</code></td><td>有人把某进程分享给你</td><td>来源用户 + procId + 角色</td></tr>
             <tr><td><code>reply</code></td><td>你参与的某进程<strong>有了新回复</strong>（且你当前没在看它）</td><td>procId</td></tr>
-            <tr><td><code>action</code></td><td>某进程需要决策（<code>requires_action</code>）</td><td>procId</td></tr>
           </tbody>
         </table></div>
         <ul>
@@ -527,7 +524,7 @@
         <div class="note warn" id="q-notif">
           <span class="note-label">待讨论 · 通知触发</span>
           <strong>(a)</strong> <code>reply</code> 通知只在「我没在看该进程」时发，对吗？还是只要不在前台就发？
-          <strong>(b)</strong> P0 通知类型就 <code>share / reply / action</code> 这三类，够不够？要不要加进程<strong>完成 / 出错 / 被撤回</strong>等？
+          <strong>(b)</strong> P0 通知类型就 <code>share / reply</code> 这两类，够不够？要不要加进程<strong>完成 / 出错 / 被撤回</strong>等？
           <strong>(c)</strong> 通知是否需要长期留存与跨设备同步（落库），还是只在线推、读了即弃？我倾向落库（消息中心要能回看）。
         </div>
 

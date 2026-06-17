@@ -35,7 +35,6 @@ export interface DriverChannel {
 
   // control-plane → driver
   sendInput(item: InputItem): Promise<void>;
-  respond(actionId: string, decision: 'allow' | 'deny'): Promise<void>;
   control(signal: ControlSignal): Promise<void>;
 
   /** UI 实时目录浏览。 */

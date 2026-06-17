@@ -97,7 +97,6 @@
             <tbody>
               <tr><td><code>subscribe(fromSeq)</code></td><td>←</td><td>可续订的 <code>AsyncIterable&lt;Envelope&gt;</code> 事件流。重连 / 唤醒时用 <code>fromSeq</code> 续上（见 <a href="#seq">seq 归属</a>）。</td></tr>
               <tr><td><code>sendInput(item)</code></td><td>→</td><td>注入一条<a href="protocol.html">输入</a>：用户消息 / 文件。落到 harness 的 <code>input.md</code> 流。</td></tr>
-              <tr><td><code>respond(actionId, allow|deny)</code></td><td>→</td><td>对 <code>requires_action</code> 的应答（放行 / 拒绝某次工具调用）。</td></tr>
               <tr><td><code>control(signal)</code></td><td>→</td><td>带内控制信号：中断当前回合、checkpoint-now、hibernate-prepare 等。</td></tr>
               <tr><td><code>fs.list(path)</code> / <code>fs.read(path)</code></td><td>⇆</td><td>UI 目录浏览的<strong>实时读</strong>：driver 在沙箱内 ls/cat 自己的 cwd（见 <a href="#dir-read">目录读取</a>）。</td></tr>
               <tr><td><code>pushBundle</code> / <code>pullBundle</code></td><td>⇅</td><td><strong>大块传输</strong>：启动时灌进进程目录 + auth；检查点 / 唤醒时整段 state 子集进出。</td></tr>
@@ -188,7 +187,7 @@
               <tr>
                 <td><code>Request</code></td><td>→ / ←</td>
                 <td><code>id</code> string(ULID)·<code>op</code> enum·<code>body</code></td>
-                <td><code>op</code> ∈ <code>hello</code>(←) / <code>input</code> / <code>respond</code> / <code>control</code> / <code>fs.list</code> / <code>fs.read</code>（除 hello 外均 →）。<code>id</code> 供 reply 回指。</td>
+                <td><code>op</code> ∈ <code>hello</code>(←) / <code>input</code> / <code>control</code> / <code>fs.list</code> / <code>fs.read</code>（除 hello 外均 →）。<code>id</code> 供 reply 回指。</td>
               </tr>
               <tr>
                 <td><code>Reply</code></td><td>← / →</td>
@@ -239,7 +238,7 @@
           <a href="#hibernate">检查点 restore</a> 续，连续性来自 CP 侧不断攀升的 global seq。<code>localSeq</code> 只在一次运行内有意义。
         </div>
 
-        <h3 id="s-stream">场景 ② 事件流 · 输入 · 审批 · 控制</h3>
+        <h3 id="s-stream">场景 ② 事件流 · 输入 · 控制</h3>
         <p>进程运行期的主干。事件单向上行，其余都是 CP 发起的 <code>Request</code>/<code>Reply</code>：</p>
         <div class="tbl-wrap">
           <table>
@@ -247,7 +246,6 @@
             <tbody>
               <tr><td>实时事件</td><td>←</td><td><code>Event{localSeq, eventId, payload}</code> ×N</td><td>harness 产出经 driver 翻成协议事件，持续上行。前端按 <a href="api.html#stream">SSE</a> 收 CP 扇出的全局序版本。</td></tr>
               <tr><td>用户输入</td><td>→<br>←</td><td><code>Request{op:input, body:{item}}</code> → <code>Reply{ok}</code><br>随后 <code>Event{payload: user 消息}</code></td><td><strong>echo-from-stream</strong>：输入被 driver 注入 input.md 流，再以一条 <code>user</code> 事件回灌——所有 viewer（含发起方）都从同一条事件流看到它，<a href="protocol.html">语义统一</a>。</td></tr>
-              <tr><td>审批</td><td>→<br>←</td><td><code>Request{op:respond, body:{actionId, decision}}</code> → <code>Reply{ok}</code></td><td>应答先前一条 <code>requires_action</code> 事件，放行/拒绝某次工具调用。</td></tr>
               <tr><td>控制</td><td>→<br>←</td><td><code>Request{op:control, body:{signal}}</code> → <code>Reply{ok}</code></td><td><code>signal</code> ∈ <code>interrupt</code>（打断当前回合）/ <code>checkpoint-now</code> / <code>hibernate-prepare</code>。后两者会触发场景 ④ 的 bulk 回流。</td></tr>
             </tbody>
           </table>
