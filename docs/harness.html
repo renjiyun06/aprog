@@ -38,6 +38,35 @@
           <div class="dgm-cap">目标事件种类见 <a href="protocol.html#kinds">事件流协议 · 事件种类</a>。下面两张表是 ① 的具体落法。</div>
         </div>
 
+        <h2 id="transduce">转换逻辑放在哪：纯核 + I/O 壳</h2>
+        <p>
+          ① 这件「翻译」的事，归属是明确的：<strong><code>EngineAdapter</code>——driver 里唯一为每款引擎重写的模块，跑在沙箱内</strong>
+          （<code>packages/driver/src/engine.ts</code> 定契约，<code>engines/claude.ts</code> / <code>engines/codex.ts</code> 各一份实现）。
+          所有引擎特定知识被封死在这一个模块里，这正是「换 harness 只换 Driver、前端/control-plane 只认 <code>@aprog/protocol</code>」能成立的原因。
+        </p>
+        <p>但 adapter 内部又<strong>刻意拆成两半</strong>，因为「原生→aprog」这段映射会随引擎版本悄悄漂移，必须能离线测：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>层</th><th>是什么</th><th>纯/副作用</th><th>签名</th></tr></thead>
+          <tbody>
+            <tr><td><strong>纯转换核</strong> <code>transduce</code></td><td>全部映射逻辑：kind/value 判定、stop_reason 归一、severity、parent、coalesce</td><td><strong>纯函数</strong>（不读网络、不发消息、不依赖时钟）</td><td><code>(native, state) → { events, state }</code></td></tr>
+            <tr><td><strong>I/O 壳</strong> <code>start()</code></td><td>读 <code>supervisor.stdout</code> 字节、分行 <code>JSON.parse</code>、折转换核、盖 <code>ts</code></td><td>有副作用（流 + 时钟）</td><td><code>(ctx) → AsyncIterable&lt;Omit&lt;Event,'seq'&gt;&gt;</code></td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">为什么纯核不造 seq 也不造 ts</span>
+          转换核吐的是<strong>草稿事件</strong>（连 <code>ts</code>、<code>seq</code> 都还没有）。<code>ts</code> 由 I/O 壳盖（它有时钟）；
+          全局 <code>seq</code> 由 control-plane 落库时盖（只有常驻的它看得全跨沙箱/休眠的连续序）。
+          纯核唯一的「记忆」是显式传进传出的 <code>state</code>——比如每个 <code>id</code> 攒到的文本，用来在 <code>item.end</code> 给出合并全量（coalesce）。
+          这就是「<strong>语义</strong>归 adapter、<strong>位置</strong>归 Sequencer/CP」的切分。
+        </div>
+        <div class="note ok">
+          <span class="note-label">金标测试（golden）守住「双向覆盖」</span>
+          纯核可测之后：录一段真实引擎原生流当 fixture → 喂转换核 → 把产物钉成「金标」。以后每次改 adapter / 引擎升级，
+          自动比对产物是否一字不差，<strong>退化立刻飘红</strong>，而不是等用户在界面上发现「工具结果不显示了」。
+          已落地：<code>engines/claude.test.ts</code>（thinking/工具/reply 一轮 + stop_reason 归一）、
+          <code>engines/codex.test.ts</code>（命令三段 + error 分级 + turn.aborted 归一）。共享的累积/合并在 <code>engines/coalesce.ts</code>，I/O 壳在 <code>engines/shell.ts</code>。
+        </div>
+
         <h2 id="claude">Claude Agent SDK → aprog</h2>
         <p>
           开 <code>includePartialMessages: true</code> 后，<code>query()</code> 同时吐 <code>stream_event</code>（裹原生
