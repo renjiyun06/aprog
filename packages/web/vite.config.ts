@@ -1,12 +1,14 @@
 import { defineConfig } from 'vite';
 import solid from 'vite-plugin-solid';
 import basicSsl from '@vitejs/plugin-basic-ssl';
+import { liveAnnotate } from './dev/live-annotate/plugin';
 
 export default defineConfig({
   // HTTPS so secure-context Web APIs (navigator.getBattery, connection) work
   // over the LAN. Access via https://<vm-ip>:5174 and accept the self-signed
   // cert once. To go back to plain http, remove basicSsl() from plugins.
-  plugins: [solid(), basicSsl()],
+  // liveAnnotate：仅 dev 注入页面评论浮层（Alt+A 开/关），生产 build 不含。见 dev/live-annotate/。
+  plugins: [solid(), basicSsl(), liveAnnotate()],
   server: {
     host: '0.0.0.0',
     port: 5174,

@@ -11,5 +11,8 @@ dist/
 .env.*
 !.env.example
 
+# 开发期页面评论（live-annotate 落盘，不入库）
+.comments/
+
 # editor / os
 .DS_Store

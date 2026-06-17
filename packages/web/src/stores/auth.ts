@@ -68,7 +68,9 @@ interface LoginResp {
 
 export const auth = {
   user,
-  isAuthed: (): boolean => getToken() !== null && user() !== null,
+  // 先读信号 user()，确保响应式作用域订阅它；getToken() 是普通变量（非信号），
+  // 若放在 && 左侧会在未登录时短路、导致登录后 Show 不重渲染（停在登录页）。
+  isAuthed: (): boolean => user() !== null && getToken() !== null,
 
   /** 登录屏「记住的账号」（仅装饰）。 */
   savedProfile: (): Profile => {

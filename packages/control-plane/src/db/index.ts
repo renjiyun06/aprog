@@ -53,4 +53,22 @@ export function applyMigrations(db: Database): void {
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   )`);
+
+  // 程序目录（薄镜像）。权威态是磁盘 skill 注册表；这里只放可查询的元数据（见 docs/program-model.html）。
+  db.run(`CREATE TABLE IF NOT EXISTS programs (
+    id        TEXT PRIMARY KEY,
+    name      TEXT NOT NULL,
+    version   TEXT,
+    summary   TEXT,
+    category  TEXT,
+    publisher TEXT
+  )`);
+
+  // 安装记录：用户 × 程序的边。装即在桌面、卸即删行；不存摆放位置（任务栏只显示已打开的进程）。
+  db.run(`CREATE TABLE IF NOT EXISTS installations (
+    user_id    TEXT NOT NULL,
+    program_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, program_id)
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS installations_user ON installations (user_id)');
 }

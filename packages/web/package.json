@@ -12,6 +12,7 @@
     "@tanstack/solid-virtual": "^3.13.26",
     "highlight.js": "^11.11.1",
     "idb-keyval": "^6.2.4",
+    "lucide-solid": "^1.20.0",
     "markdown-it": "^14.2.0",
     "solid-js": "^1.9.12"
   },

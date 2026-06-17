@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>程序与安装数据模型 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="program-model">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">状态与持久化</div>
+        <h1>程序与安装数据模型</h1>
+        <p class="lead">
+          登录后用户看到的是<strong>自己安装的智能程序</strong>。这页定义支撑它的数据模型：
+          <strong>Program</strong>（智能程序 = skill，全局静态目录项）与
+          <strong>Installation</strong>（用户 × 程序的边，"装在我桌面上"）。
+          这套模型由前端实际设计反推而来，并刻意做到尽量简单。
+        </p>
+
+        <div class="note">
+          <span class="note-label">范围</span>
+          本页只覆盖 <strong>Program / Installation</strong> 两层。第三层
+          <strong>Process</strong>（程序的一次运行：spawn / ps / attach / hibernate / kill）
+          <strong>暂不建模</strong>，待运行时部分单独成文。系统应用（程序商店 / 设置）是前端 chrome，
+          不是智能程序，<strong>不进本模型</strong>。
+        </div>
+
+        <h2 id="layers">三层与本页范围</h2>
+        <p>跟程序有关的对象分三层，对应 OS 隐喻；本页只落定前两层。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>层</th><th>是什么</th><th>持久在哪</th><th>本页</th></tr></thead>
+          <tbody>
+            <tr><td>Program</td><td>智能程序 = skill，全局静态目录项</td><td>磁盘 skill 注册表（权威）；DB 可选薄镜像</td><td>✓</td></tr>
+            <tr><td>Installation</td><td>用户 × 程序的边 —— "装在我桌面上"</td><td>控制平面 SQLite</td><td>✓</td></tr>
+            <tr><td>Process</td><td>程序的一次运行（PCB + 进程目录）</td><td>DB（PCB）+ <code>~/.aprog/&lt;pid&gt;/</code>（权威态）</td><td>暂缓</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="decisions">设计取舍（决定了模型形状）</h2>
+        <p>这套模型是从前端的实际交互一步步收敛出来的，几条关键取舍把它压到了最简：</p>
+        <ul>
+          <li><strong>安装即在桌面</strong>，没有"桌面 / 状态栏"摆放管理 → Installation <strong>不含 surface / position 字段</strong>。</li>
+          <li><strong>状态栏（任务栏）= 当前已打开的程序</strong>，是运行时 UI 态（开窗即现、关窗即消），<strong>不落库</strong>，不存"固定/dock"关系。</li>
+          <li><strong>系统应用不是智能程序</strong>：程序商店、设置只是前端 chrome（商店为桌面常驻入口），<strong>不进 <code>programs</code> / <code>installations</code></strong>。</li>
+          <li><strong>无程序详情页</strong>：程序只需目录级元数据（名称 / 版本 / 摘要 / 分类），更丰富的介绍若需要再读 <code>SKILL.md</code>，不在数据模型里冗余。</li>
+          <li><strong>卸载只是从桌面移除</strong>：进程与数据在别处（进程目录），重装即恢复 → Installation 行 <strong>硬删即可</strong>，无需软删/历史。</li>
+        </ul>
+
+        <h2 id="program">Program —— 程序目录</h2>
+        <p>
+          Program 就是一个智能程序（skill），平台范围内唯一。它的<strong>权威态是磁盘上的 skill 注册表</strong>
+          （<code>SKILL.md</code> frontmatter 提供名称、版本、摘要等），与"进程目录是权威态、文件不进库"的原则一致。
+          因此 <code>installations.program_id</code> <strong>只引用 slug</strong>，不必 FK 到一张完整的 programs 表。
+        </p>
+        <p>若后台需要纯 DB 查询 / 校验 / 加管控字段，可加一张<strong>薄镜像</strong>（skill 注册表的缓存，非权威）：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>id</td><td>string</td><td>slug = skill id（稳定标识）</td></tr>
+            <tr><td>name</td><td>string</td><td>展示名</td></tr>
+            <tr><td>version</td><td>string</td><td>来自 SKILL.md</td></tr>
+            <tr><td>summary</td><td>string</td><td>一句话简介</td></tr>
+            <tr><td>category</td><td>string</td><td>商店分组（规划与设计 / 开发与质量 / 文档…）</td></tr>
+            <tr><td>icon</td><td>string</td><td>图标引用（glyph 名 / 资源）</td></tr>
+            <tr><td>publisher</td><td>string</td><td>发布者</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">取舍</span>
+          <strong>派生为主</strong>：磁盘 skill 注册表权威，DB 仅 <code>installations</code> 引用 slug，programs 表按需做缓存镜像。
+          另一选项是把 programs 做成 <strong>DB 权威表</strong>（便于纯 DB 查询、加管控字段），代价是要和磁盘注册表做同步。<strong>待定（见文末）。</strong>
+        </div>
+
+        <h2 id="installation">Installation —— 用户安装的程序</h2>
+        <p>
+          这是真正要新增的表：表达"用户 X 把程序 Y 装在了桌面上"。一个 <code>(user, program)</code> 至多一条。
+          沿用现有 <code>db/index.ts</code> 风格（TEXT 主键、ISO <code>created_at</code> 字符串）。
+        </p>
+        <pre><code>CREATE TABLE installations (
+  user_id      TEXT NOT NULL,   -- FK users.id
+  program_id   TEXT NOT NULL,   -- 程序 slug（= skill id）
+  PRIMARY KEY (user_id, program_id)   -- 兼作唯一性 + “是否已装”查询
+);
+CREATE INDEX installations_user ON installations(user_id);</code></pre>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>user_id</td><td>string</td><td>FK <code>users.id</code></td></tr>
+            <tr><td>program_id</td><td>string</td><td>程序 slug；不强制 FK，因目录权威在磁盘</td></tr>
+          </tbody>
+        </table></div>
+        <ul>
+          <li><strong>装</strong> = 插一行；<strong>卸</strong> = 删该行（硬删）。重装即恢复——进程与数据不在此表。</li>
+          <li><strong>列出我的程序</strong> = <code>WHERE user_id = ?</code>（桌面图标据此渲染）。</li>
+          <li><strong>是否已装</strong> = 主键命中。</li>
+        </ul>
+
+        <h2 id="boundary">文件 vs DB 的分界</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>东西</th><th>放哪</th><th>为什么</th></tr></thead>
+          <tbody>
+            <tr><td>程序目录（catalog）</td><td>磁盘 skill 注册表（DB 可选缓存）</td><td>静态、可派生，权威在 SKILL.md</td></tr>
+            <tr><td>谁装了什么</td><td>DB <code>installations</code></td><td>需查询 / 并发写的关系数据</td></tr>
+            <tr><td>任务栏"已打开"</td><td>不持久（运行时 UI 态）</td><td>= 当前打开的 Process，随窗口生灭</td></tr>
+            <tr><td>进程运行态 / 产物</td><td>DB（PCB）+ 进程目录</td><td>属 Process 层，本页暂缓</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="open">待你拍板</h2>
+        <ul>
+          <li><strong>Program 目录入库与否</strong>：推荐<strong>派生为主</strong>（磁盘权威 + 按需缓存镜像）；还是做成 DB 权威表？</li>
+          <li><strong>新用户默认装哪些</strong>：空桌面（仅前端"程序商店"入口），还是预装几个常用智能程序？</li>
+        </ul>
+        <p>这两点定了，<code>installations</code> 表即可进 <code>db/index.ts</code> 迁移，并接上控制平面的 install / uninstall / list API。</p>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

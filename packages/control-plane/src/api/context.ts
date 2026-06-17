@@ -12,6 +12,8 @@ import type { UserStore } from '../auth/users.ts';
 import type { TokenStore } from '../auth/tokens.ts';
 import type { CodeStore } from '../auth/codes.ts';
 import type { EmailSender } from '../auth/email.ts';
+import type { ProgramCatalog } from '../catalog/programs.ts';
+import type { InstallStore } from '../catalog/installs.ts';
 
 /** 用户对某进程的角色（见 docs/api.html#sharing）。 */
 export type Role = 'owner' | 'editor' | 'viewer';
@@ -36,6 +38,10 @@ export interface Deps {
   codes: CodeStore;
   /** 发邮件（验证链接 / 登录码）。 */
   email: EmailSender;
+  /** 程序目录：列出可装的智能程序。 */
+  catalog: ProgramCatalog;
+  /** 安装记录：列出 / 安装 / 卸载用户的程序。 */
+  installs: InstallStore;
   /** 进程编排：ps / spawn / wake / hibernate / 取 PCB。 */
   procs: ProcessManager;
   /** 事件流存储：盖 seq、落库、回放。 */

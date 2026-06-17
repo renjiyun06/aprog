@@ -12,8 +12,11 @@ import { UserStore } from '../auth/users.ts';
 import { TokenStore } from '../auth/tokens.ts';
 import { CodeStore } from '../auth/codes.ts';
 import { ConsoleEmailSender, SmtpEmailSender } from '../auth/email.ts';
+import { ProgramCatalog } from '../catalog/programs.ts';
+import { InstallStore } from '../catalog/installs.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
+import * as installations from './routes/installations.ts';
 import * as proc from './routes/proc.ts';
 import * as shares from './routes/shares.ts';
 import * as notifications from './routes/notifications.ts';
@@ -28,6 +31,8 @@ export function startApi(config: Config, procs: ProcessManager): void {
     ? new SmtpEmailSender(config.smtp, config.webUrl)
     : new ConsoleEmailSender(config.webUrl);
   console.log(`[control-plane] 邮件发送：${config.smtp ? `SMTP ${config.smtp.host}` : 'console（开发态）'}`);
+  const catalog = new ProgramCatalog(db); // 启动时把程序目录 upsert 进表
+  const installs = new InstallStore(db);
   void seedAdmin(users);
 
   const deps: Deps = {
@@ -35,6 +40,8 @@ export function startApi(config: Config, procs: ProcessManager): void {
     tokens,
     codes,
     email,
+    catalog,
+    installs,
     procs,
     // 以下子系统尚未实现（stream/* 仍是接口）。先用 pending 占位：一旦被处理器触达即抛清晰错误。
     store: pending('StreamStore'),
@@ -45,6 +52,7 @@ export function startApi(config: Config, procs: ProcessManager): void {
   const router = new Router();
   auth.mount(router);
   programs.mount(router);
+  installations.mount(router);
   proc.mount(router);
   shares.mount(router);
   notifications.mount(router);
