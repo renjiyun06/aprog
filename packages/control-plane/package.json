@@ -13,6 +13,10 @@
   },
   "dependencies": {
     "@aprog/protocol": "workspace:*",
-    "@aprog/sandbox": "workspace:*"
+    "@aprog/sandbox": "workspace:*",
+    "nodemailer": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^8.0.1"
   }
 }

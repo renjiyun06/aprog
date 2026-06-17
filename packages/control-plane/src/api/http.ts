@@ -7,6 +7,11 @@ import type { ProcessManager } from '../process/manager.ts';
 import type { Deps } from './context.ts';
 import { Router } from './router.ts';
 import { toErrorResponse, notFound } from './errors.ts';
+import { openDb } from '../db/index.ts';
+import { UserStore } from '../auth/users.ts';
+import { TokenStore } from '../auth/tokens.ts';
+import { CodeStore } from '../auth/codes.ts';
+import { ConsoleEmailSender, SmtpEmailSender } from '../auth/email.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
 import * as proc from './routes/proc.ts';
@@ -15,7 +20,21 @@ import * as notifications from './routes/notifications.ts';
 import { mountSse } from './sse.ts';
 
 export function startApi(config: Config, procs: ProcessManager): void {
+  const db = openDb(config.dataDir);
+  const users = new UserStore(db);
+  const tokens = new TokenStore(db);
+  const codes = new CodeStore(db);
+  const email = config.smtp
+    ? new SmtpEmailSender(config.smtp, config.webUrl)
+    : new ConsoleEmailSender(config.webUrl);
+  console.log(`[control-plane] 邮件发送：${config.smtp ? `SMTP ${config.smtp.host}` : 'console（开发态）'}`);
+  void seedAdmin(users);
+
   const deps: Deps = {
+    users,
+    tokens,
+    codes,
+    email,
     procs,
     // 以下子系统尚未实现（stream/* 仍是接口）。先用 pending 占位：一旦被处理器触达即抛清晰错误。
     store: pending('StreamStore'),
@@ -46,6 +65,21 @@ export function startApi(config: Config, procs: ProcessManager): void {
 /** 去掉 /v1 版本前缀（端点表省略它，见 docs/api.html#shape）。 */
 function stripVersion(path: string): string {
   return path.replace(/^\/v\d+(?=\/)/, '');
+}
+
+/** 库里没有任何用户时，按环境变量种一个已激活管理员（便于首次把系统跑起来）。无 env 则跳过并提示。 */
+async function seedAdmin(users: UserStore): Promise<void> {
+  if (users.count() > 0) return;
+  const name = process.env.APROG_ADMIN_USER;
+  const mail = process.env.APROG_ADMIN_EMAIL;
+  const pass = process.env.APROG_ADMIN_PASSWORD;
+  if (name === undefined || mail === undefined || pass === undefined) {
+    console.log('[control-plane] 暂无用户；设 APROG_ADMIN_USER / APROG_ADMIN_EMAIL / APROG_ADMIN_PASSWORD 可自动建管理员');
+    return;
+  }
+  const u = users.createPending(name, mail);
+  await users.setPassword(u.id, pass); // 直接激活，跳过邮箱验证
+  console.log(`[control-plane] 已创建初始用户 ${name} <${mail}>`);
 }
 
 /** 未装配子系统的占位：被触达即抛清晰错误，避免静默 undefined。 */

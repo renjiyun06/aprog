@@ -5,13 +5,17 @@
 // 角色档位 owner > editor > viewer（见 docs/api.html#sharing）。
 
 import type { Handler, AuthHandler, ReqCtx, AuthCtx, User, Role, Deps } from '../context.ts';
+import { unauthorized } from '../errors.ts';
 
-/** 从 Authorization: Bearer <token> 解析用户。无效 → unauthorized。 */
+/** 从 Authorization: Bearer <token> 解析用户。无效/过期/用户不存在 → unauthorized。 */
 export async function authenticate(req: Request, deps: Deps): Promise<User> {
-  void req;
-  void deps;
-  // TODO: 校验 token（需会话/用户存储）→ 返回 User 或抛 unauthorized()。
-  throw new Error('not implemented: authenticate');
+  const m = (req.headers.get('authorization') ?? '').match(/^Bearer\s+(.+)$/i);
+  if (m === null) throw unauthorized('缺少 Bearer token');
+  const userId = deps.tokens.resolve(m[1]!);
+  if (userId === undefined) throw unauthorized('token 无效或已过期');
+  const user = deps.users.getById(userId);
+  if (user === undefined) throw unauthorized('用户不存在');
+  return user;
 }
 
 /** 校验 user 对 pid 至少有 need 档权限，返回其实际角色。非成员 → forbidden。 */

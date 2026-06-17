@@ -1,73 +1,131 @@
+// 登录态。身份(id/用户名/邮箱)是后端真值；显示名/头像是本地装饰(沿用旧 Profile 字段，
+// 不动 Avatar/UserFlyout/settings)。登录/注册/设密码/验证码全走控制平面（lib/api）。
+
 import { createSignal } from 'solid-js';
+import { api, getToken, setToken } from '../lib/api';
 
-/* ──────────────────────────────────────────────────────────────────────
-   Demo auth — NO backend. Persists to localStorage so refresh keeps you
-   logged in. Demo account: ren / yunjiren123 (password is changeable and
-   then stored locally). This whole module is a stand-in for a real auth
-   service; swap login()/changePassword() for API calls when the backend
-   lands.
-   ──────────────────────────────────────────────────────────────────────── */
+interface Identity {
+  id: string;
+  name: string;
+  email: string;
+}
 
-const LS_SESSION = 'aprog.session';
-const LS_PROFILE = 'aprog.profile';
-const LS_PWD = 'aprog.pwd';
-
-const DEMO_USER = 'ren';
-const DEFAULT_PWD = 'yunjiren123';
-
+/** UI 用的用户视图：后端身份 + 本地装饰。沿用旧字段名以兼容现有组件。 */
 export interface Profile {
-  username: string;
-  displayName: string;
-  avatar: string | null; // dataURL or null (→ render initial)
+  id: string;
+  username: string; // = identity.name
+  email: string;
+  displayName: string; // 本地可改，默认 = username
+  avatar: string | null;
 }
 
-function loadPwd(): string {
-  return localStorage.getItem(LS_PWD) ?? DEFAULT_PWD;
-}
-function loadProfile(): Profile {
-  const raw = localStorage.getItem(LS_PROFILE);
-  if (raw) {
-    try { return JSON.parse(raw) as Profile; } catch { /* fall through */ }
+const LS_IDENTITY = 'aprog.identity';
+const cosmeticKey = (id: string): string => `aprog.cosmetic.${id}`;
+
+function loadIdentity(): Identity | null {
+  const raw = localStorage.getItem(LS_IDENTITY);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as Identity;
+  } catch {
+    return null;
   }
-  return { username: DEMO_USER, displayName: 'Ren', avatar: null };
+}
+function loadCosmetic(id: string): { displayName?: string; avatar?: string | null } {
+  const raw = localStorage.getItem(cosmeticKey(id));
+  if (raw === null) return {};
+  try {
+    return JSON.parse(raw) as { displayName?: string; avatar?: string | null };
+  } catch {
+    return {};
+  }
+}
+function toProfile(idn: Identity): Profile {
+  const c = loadCosmetic(idn.id);
+  return {
+    id: idn.id,
+    username: idn.name,
+    email: idn.email,
+    displayName: c.displayName ?? idn.name,
+    avatar: c.avatar ?? null,
+  };
 }
 
-const [user, setUser] = createSignal<Profile | null>(
-  localStorage.getItem(LS_SESSION) === '1' ? loadProfile() : null,
-);
+const initialIdn = getToken() !== null ? loadIdentity() : null;
+const [user, setUser] = createSignal<Profile | null>(initialIdn ? toProfile(initialIdn) : null);
+
+function establish(idn: Identity, token: string): void {
+  setToken(token);
+  localStorage.setItem(LS_IDENTITY, JSON.stringify(idn));
+  setUser(toProfile(idn));
+}
+
+interface LoginResp {
+  token: string;
+  expiresAt: string;
+  user: Identity;
+}
 
 export const auth = {
   user,
-  isAuthed: () => user() !== null,
+  isAuthed: (): boolean => getToken() !== null && user() !== null,
 
-  /** Saved profile even when logged out — login screen shows it (like Win11). */
-  savedProfile: loadProfile,
-
-  login(username: string, password: string): { ok: boolean; error?: string } {
-    if (username.trim().toLowerCase() !== DEMO_USER) return { ok: false, error: '用户名不存在' };
-    if (password !== loadPwd()) return { ok: false, error: '密码错误' };
-    localStorage.setItem(LS_SESSION, '1');
-    setUser(loadProfile());
-    return { ok: true };
+  /** 登录屏「记住的账号」（仅装饰）。 */
+  savedProfile: (): Profile => {
+    const idn = loadIdentity();
+    return idn ? toProfile(idn) : { id: '', username: '', email: '', displayName: '', avatar: null };
   },
 
-  logout() {
-    localStorage.removeItem(LS_SESSION);
+  /** 用户名或邮箱 + 密码。含 '@' 视为邮箱。 */
+  async loginWithPassword(idOrEmail: string, password: string): Promise<void> {
+    const body = idOrEmail.includes('@') ? { email: idOrEmail, password } : { username: idOrEmail, password };
+    const r = await api.post<LoginResp>('/auth/login', body);
+    establish(r.user, r.token);
+  },
+
+  /** 邮箱 + 验证码。 */
+  async loginWithCode(email: string, code: string): Promise<void> {
+    const r = await api.post<LoginResp>('/auth/login', { email, code });
+    establish(r.user, r.token);
+  },
+
+  /** 请求邮箱登录验证码。 */
+  async requestLoginCode(email: string): Promise<void> {
+    await api.post('/auth/login-code', { email });
+  },
+
+  /** 注册：用户名 + 邮箱（随后邮箱验证）。 */
+  async register(username: string, email: string): Promise<void> {
+    await api.post('/auth/register', { username, email });
+  },
+
+  /** 邮箱验证 token + 设密码激活。 */
+  async setPassword(token: string, password: string): Promise<void> {
+    await api.post('/auth/set-password', { token, password });
+  },
+
+  async logout(): Promise<void> {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      /* 即便后端失败也清本地 */
+    }
+    setToken(null);
+    localStorage.removeItem(LS_IDENTITY);
     setUser(null);
   },
 
-  updateProfile(patch: Partial<Profile>) {
+  /** 本地装饰：改显示名 / 头像（不入后端）。 */
+  updateProfile(patch: Partial<Pick<Profile, 'displayName' | 'avatar'>>): void {
     const cur = user();
-    if (!cur) return;
+    if (cur === null) return;
     const next = { ...cur, ...patch };
-    localStorage.setItem(LS_PROFILE, JSON.stringify(next));
+    localStorage.setItem(cosmeticKey(cur.id), JSON.stringify({ displayName: next.displayName, avatar: next.avatar }));
     setUser(next);
   },
 
-  changePassword(oldPwd: string, newPwd: string): { ok: boolean; error?: string } {
-    if (oldPwd !== loadPwd()) return { ok: false, error: '当前密码错误' };
-    if (newPwd.length < 6) return { ok: false, error: '新密码至少 6 位' };
-    localStorage.setItem(LS_PWD, newPwd);
-    return { ok: true };
+  /** 改密：后端尚无改密端点，暂走邮箱重置（待接入）。 */
+  changePassword(_oldPwd: string, _newPwd: string): { ok: boolean; error?: string } {
+    return { ok: false, error: '改密请通过邮箱验证重置（待接入）' };
   },
 };

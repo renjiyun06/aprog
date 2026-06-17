@@ -8,6 +8,10 @@ import type { ProcessManager } from '../process/manager.ts';
 import type { StreamStore } from '../stream/store.ts';
 import type { StreamHub } from '../stream/hub.ts';
 import type { DriverChannel } from '../driver-channel/driver-channel.ts';
+import type { UserStore } from '../auth/users.ts';
+import type { TokenStore } from '../auth/tokens.ts';
+import type { CodeStore } from '../auth/codes.ts';
+import type { EmailSender } from '../auth/email.ts';
 
 /** 用户对某进程的角色（见 docs/api.html#sharing）。 */
 export type Role = 'owner' | 'editor' | 'viewer';
@@ -16,6 +20,7 @@ export type Role = 'owner' | 'editor' | 'viewer';
 export interface User {
   id: string;
   name: string;
+  email: string;
 }
 
 /**
@@ -23,6 +28,14 @@ export interface User {
  * 这是 API 与"真正干活的核"之间的唯一接缝——处理器只调这里的方法。
  */
 export interface Deps {
+  /** 用户存储：注册、激活、登录校验、取用户。 */
+  users: UserStore;
+  /** 会话 token：签发 / 解析 / 吊销。 */
+  tokens: TokenStore;
+  /** 邮箱验证 token + 登录验证码。 */
+  codes: CodeStore;
+  /** 发邮件（验证链接 / 登录码）。 */
+  email: EmailSender;
   /** 进程编排：ps / spawn / wake / hibernate / 取 PCB。 */
   procs: ProcessManager;
   /** 事件流存储：盖 seq、落库、回放。 */

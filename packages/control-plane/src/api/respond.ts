@@ -19,3 +19,12 @@ export function parsePid(ctx: ReqCtx): number {
   if (!Number.isInteger(v)) throw validation('pid 非法');
   return v;
 }
+
+/** 读 JSON 请求体（非法 JSON → 400 validation）。 */
+export async function readJson(req: Request): Promise<Record<string, unknown>> {
+  try {
+    return (await req.json()) as Record<string, unknown>;
+  } catch {
+    throw validation('请求体非法 JSON');
+  }
+}
