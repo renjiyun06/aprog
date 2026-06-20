@@ -2,13 +2,11 @@
 // 现仅骨架——把模块接线关系立起来，实现待后续细化协议时填。
 
 import { loadConfig } from './config.ts';
-import { ProcessManager } from './process/manager.ts';
 import { startApi } from './api/http.ts';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const procs = new ProcessManager(config);
-  startApi(config, procs);
+  startApi(config);
   // TODO: 优雅退出、健康检查、恢复未完成进程的快照。
 }
 

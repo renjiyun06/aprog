@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { findProgram, type ProgramDef } from '../programs/registry';
 
 /* 用户安装了哪些智能程序——状态来自控制平面（GET/POST/DELETE /installations）。
-   模型见 docs/program-model.html：安装即在桌面；任务栏只显示已打开的程序（运行时态，不在此）。
+   模型见 docs/data-model.html：安装即在桌面；任务栏只显示已打开的程序（运行时态，不在此）。
    系统应用（程序商店）是前端桌面常驻 chrome，不是智能程序、不走这套安装状态（见 DesktopIcons）。
 
    仅保存 id 列表；渲染所需的 label/glyph 由本地 registry（findProgram）按 id 解析。

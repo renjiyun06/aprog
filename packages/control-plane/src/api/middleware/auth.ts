@@ -5,7 +5,7 @@
 // 角色档位 owner > editor > viewer（见 docs/api.html#sharing）。
 
 import type { Handler, AuthHandler, ReqCtx, AuthCtx, User, Role, Deps } from '../context.ts';
-import { unauthorized } from '../errors.ts';
+import { unauthorized, notFound, forbidden } from '../errors.ts';
 
 /** 从 Authorization: Bearer <token> 解析用户。无效/过期/用户不存在 → unauthorized。 */
 export async function authenticate(req: Request, deps: Deps): Promise<User> {
@@ -18,14 +18,14 @@ export async function authenticate(req: Request, deps: Deps): Promise<User> {
   return user;
 }
 
-/** 校验 user 对 pid 至少有 need 档权限，返回其实际角色。非成员 → forbidden。 */
+/** 校验 user 对 pid 至少有 need 档权限，返回其实际角色。进程不存在 → not_found；非成员 → forbidden。
+ *  当前还没有共享模型：进程只有 owner（= 创建者）。任何档位都要求是 owner；待 shares 落地再按档位放行。 */
 export async function authorize(user: User, pid: number, need: Role, deps: Deps): Promise<Role> {
-  void user;
-  void pid;
   void need;
-  void deps;
-  // TODO: 查进程成员表 → 比较角色档位（owner>editor>viewer）→ 返回角色或抛 forbidden()。
-  throw new Error('not implemented: authorize');
+  const proc = deps.procs.get(pid);
+  if (proc === undefined) throw notFound(`进程 ${pid} 不存在`);
+  if (proc.userId !== user.id) throw forbidden('无权访问该进程');
+  return 'owner';
 }
 
 /** 包装器：要求登录。鉴权通过后处理器拿到带 user 的 AuthCtx。 */

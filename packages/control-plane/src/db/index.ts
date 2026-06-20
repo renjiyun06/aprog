@@ -54,7 +54,7 @@ export function applyMigrations(db: Database): void {
     expires_at TEXT NOT NULL
   )`);
 
-  // 程序目录（薄镜像）。权威态是磁盘 skill 注册表；这里只放可查询的元数据（见 docs/program-model.html）。
+  // 程序目录（薄镜像）。权威态是磁盘 skill 注册表；这里只放可查询的元数据（见 docs/data-model.html）。
   db.run(`CREATE TABLE IF NOT EXISTS programs (
     id        TEXT PRIMARY KEY,
     name      TEXT NOT NULL,
@@ -71,4 +71,22 @@ export function applyMigrations(db: Database): void {
     PRIMARY KEY (user_id, program_id)
   )`);
   db.run('CREATE INDEX IF NOT EXISTS installations_user ON installations (user_id)');
+
+  // 进程控制块（PCB）。一个 program 的一次运行，类比 OS 进程（pid 自增整数）。模型见 docs/data-model.html#process。
+  // state 只由「有没有关联沙箱」驱动：spawned / running / hibernating，无终止态、状态永不删除（无 deleted 列）。
+  // phase/status 是程序内部 FSM 态，住进程目录 meta.yml，不进此表。沙箱动作当前为 mock。
+  db.run(`CREATE TABLE IF NOT EXISTS processes (
+    pid             INTEGER PRIMARY KEY,
+    name            TEXT,
+    user_id         TEXT NOT NULL,
+    program_id      TEXT NOT NULL,
+    program_version TEXT,
+    state           TEXT NOT NULL,
+    provider        TEXT,
+    sandbox_id      TEXT,
+    checkpoint_ref  TEXT,
+    created_at      TEXT NOT NULL,
+    last_active_at  TEXT
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS processes_user ON processes (user_id)');
 }

@@ -161,6 +161,8 @@ export interface ProcInfo {
   version?: string;
   /** only two states matter to the user: running (sandbox attached) vs hibernating (no sandbox) */
   dot: 'running' | 'hibernating';
+  /** 首次创建、从未运行（后端 state=spawned）——dot 仍是 hibernating，但文案区分「待运行」与「休眠」 */
+  fresh?: boolean;
   active?: boolean;
 }
 
@@ -392,6 +394,7 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
      instead of the chat stream + composer (the directory stays). */
   const activeProc = () => p.procs.find((x) => x.active) ?? p.procs[0];
   const dormant = () => activeProc()?.dot === 'hibernating';
+  const fresh = () => activeProc()?.fresh === true; // spawned：从未运行，文案区分「待运行」vs「休眠」
 
   /* ── share (demo) ── current user is owner of the attached process, so the
      分享 button shows and the panel is editable. Mock member list. */
@@ -693,10 +696,7 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
               fallback={
                 <div class="dz-chat">
                   <div class="chat-stream dz-stream">
-                    <Show
-                      when={p.events.length > 0}
-                      fallback={<div class="stream-empty">进程已创建. 在下方输入指令, {p.procTitle} 就会开始执行.</div>}
-                    >
+                    <Show when={p.events.length > 0}>
                       <For each={p.events}>{(e) => <EventView e={e} />}</For>
                     </Show>
                   </div>
@@ -716,14 +716,21 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
               {/* hibernating: no sandbox, no live conversation — only a wake action */}
               <div class="dz-dormant">
                 <div class="dormant-card">
-                  <div class="dormant-glyph"><MoonIcon /></div>
-                  <div class="dormant-title">进程休眠中</div>
-                  <div class="dormant-sub">未关联沙箱，当前没有运行中的对话。<br />唤醒后将分配沙箱，{p.procTitle} 可继续执行。</div>
+                  <div class="dormant-glyph"><Show when={fresh()} fallback={<MoonIcon />}><PowerIcon /></Show></div>
+                  <div class="dormant-title">{fresh() ? '进程待运行' : '进程休眠中'}</div>
+                  <div class="dormant-sub">
+                    <Show
+                      when={fresh()}
+                      fallback={<>未关联沙箱，当前没有运行中的对话。<br />唤醒后将分配沙箱，{p.procTitle} 可继续执行。</>}
+                    >
+                      进程已创建，尚未运行。<br />运行后将分配沙箱，{p.procTitle} 开始执行。
+                    </Show>
+                  </div>
                   <button
                     class="btn primary dormant-wake"
                     onClick={() => { const a = activeProc(); if (a) p.onWake?.(a.pid); }}
                   >
-                    <PowerIcon /> 唤醒进程
+                    <PowerIcon /> {fresh() ? '运行进程' : '唤醒进程'}
                   </button>
                 </div>
               </div>
@@ -778,14 +785,13 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
         <div class="spawn-overlay" onClick={cancel}>
           <div class="spawn-dialog" onClick={(e) => e.stopPropagation()}>
             <h3>新建进程</h3>
-            <p class="spawn-hint">为这次 {p.procTitle} 执行起个名字. 每个进程是 ~/.aprog/ 下的一个独立目录.</p>
+            <p class="spawn-hint">为这次 {p.procTitle} 执行起个名字.</p>
             <div class="spawn-field">
               <label>名称</label>
               <input
                 class="spawn-input"
                 ref={(el) => queueMicrotask(() => el.focus())}
                 value={name()}
-                placeholder="例如: acme · 官网重设计"
                 onInput={(e) => setName(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') submit();

@@ -2,7 +2,7 @@
 //
 // 权威态本应是磁盘 skill 注册表（SKILL.md frontmatter）；当前还没有该注册表，
 // 故先用一份静态常量作为目录来源，启动时 upsert 进 programs 表（薄镜像，便于查询/校验）。
-// 模型见 docs/program-model.html。系统应用（商店/设置）是前端 chrome，不在目录里。
+// 模型见 docs/data-model.html。系统应用（商店/设置）是前端 chrome，不在目录里。
 
 import type { Database } from 'bun:sqlite';
 
@@ -48,5 +48,14 @@ export class ProgramCatalog {
   /** 目录里是否有该程序（安装前校验）。 */
   has(id: string): boolean {
     return this.db.query('SELECT 1 FROM programs WHERE id = ? LIMIT 1').get(id) !== null;
+  }
+
+  /** 取单个程序（spawn 时据此钉当前版本）；不存在返回 undefined。 */
+  get(id: string): ProgramRow | undefined {
+    return (
+      (this.db
+        .query('SELECT id, name, version, summary, category, publisher FROM programs WHERE id = ?')
+        .get(id) as ProgramRow | null) ?? undefined
+    );
   }
 }

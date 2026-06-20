@@ -1,5 +1,5 @@
 // 路由 · 程序目录。GET /programs —— 列出可安装的智能程序（商店目录）。
-// 系统应用（商店/设置）是前端 chrome，不在目录里。模型见 docs/program-model.html。
+// 系统应用（商店/设置）是前端 chrome，不在目录里。模型见 docs/data-model.html。
 
 import type { Router } from '../router.ts';
 import type { AuthCtx } from '../context.ts';

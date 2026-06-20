@@ -1,4 +1,4 @@
-// 路由 · 安装。当前用户在桌面上装了哪些智能程序（模型见 docs/program-model.html）。
+// 路由 · 安装。当前用户在桌面上装了哪些智能程序（模型见 docs/data-model.html）。
 //   GET    /installations               → 已装程序 id 列表
 //   POST   /installations  {programId}  → 安装（幂等）
 //   DELETE /installations/:programId     → 卸载（幂等）

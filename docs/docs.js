@@ -46,7 +46,6 @@
       items: [
         { page: 'state',        label: '进程目录与状态' },
         { page: 'data-model',   label: '数据模型' },
-        { page: 'program-model', label: '程序与安装数据模型' },
       ],
     },
     {

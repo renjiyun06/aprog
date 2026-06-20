@@ -22,10 +22,33 @@
         <div class="eyebrow">状态与持久化</div>
         <h1>数据模型</h1>
         <p class="lead">
-          Control Plane 管理平台要存三类数据，存储介质按一条铁律分开：<strong>关系管理数据进数据库（SQLite）</strong>、
-          <strong>进程工作态与技能包进文件系统</strong>、<strong>密钥进 vault（库里只存引用）</strong>。
-          这页讲实体、字段与事实源归属；进程目录内部结构见 <a href="state.html">进程目录与状态</a>，镜像/沙箱见 <a href="sandbox.html">沙箱与镜像</a>。
+          这是 aprog 数据模型的<strong>单一出处</strong>：实体、字段、事实源归属，全部收在这一页。
+          先讲存储按一条铁律三分；再讲<strong>当前已落地的库表</strong>（逐字对齐 <code>control-plane/src/db</code>）；
+          最后讲<strong>规划中、尚未落地</strong>的运行时与版本/能力模型。进程目录内部结构见
+          <a href="state.html">进程目录与状态</a>，镜像/沙箱见 <a href="sandbox.html">沙箱与镜像</a>。
         </p>
+
+        <h2 id="catalog">模型目录</h2>
+        <p>一眼看清每个数据模型的落地状态（<strong>已实现 6（含 Process 沙箱 mock）/ 规划中 3</strong>）；点模型名跳到详情。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>模型</th><th>说明</th><th>持久层</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#users"><code>users</code></a></td><td>用户身份与激活状态</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#auth-codes"><code>auth_codes</code></a></td><td>邮箱验证 token + 登录验证码</td><td>SQLite（短时）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#tokens"><code>tokens</code></a></td><td>会话 token（不透明串）</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#programs"><code>programs</code></a></td><td>程序目录薄镜像</td><td>SQLite（镜像，权威在磁盘）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#installations"><code>installations</code></a></td><td>用户 × 程序的安装边</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#skillversion">SkillVersion</a></td><td>不可变版本 + 依赖闭包锁</td><td>DB + 磁盘只读副本</td><td><span class="pill">规划中</span></td></tr>
+            <tr><td><a href="#capability">Capability / CapabilityGrant</a></td><td>能力授权（CLI / MCP + scope）</td><td>DB（密钥在 Vault）</td><td><span class="pill">规划中</span></td></tr>
+            <tr><td><a href="#process">Process</a></td><td>程序的一次运行实例（PCB + 进程目录）</td><td>DB（PCB）+ 进程目录</td><td><span class="pill run">已实现·沙箱mock</span></td></tr>
+            <tr><td><a href="#snapshot-entity">Snapshot</a></td><td>沙箱镜像注册</td><td>DB（指针）+ 厂商侧</td><td><span class="pill">规划中</span></td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">怎么读这张表</span>
+          标 <span class="pill run">已实现</span> 的 5 个就是当前代码里真实存在的库表（逐字对齐 <code>control-plane/src/db</code>）；
+          标 <span class="pill">规划中</span> 的是目标架构、尚无对应表。下面分「<a href="#implemented">已实现</a>」「<a href="#planned">规划中</a>」两节展开。
+        </div>
 
         <h2 id="split">三处存储的分界</h2>
         <p>为什么这样分：沙箱里的 harness 只有文件工具、没有 SQL，且跨引擎中立要求「文件即状态」；而用户/归属/进程索引是要<strong>查询的关系事实</strong>，归数据库。密钥不进任何快照。</p>
@@ -33,68 +56,138 @@
           <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
             <div class="node c-cp" style="flex:1">
               <span class="nt">🗄 SQLite <span class="tag">关系管理</span></span>
-              <span class="nd">User / AuthSession / Skill / SkillVersion / Installation / CapabilityGrant / Process / Snapshot。可查询，存<strong>指针 + 关系事实</strong>，不存重内容。</span>
+              <span class="nd">用户、认证码、会话 token、程序目录镜像、安装记录（已落地）；进程 / 镜像注册（规划）。可查询，存<strong>指针 + 关系事实</strong>，不存重内容。</span>
             </div>
             <div class="node c-state" style="flex:1">
               <span class="nt">📁 文件系统 <span class="tag">权威内容</span></span>
-              <span class="nd"><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;ver&gt;/</code>（版本化技能包）、<code>/var/lib/aprog/proc/&lt;pid&gt;/</code>（进程目录快照）、事件流。</span>
+              <span class="nd"><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;ver&gt;/</code>（版本化技能包）、<code>~/.aprog/&lt;pid&gt;/</code>（进程目录，resume 权威）、事件流。</span>
             </div>
             <div class="node c-bad" style="flex:1">
               <span class="nt">🔐 Vault <span class="tag">密钥</span></span>
               <span class="nd">capability 用的 token/secret 值。DB 只存<strong>引用</strong>，spawn 时按授权注入沙箱，永不烘进镜像/快照。</span>
             </div>
           </div>
-          <div class="dgm-cap">DB 行里的 <code>state/phase</code> 是<strong>快查投影</strong>；进程目录的 <code>meta.yml</code> 才是 resume 权威（冲突以目录为准）。见 <a href="state.html#layers">三层数据</a>。</div>
+          <div class="dgm-cap">DB 行里的 <code>state</code> 是控制平面驱动的<strong>生命周期态</strong>；程序内部的 <code>phase</code> / <code>status</code> 住在进程目录 <code>meta.yml</code>（resume 权威，冲突以目录为准），<strong>不进 DB</strong>。见 <a href="state.html#layers">三层数据</a>。</div>
         </div>
 
-        <h2 id="entities">实体（SQLite）</h2>
+        <!-- ============================ 已实现 ============================ -->
+        <h2 id="implemented" data-nav="已实现：SQLite 库表">已实现：控制平面 SQLite 库表 <span class="pill run">现状</span></h2>
+        <p>
+          控制平面库为单 VM 嵌入式 SQLite（<code>bun:sqlite</code>，WAL），见 <code>control-plane/src/db/index.ts</code>。
+          目前共 <strong>5 张表</strong>：认证三件套（<code>users</code> / <code>auth_codes</code> / <code>tokens</code>）
+          与程序模型两表（<code>programs</code> / <code>installations</code>）。下面字段与索引均与建表 SQL 一一对应。
+        </p>
 
-        <h3 id="user">User</h3>
-        <p>人类用户，现阶段由管理员 out-of-band 创建（无 self-signup）。</p>
+        <h3 id="users"><code>users</code> —— 用户</h3>
+        <p>注册只填 <code>name + email</code>，<code>password_hash</code> 留空、<code>status = pending</code>；邮箱验证 + 设密码后才置 <code>active</code>。自助注册，无需管理员预置。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td>id</td><td>string</td><td>唯一标识</td></tr>
-            <tr><td>username</td><td>string</td><td>唯一，登录用</td></tr>
-            <tr><td>password_hash</td><td>string</td><td>argon2 / bcrypt</td></tr>
-            <tr><td>created_at / last_login_at</td><td>timestamp</td><td></td></tr>
+            <tr><td>id</td><td>TEXT PK</td><td>唯一标识</td></tr>
+            <tr><td>name</td><td>TEXT</td><td>用户名（登录用）</td></tr>
+            <tr><td>email</td><td>TEXT</td><td>邮箱（登录 / 验证用）</td></tr>
+            <tr><td>password_hash</td><td>TEXT?</td><td>激活后才设；pending 期为空</td></tr>
+            <tr><td>status</td><td>TEXT</td><td><code>pending</code> → <code>active</code></td></tr>
+            <tr><td>created_at</td><td>TEXT</td><td>ISO 字符串</td></tr>
           </tbody>
         </table></div>
+        <div class="note">
+          <span class="note-label">唯一性只约束 active 用户</span>
+          <code>name</code>、<code>email</code> 大小写不敏感唯一，但用的是<strong>局部唯一索引</strong>
+          （<code>WHERE status = 'active'</code>）。未激活（pending）用户<strong>不占用标识符</strong>：注册了却忘记激活的人，
+          应能用同一用户名/邮箱重新注册——此时旧的 pending 行连同其 auth_codes / tokens 一并回收（见 <code>users.createPending</code>）。
+<pre><code>CREATE UNIQUE INDEX users_name_lower  ON users (lower(name))  WHERE status = 'active';
+CREATE UNIQUE INDEX users_email_lower ON users (lower(email)) WHERE status = 'active';</code></pre>
+        </div>
 
-        <h3 id="authsession">AuthSession</h3>
-        <p>登录创建、登出失效。一个 User 可同时持有多个（多设备各一个）。</p>
+        <h3 id="auth-codes"><code>auth_codes</code> —— 邮箱验证 / 登录码</h3>
+        <p>一张表承载两种短时凭据，靠 <code>kind</code> 区分：<code>verify</code>（邮箱验证用的长随机 token）与 <code>login</code>（6 位登录验证码）。均带 <code>expires_at</code>，用后/过期作废。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td>id (= token)</td><td>string</td><td>客户端持有的不透明串</td></tr>
-            <tr><td>user_id</td><td>string</td><td>User.id</td></tr>
-            <tr><td>created_at / last_used_at / expires_at</td><td>timestamp</td><td>默认 TTL 30 天</td></tr>
-            <tr><td>revoked_at</td><td>timestamp?</td><td>登出时填</td></tr>
+            <tr><td>id</td><td>TEXT PK</td><td></td></tr>
+            <tr><td>user_id</td><td>TEXT</td><td><code>users.id</code></td></tr>
+            <tr><td>kind</td><td>TEXT</td><td><code>verify</code>（长随机）/ <code>login</code>（6 位短码）</td></tr>
+            <tr><td>code</td><td>TEXT</td><td>token / 验证码本体</td></tr>
+            <tr><td>expires_at / created_at</td><td>TEXT</td><td>ISO 字符串</td></tr>
           </tbody>
         </table></div>
-        <p>验证：<code>revoked_at IS NULL AND expires_at &gt; now()</code>，否则 401。</p>
+        <p>索引：<code>auth_codes_verify (kind, code)</code>（验证 token 反查）、<code>auth_codes_login (user_id, kind)</code>（取某人最近的登录码）。</p>
 
-        <h3 id="skill">Skill <span class="tag">程序 / 库</span></h3>
-        <p>一个技能包的<strong>身份</strong>。程序(<code>application</code>) 和库(<code>library</code>) 都是 Skill，靠 <code>kind</code> 区分——对底层 harness 它们都是 skill，「程序/库」是平台层角色（见 <a href="journey.html">运行全景</a>）。</p>
+        <h3 id="tokens"><code>tokens</code> —— 会话</h3>
+        <p>登录成功后签发的不透明会话串，客户端持有。登出 / 过期即失效。一个用户可同时持多个（多设备）。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td>name (= id)</td><td>string</td><td><strong>全局唯一</strong>的技能名，如 <code>design</code>。即 harness 里的 skill 名，必须唯一——故直接作 id，不加命名空间。publish 时强制唯一</td></tr>
-            <tr><td>kind</td><td>enum</td><td><code>application</code>（可 spawn）/ <code>library</code>（只被依赖）</td></tr>
-            <tr><td>source</td><td>enum</td><td><code>builtin</code>（源在 repo）/ <code>user</code>（用户上传）。同形，仅来源不同</td></tr>
-            <tr><td>owner_id</td><td>string?</td><td>作者；builtin 为平台</td></tr>
-            <tr><td>latest_version</td><td>semver</td><td>指向最新的 SkillVersion</td></tr>
+            <tr><td>token</td><td>TEXT PK</td><td>客户端持有的不透明串</td></tr>
+            <tr><td>user_id</td><td>TEXT</td><td><code>users.id</code></td></tr>
+            <tr><td>created_at / expires_at</td><td>TEXT</td><td>ISO 字符串</td></tr>
           </tbody>
         </table></div>
 
-        <h3 id="skillversion">SkillVersion <span class="tag">不可变</span></h3>
-        <p>一个技能的某个版本，<strong>发布后不可变</strong>。进程钉死的就是它。描述/依赖随版本走。</p>
+        <h3 id="programs"><code>programs</code> —— 程序目录（薄镜像）</h3>
+        <p>
+          一个智能程序（skill）的目录级元数据。<strong>权威态是磁盘上的 skill 注册表</strong>（<code>SKILL.md</code> frontmatter），
+          这张表只是<strong>可查询的薄镜像</strong>：服务启动时由内置目录 <code>INSERT OR REPLACE</code> 播种，供
+          <code>GET /programs</code> 列出商店。<strong>图标不入库</strong>——前端按 <code>id</code> 从本地 registry 渲染。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>id</td><td>TEXT PK</td><td>slug = skill id（稳定标识）</td></tr>
+            <tr><td>name</td><td>TEXT</td><td>展示名</td></tr>
+            <tr><td>version</td><td>TEXT?</td><td>来自 SKILL.md</td></tr>
+            <tr><td>summary</td><td>TEXT?</td><td>一句话简介</td></tr>
+            <tr><td>category</td><td>TEXT?</td><td>商店分组（规划与设计 / 开发与质量 / 文档…）</td></tr>
+            <tr><td>publisher</td><td>TEXT?</td><td>发布者</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">派生为主</span>
+          因目录权威在磁盘，<code>installations.program_id</code> <strong>只引用 slug</strong>，不向本表做强制外键；
+          本表丢了可随时从 skill 注册表重建。它是<a href="#planned">规划中</a> Skill / SkillVersion 模型的<strong>扁平先行版</strong>——
+          目前一行只记一个 <code>version</code> 字符串，尚无不可变版本注册与依赖闭包锁。
+        </div>
+
+        <h3 id="installations"><code>installations</code> —— 用户安装的程序</h3>
+        <p>表达"用户 X 把程序 Y 装在了桌面上"。一个 <code>(user, program)</code> 至多一条。装即插行、卸即删行（硬删）。</p>
+        <pre><code>CREATE TABLE installations (
+  user_id    TEXT NOT NULL,   -- users.id
+  program_id TEXT NOT NULL,   -- 程序 slug（= skill id）
+  PRIMARY KEY (user_id, program_id)   -- 兼作唯一性 + “是否已装”查询
+);
+CREATE INDEX installations_user ON installations(user_id);</code></pre>
+        <ul>
+          <li><strong>列出我的程序</strong> = <code>WHERE user_id = ?</code>（桌面图标据此渲染）；<strong>是否已装</strong> = 主键命中。</li>
+          <li><strong>卸载只是从桌面移除</strong>：进程与数据在别处（进程目录），重装即恢复 → 行<strong>硬删即可</strong>，无需软删/历史，也无 <code>installed_at</code>。</li>
+        </ul>
+        <div class="note">
+          <span class="note-label">为什么这么简单（设计取舍）</span>
+          这套模型从前端实际交互反推、刻意压到最简：
+          <ul style="margin:6px 0 0">
+            <li><strong>安装即在桌面</strong>，没有"桌面 / 状态栏"摆放管理 → 不含 <code>surface</code> / <code>position</code> 字段。</li>
+            <li><strong>任务栏 = 当前已打开的程序</strong>，是运行时 UI 态（开窗即现、关窗即消），<strong>不落库</strong>。</li>
+            <li><strong>系统应用不是智能程序</strong>：程序商店、设置只是前端 chrome（商店为桌面常驻入口），<strong>不进</strong> <code>programs</code> / <code>installations</code>。</li>
+            <li><strong>无程序详情页</strong>：只需目录级元数据，更丰富的介绍按需读 <code>SKILL.md</code>，不在库里冗余。</li>
+          </ul>
+        </div>
+
+        <!-- ============================ 规划中 ============================ -->
+        <h2 id="planned" data-nav="规划中：运行时 / 版本 / 能力">规划中：运行时 / 版本 / 能力 <span class="pill">未落地</span></h2>
+        <div class="note warn">
+          <span class="note-label">以下尚未实现</span>
+          本节是<strong>目标架构</strong>，描述程序运行时（Process / Snapshot）、不可变版本（SkillVersion）与能力授权（Capability）模型。
+          当前代码里<strong>都还没有对应表</strong>——程序模型先以扁平的 <code>programs</code> 占位。按既定优先级，运行时部分待沙箱接入后落地。
+        </div>
+
+        <h3 id="skillversion">SkillVersion <span class="pill">规划中</span></h3>
+        <p>一个技能的某个版本，<strong>发布后不可变</strong>，进程钉死的就是它。把现 <code>programs.version</code> 字符串升级成独立的版本注册：</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
             <tr><td>skill_name + version</td><td>string + semver</td><td>主键，如 <code>design@0.4.0</code></td></tr>
             <tr><td>description</td><td>string</td><td>简介（界面 <strong>?</strong> 与程序商店展示）</td></tr>
-            <tr><td>depends_lock</td><td>json</td><td><strong>依赖闭包锁</strong>：解析后的库版本，如 <code>{state@0.3.0, live-annotate@0.4.0}</code>。保证闭包可复现</td></tr>
+            <tr><td>depends_lock</td><td>json</td><td><strong>依赖闭包锁</strong>：解析后的库版本，如 <code>{state@0.3.0, live-annotate@0.4.0}</code>，保证闭包可复现</td></tr>
             <tr><td>capabilities</td><td>json</td><td>声明需要的 capability + scope（spawn 时据此授权）</td></tr>
             <tr><td>store_path</td><td>path</td><td><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;version&gt;/</code>（只读副本，publish 时拷入）</td></tr>
           </tbody>
@@ -105,18 +198,7 @@
           Control Plane <strong>只从副本注入</strong>，不读可编辑的源——所以改程序发新版不影响钉旧版的进程。
         </div>
 
-        <h3 id="installation">Installation <span class="tag">安装 / 归属</span></h3>
-        <p>用户把某 Skill 装到自己桌面。<strong>安装 = 桌面整理</strong>：装则上桌面/任务栏，卸载只删此行、<strong>进程与数据全留</strong>，重装即恢复。库不单独安装，随程序依赖闭包透明带入。</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
-          <tbody>
-            <tr><td>user_id + skill_name</td><td>string</td><td>主键</td></tr>
-            <tr><td>pinned_version</td><td>semver?</td><td>留空=跟 latest；填了=锁定某版本启动</td></tr>
-            <tr><td>installed_at</td><td>timestamp</td><td></td></tr>
-          </tbody>
-        </table></div>
-
-        <h3 id="capability">Capability &amp; CapabilityGrant</h3>
+        <h3 id="capability">Capability &amp; CapabilityGrant <span class="pill">规划中</span></h3>
         <p>capability = 给 harness 调的工具（CLI / MCP），<strong>全量烘在沙箱镜像里</strong>；按 program 差异化在 spawn 时控制暴露面。详见 <a href="sandbox.html">沙箱与镜像</a>。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>实体 / 字段</th><th>说明</th></tr></thead>
@@ -126,25 +208,106 @@
           </tbody>
         </table></div>
 
-        <h3 id="process">Process</h3>
-        <p>一次 program 执行的实例，主 noun。版本在 spawn 时<strong>钉死</strong>，一生不变（升级是显式迁移）。</p>
+        <h3 id="process">Process <span class="pill run">已实现 · 沙箱 mock</span></h3>
+        <div class="note ok">
+          <span class="note-label">后端已按此模型落地（沙箱动作 mock）</span>
+          第三层 <strong>Process</strong> 的数据模型（PCB 表 + 状态机 + 操作副作用 + 事实源边界）已实现：
+          PCB 进 <code>processes</code> 表、生命周期 spawn / ps / wake / hibernate / kill 走
+          <code>control-plane/src/process</code>。<strong>所有「碰沙箱」的动作（起停沙箱、检查点）经 <code>SandboxGateway</code> 收口，当前用 <code>MockSandboxGateway</code> 顶</strong>——只造假 <code>sandbox_id</code> / <code>checkpoint_ref</code>，不起真实算力。
+          运行时机制（沙箱编排、检查点回流、唤醒）的深入细节见 <a href="state.html">进程目录与状态</a>、<a href="sandbox.html">沙箱与镜像</a>、<a href="flows.html">生命周期流程</a>。
+        </div>
+        <p>
+          Process = 一个 program 的<strong>一次运行</strong>，类比 OS 进程，平台的主 noun。版本在 <code>spawn</code> 时<strong>钉死</strong>、一生不变（升级是显式迁移）。
+          它有两处载体：控制平面的 <strong>PCB 行</strong>（可查询的关系事实）与磁盘上的<strong>进程目录</strong> <code>~/.aprog/&lt;pid&gt;/</code>（权威内容态）。
+        </p>
+
+        <p><strong>① 进程控制块（PCB）—— <code>processes</code> 表</strong></p>
+        <p>沿用现有 <code>db/index.ts</code> 风格（TEXT 主键、ISO 时间字符串）。刻意精简：只放<strong>需要查询/编排</strong>的字段，内容态一律留在进程目录。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td>pid</td><td>string</td><td>uuid 取前几位，如 <code>a3f9c2d1</code></td></tr>
-            <tr><td>user_id</td><td>string</td><td>owner</td></tr>
-            <tr><td>skill_name</td><td>string</td><td><strong>钉死</strong>的程序名，如 <code>design</code></td></tr>
-            <tr><td>skill_version</td><td>semver</td><td><strong>钉死</strong>的版本；依赖闭包由该 SkillVersion 的 <code>depends_lock</code> 推出（不同进程可钉不同版本）</td></tr>
-            <tr><td>state</td><td>enum</td><td><code>running</code>（有沙箱）/ <code>hibernating</code>（无沙箱）</td></tr>
-            <tr><td>provider</td><td>enum</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）</td></tr>
-            <tr><td>sandbox_id</td><td>string?</td><td>当前沙箱 ID，无沙箱时 null</td></tr>
-            <tr><td>checkpoint_ref</td><td>string?</td><td>最新检查点的引用（控制平面侧存储路径）；唤醒时灌回新沙箱（见 <a href="state.html#checkpoint">检查点</a>）</td></tr>
-            <tr><td>created_at / last_active_at</td><td>timestamp</td><td></td></tr>
+            <tr><td>pid</td><td>INTEGER PK</td><td>进程 id，自增整数（类比 OS pid），如 <code>1042</code></td></tr>
+            <tr><td>name</td><td>TEXT?</td><td>用户可起的进程名（UI 列表显示「圆点 + 名字」）；留空回退 program 名</td></tr>
+            <tr><td>user_id</td><td>TEXT</td><td>owner，<code>users.id</code></td></tr>
+            <tr><td>program_id</td><td>TEXT</td><td><strong>钉死</strong>的程序 slug（= skill id）</td></tr>
+            <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。当前映射到扁平 <code>programs.version</code>；<a href="#skillversion">SkillVersion</a> 落地后升级为 <code>(skill_name, version)</code> + 依赖闭包锁</td></tr>
+            <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>running</code> / <code>hibernating</code>（见状态机）</td></tr>
+            <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
+            <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / hibernating）时为 null</td></tr>
+            <tr><td>checkpoint_ref</td><td>TEXT?</td><td>最新检查点引用；唤醒时灌回新沙箱（见 <a href="state.html#checkpoint">检查点</a>）。spawned 时尚无</td></tr>
+            <tr><td>created_at</td><td>TEXT</td><td>spawn 时间（ISO）</td></tr>
+            <tr><td>last_active_at</td><td>TEXT?</td><td>末次活跃（驱动 UI uptime/最近、休眠回收策略）</td></tr>
           </tbody>
         </table></div>
-        <p>事实源：DB（关系元数据）+ <code>snapshot_ref</code> / 沙箱里的进程目录（内容，resume 权威）。</p>
+        <div class="note">
+          <span class="note-label">与「保持精简」一致</span>
+          <strong>无终止态、不设 <code>deleted</code> 列</strong>：进程跑完 / 被杀也只是回到 <code>hibernating</code>（释放沙箱、留检查点）——<strong>状态永不删除</strong>，进程目录与产物始终保留、随时可唤醒。
+          <code>created_at</code> / <code>last_active_at</code> 是<strong>功能字段</strong>（uptime、回收策略），非审计样板，故保留；不加 <code>updated_at</code>。
+        </div>
 
-        <h3 id="snapshot-entity">Snapshot <span class="tag">镜像注册</span></h3>
+        <p><strong>② 状态机 —— 由「有没有关联沙箱」驱动</strong></p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+            <div class="node c-muted" style="flex:1">
+              <span class="nt">spawned <span class="tag"><span class="pill hib">待起</span></span></span>
+              <span class="nd">刚 <code>spawn</code>，<strong>从未起过沙箱</strong>。无 <code>sandbox_id</code>、无 <code>checkpoint_ref</code>，只 eager 存了初始 input。<strong>不写骨架、不烧算力。</strong></span>
+            </div>
+            <div class="node c-sandbox" style="flex:1">
+              <span class="nt">running <span class="tag"><span class="pill run">运行</span></span></span>
+              <span class="nd"><code>sandbox_id</code> 非空，有 live 沙箱与对话。检查点经 driver 持续流回控制平面。</span>
+            </div>
+            <div class="node c-muted" style="flex:1">
+              <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
+              <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>、留 <code>checkpoint_ref</code>。<code>wake</code> 即在新沙箱灌回检查点续跑。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            状态只由<strong>「有没有关联沙箱」</strong>决定：有沙箱 = <code>running</code>；无沙箱 = <code>spawned</code>（刚创建、还没检查点）或 <code>hibernating</code>（跑过、留检查点）。
+            稳态在 <code>running</code> ⇄ <code>hibernating</code> 间往复。<strong>没有终止态</strong>——跑完 / 被杀都只是回到 <code>hibernating</code>，状态永不删除（见 <a href="state.html">进程目录与状态</a>）。
+          </div>
+        </div>
+
+        <p><strong>③ 操作 → 字段副作用</strong>（命令动词如何改 PCB；机制细节见 <a href="flows.html">生命周期流程</a>）</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>操作</th><th>前置 state</th><th>后置 state</th><th>对 PCB / 沙箱的副作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 program@version、eager 存初始 input；<code>sandbox_id=null</code>，<strong>不起沙箱</strong></td></tr>
+            <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>running</code></td><td>provider.create 起新沙箱 → 回填 <code>sandbox_id</code> + <code>provider</code>；灌 bootstrap（spawned）或灌 <code>checkpoint_ref</code>（hibernating）；拉起 harness</td></tr>
+            <tr><td><code>detach</code></td><td>running</td><td><code>running</code>（不变）</td><td><strong>仅前端退订</strong>；沙箱与 harness 照常跑。属运行时 UI 态，<strong>不落库</strong></td></tr>
+            <tr><td><code>hibernate</code></td><td>running</td><td><code>hibernating</code></td><td>落盘末次检查点 → provider.destroy；<code>sandbox_id=null</code>，更新 <code>checkpoint_ref</code></td></tr>
+            <tr><td>完成 / <code>kill</code></td><td>running</td><td><code>hibernating</code></td><td>同 hibernate（尽力末次检查点 → provider.destroy、<code>sandbox_id=null</code>、记 <code>last_active_at</code>）；只是触发方不同（程序自身完成 / 用户强制），<strong>不产生新状态</strong></td></tr>
+          </tbody>
+        </table></div>
+
+        <p><strong>④ 一个进程的事实源：DB vs 进程目录</strong></p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>东西</th><th>放哪</th><th>权威性</th></tr></thead>
+          <tbody>
+            <tr><td>PCB（pid / owner / 钉死版本 / state / sandbox_id / checkpoint_ref…）</td><td>DB <code>processes</code></td><td>关系元数据权威；<code>state</code> 为控制平面驱动的生命周期态</td></tr>
+            <tr><td><code>meta.yml</code>（phase / input_cursor / status）</td><td>进程目录</td><td><strong>resume 权威</strong>；<code>phase</code>/<code>status</code> 是程序内部 FSM 态，<strong>不进 PCB</strong></td></tr>
+            <tr><td><code>input.md</code>（append-only 输入流）</td><td>进程目录</td><td>权威意图流</td></tr>
+            <tr><td><code>execution-state/</code>（state.yaml + by-ref blob）</td><td>进程目录</td><td>有 schema 的执行状态，权威</td></tr>
+            <tr><td><code>artifacts/</code>（程序产物）</td><td>进程目录</td><td>权威</td></tr>
+            <tr><td><code>session.aprog.jsonl</code>（会话逐字流）</td><td>进程目录</td><td><strong>不权威、不进快照</strong>——读时投影，仅展示/审计</td></tr>
+            <tr><td>检查点（运行中经 driver 流回 / 休眠态耐久真相）</td><td>控制平面侧存储</td><td>跨厂商；<code>checkpoint_ref</code> 指向它</td></tr>
+            <tr><td>沙箱（临时算力）</td><td>厂商侧</td><td>易失，hibernate / kill 即销毁，wake 重建</td></tr>
+          </tbody>
+        </table></div>
+
+        <div class="note ok">
+          <span class="note-label">已定（本轮评审）</span>
+          <strong>无 <code>exited</code> 终止态</strong>：状态只由「有没有关联沙箱」决定——有沙箱 = <code>running</code>，无沙箱 = <code>spawned</code>（刚创建）/ <code>hibernating</code>（休眠）；跑完 / <code>kill</code> 都只是回到 <code>hibernating</code>，状态永不删除。
+        </div>
+        <div class="note">
+          <span class="note-label">待你拍板</span>
+          <ul style="margin:6px 0 0">
+            <li><strong>进程命名</strong>：要不要 <code>name</code> 让用户给进程起名（UI 显示），还是只用 <code>pid</code> + program 名？</li>
+            <li><strong>多人 attach / 协作者</strong>：attach 订阅是否完全不落库（像任务栏那样纯运行时态）？</li>
+            <li><strong>版本字段</strong>：先按扁平 <code>program_version</code>（映射 <code>programs.version</code>），等 <a href="#skillversion">SkillVersion</a> 落地再升级为钉死 <code>(skill_name, version)</code> + 依赖闭包锁——可否？</li>
+          </ul>
+        </div>
+
+        <h3 id="snapshot-entity">Snapshot <span class="pill">规划中</span></h3>
         <p>沙箱镜像（capability + 引擎 + driver 烘成）。一个镜像起 N 个沙箱。Daytona 等无内置不可变 tag，故<strong>自算 content-hash 作名</strong>。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>说明</th></tr></thead>
@@ -155,45 +318,38 @@
             <tr><td>status</td><td>building / active / failed</td></tr>
           </tbody>
         </table></div>
-
-        <h2 id="relations">关系一览</h2>
-        <div class="dgm">
-          <div class="dgm-stack tight" style="gap:6px">
-            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; Installation &gt;──</span><span class="chip">Skill</span><span class="nd">桌面装了哪些程序</span></div>
-            <div class="dgm-row"><span class="chip">Skill</span><span style="color:var(--fg-subtle)">──&lt; has &gt;──</span><span class="chip">SkillVersion</span><span class="nd">不可变版本 + depends_lock</span></div>
-            <div class="dgm-row"><span class="chip">User×Skill</span><span style="color:var(--fg-subtle)">──&lt; CapabilityGrant &gt;──</span><span class="chip">Capability</span><span class="nd">每程序的能力授权 + scope</span></div>
-            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; runs &gt;──</span><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 钉 →</span><span class="chip">SkillVersion</span></div>
-            <div class="dgm-row"><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 跑在 →</span><span class="chip">Snapshot</span><span class="nd">某镜像起的沙箱</span></div>
-          </div>
-        </div>
-
-        <h2 id="states">两个状态</h2>
-        <p>Process 只有两个状态，由「有没有沙箱」驱动：</p>
-        <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
-            <div class="node c-sandbox" style="min-width:150px">
-              <span class="nt">running <span class="tag"><span class="pill run">运行</span></span></span>
-              <span class="nd"><code>sandbox_id</code> 非空，有 live 对话</span>
-            </div>
-            <div class="ar accent"><span class="albl">hibernate ⇄ wake</span><span class="gly">⇄</span></div>
-            <div class="node c-muted" style="min-width:150px">
-              <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
-              <span class="nd"><code>sandbox_id=null</code>，留 <code>snapshot_ref</code></span>
-            </div>
-          </div>
-          <div class="dgm-cap">休眠态：交互区收起、目录仍可浏览（见 <a href="window.html#states">工作窗口</a>）。<strong>状态永不删除</strong>——程序跑完也只是处于休眠、随时可再唤醒。</div>
-        </div>
-
-        <h2 id="snapshot">检查点与事实源</h2>
-        <p>
-          进程状态两种形态：沙箱里的<strong>工作副本</strong>、控制平面上的<strong>检查点</strong>。同一时刻只有一份权威——
-          沙箱在跑时是工作副本；沙箱不在时（休眠=destroy）是控制平面检查点（运行中经 <a href="interaction.html#data-plane">DriverChannel</a> 持续流回）。状态穿越沙箱生死，<strong>永不删除</strong>。
-        </p>
         <div class="note bad">
           <span class="note-label">不变量</span>
           引擎私有的 <code>session.jsonl</code> <strong>不进快照、不权威</strong>，resume 靠进程目录的状态文件而非对话。
           详见 <a href="state.html#layers">三层数据</a> 与 <a href="state.html#resume">唤醒靠状态不靠对话</a>。
         </div>
+
+        <!-- ============================ 关系 / 分界 ============================ -->
+        <h2 id="relations">关系一览</h2>
+        <p>实线为<strong>已落地</strong>的边，标 <span class="pill">规划</span> 的为目标架构尚未实现的边。</p>
+        <div class="dgm">
+          <div class="dgm-stack tight" style="gap:6px">
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; Installation &gt;──</span><span class="chip">Program</span><span class="nd">桌面装了哪些程序 <span class="pill run">已实现</span></span></div>
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; tokens / auth_codes &gt;──</span><span class="nd">会话与验证码 <span class="pill run">已实现</span></span></div>
+            <div class="dgm-row"><span class="chip">Skill</span><span style="color:var(--fg-subtle)">──&lt; has &gt;──</span><span class="chip">SkillVersion</span><span class="nd">不可变版本 + depends_lock <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">User×Skill</span><span style="color:var(--fg-subtle)">──&lt; CapabilityGrant &gt;──</span><span class="chip">Capability</span><span class="nd">每程序能力授权 <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; runs &gt;──</span><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 钉 →</span><span class="chip">SkillVersion</span><span class="nd"><span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 跑在 →</span><span class="chip">Snapshot</span><span class="nd">某镜像起的沙箱 <span class="pill">规划</span></span></div>
+          </div>
+        </div>
+
+        <h2 id="boundary">文件 vs DB 的分界</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>东西</th><th>放哪</th><th>为什么</th></tr></thead>
+          <tbody>
+            <tr><td>用户 / 会话 / 验证码</td><td>DB（<code>users</code>/<code>tokens</code>/<code>auth_codes</code>）</td><td>需查询 / 并发写的关系数据</td></tr>
+            <tr><td>谁装了什么</td><td>DB（<code>installations</code>）</td><td>同上；桌面图标据此渲染</td></tr>
+            <tr><td>程序目录（catalog）</td><td>磁盘 skill 注册表（DB <code>programs</code> 为缓存镜像）</td><td>静态、可派生，权威在 <code>SKILL.md</code></td></tr>
+            <tr><td>任务栏"已打开"</td><td>不持久（运行时 UI 态）</td><td>= 当前打开的 Process，随窗口生灭</td></tr>
+            <tr><td>密钥 / token 值</td><td>Vault（DB 只存引用）</td><td>永不进快照 / 镜像</td></tr>
+            <tr><td>进程运行态 / 产物</td><td>DB（PCB）+ 进程目录 <span class="pill">规划</span></td><td>属 Process 层，待运行时落地</td></tr>
+          </tbody>
+        </table></div>
 
         <div class="pager" data-pager></div>
       </article>

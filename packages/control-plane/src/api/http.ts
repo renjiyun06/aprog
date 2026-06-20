@@ -3,7 +3,6 @@
 // docs/api-impl.html）。命令走 REST，事件流走 SSE（api/sse.ts），二者挂在同一个 server。
 
 import type { Config } from '../config.ts';
-import type { ProcessManager } from '../process/manager.ts';
 import type { Deps } from './context.ts';
 import { Router } from './router.ts';
 import { toErrorResponse, notFound } from './errors.ts';
@@ -14,6 +13,8 @@ import { CodeStore } from '../auth/codes.ts';
 import { ConsoleEmailSender, SmtpEmailSender } from '../auth/email.ts';
 import { ProgramCatalog } from '../catalog/programs.ts';
 import { InstallStore } from '../catalog/installs.ts';
+import { ProcessManager } from '../process/manager.ts';
+import { MockSandboxGateway } from '../process/sandbox-gateway.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
 import * as installations from './routes/installations.ts';
@@ -22,7 +23,7 @@ import * as shares from './routes/shares.ts';
 import * as notifications from './routes/notifications.ts';
 import { mountSse } from './sse.ts';
 
-export function startApi(config: Config, procs: ProcessManager): void {
+export function startApi(config: Config): void {
   const db = openDb(config.dataDir);
   const users = new UserStore(db);
   const tokens = new TokenStore(db);
@@ -33,6 +34,9 @@ export function startApi(config: Config, procs: ProcessManager): void {
   console.log(`[control-plane] 邮件发送：${config.smtp ? `SMTP ${config.smtp.host}` : 'console（开发态）'}`);
   const catalog = new ProgramCatalog(db); // 启动时把程序目录 upsert 进表
   const installs = new InstallStore(db);
+  // 进程编排：PCB 走 DB；沙箱动作当前用 mock（未对接真实 provider）。
+  const procs = new ProcessManager(db, new MockSandboxGateway());
+  console.log('[control-plane] 沙箱：mock（未对接真实 provider）');
   void seedAdmin(users);
 
   const deps: Deps = {

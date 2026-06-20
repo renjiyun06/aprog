@@ -5,7 +5,7 @@ import type { GlyphName } from '../icons';
 
 /* 程序商店目录——元数据来自控制平面（GET /programs），渲染资产（图标）按 id 从本地 registry 解析。
    组件无法序列化，故 glyph/tileClass 留在前端；后端只给 id/名称/版本/摘要/分类。
-   首屏先用本地 registry 兜底，拉到后端目录后替换。模型见 docs/program-model.html。 */
+   首屏先用本地 registry 兜底，拉到后端目录后替换。模型见 docs/data-model.html。 */
 
 export interface CatalogItem {
   id: string;

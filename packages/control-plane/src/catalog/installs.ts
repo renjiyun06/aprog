@@ -1,5 +1,5 @@
 // 安装记录（installations）。用户 × 程序的边——"这个程序装在我桌面上"。
-// 模型见 docs/program-model.html：(user_id, program_id) 复合主键；装=插行、卸=删行（硬删）。
+// 模型见 docs/data-model.html：(user_id, program_id) 复合主键；装=插行、卸=删行（硬删）。
 // 进程与数据在别处，重装即恢复，故无需软删/历史，也不存摆放位置。
 
 import type { Database } from 'bun:sqlite';
