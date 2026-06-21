@@ -47,17 +47,17 @@
                 <div class="ar down"><span class="albl">北 · REST 命令 + SSE 事件流</span><span class="gly">↓</span></div>
               </div>
             </div>
-            <div class="node c-cp"><span class="nt">control-plane（VM 上）</span><span class="nd">鉴权 · 进程编排 · 事件流中枢（盖全局 seq / resync / 扇出）· 检查点持久化。<strong>两面的中枢。</strong></span></div>
+            <div class="node c-cp"><span class="nt">control-plane（VM 上）</span><span class="nd">鉴权 · 进程编排 · 事件流中枢（盖全局 seq / resync / 扇出）· 托管进程 <a href="proc-storage.html">git 仓库</a>（检查点持久化）+ 鉴权门。<strong>两面的中枢。</strong></span></div>
             <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
               <div class="dgm-col grow">
                 <div class="ar down"><span class="albl">南 · SandboxProvider（A）+ DriverChannel（B）</span><span class="gly">↓</span></div>
-                <div class="node c-driver"><span class="nt">沙箱 / driver <span class="tag">见 interaction.html</span></span><span class="nd">A 平面起停沙箱；B 平面带内承载事件 / 输入 / 控制 / fs / bundle。</span></div>
+                <div class="node c-driver"><span class="nt">沙箱 / driver <span class="tag">见 interaction.html</span></span><span class="nd">A 平面起停沙箱；B 平面带内承载事件 / 输入 / 控制（fs 与检查点改走 <a href="proc-storage.html">git</a>）。</span></div>
               </div>
             </div>
           </div>
           <div class="dgm-cap">
             北面对客户端<strong>隐藏一切南面细节</strong>：客户端只跟 pid 与事件流打交道，<strong>看不到沙箱、provider、bindToken、检查点</strong>。
-            控制平面在运行时是<strong>透明中继</strong>（事件流 / fs 实时穿透到沙箱内的 driver），休眠时是<strong>持久化数据源</strong>（回放已落库的流、按检查点服务 fs）。
+            控制平面对事件流运行时是<strong>透明中继</strong>、休眠时是<strong>持久化数据源</strong>（回放已落库的流）；进程状态 / 文件按 ref 读 <strong>CP 侧进程 git 仓库</strong>（只读已提交，见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>）。
           </div>
         </div>
 
@@ -89,11 +89,12 @@
             <tr><td><code>GET  /proc/:pid</code></td><td><code>ps -l</code> / <code>top</code></td><td>单进程详情（PCB + 资源/沙箱概况）。</td></tr>
             <tr><td><code>POST /proc</code></td><td><code>spawn</code></td><td>新建进程（<strong>仅控制平面</strong>）：<code>{ program, name?, input? }</code> 分配 pid + 建进程目录，<strong>不起沙箱</strong>（起沙箱用 wake）。版本恒取最新并钉死。</td></tr>
             <tr><td><code>POST /proc/:pid/hibernate</code></td><td><code>hibernate</code></td><td>末次检查点后释放沙箱全部资源（= <a href="interaction.html#hibernate">provider.destroy</a>）。状态保留。</td></tr>
-            <tr><td><code>POST /proc/:pid/wake</code></td><td><code>wake</code></td><td>起沙箱 + 灌入 bundle（首次=bootstrap，之后=最新检查点）+ 运行/resume。<strong>首次运行与休眠后唤醒同一路径</strong>。pid 不变。</td></tr>
+            <tr><td><code>POST /proc/:pid/wake</code></td><td><code>wake</code></td><td>起沙箱 + <code>git clone</code>/<code>checkout</code> 取回状态（首次无检查点=空/初始 input，之后=最新 commit）+ 运行/resume。<strong>首次运行与休眠后唤醒同一路径</strong>。pid 不变。</td></tr>
             <tr><td><code>GET  /proc/:pid/stream?from=&lt;seq&gt;</code></td><td><code>logs</code></td><td><strong>SSE</strong>：先 resync（<code>seq &gt; from</code>）再续 live（见 <a href="#stream">下文</a>）。</td></tr>
             <tr><td><code>POST /proc/:pid/input</code></td><td>—</td><td>投递用户输入：<code>{ kind:'message'|'file', content }</code> → 经 <a href="interaction.html#data-plane">DriverChannel.sendInput</a> 交给沙箱内 driver。<strong>落到哪、怎么消费是上层程序的事，平台不管。</strong></td></tr>
             <tr><td><code>POST /proc/:pid/interrupt</code></td><td>—</td><td>打断当前回合 → <code>DriverChannel.control('interrupt')</code>。</td></tr>
-            <tr><td><code>GET  /proc/:pid/fs?path=&amp;op=list|read</code></td><td><code>ls</code>/<code>cat</code>/<code>get</code></td><td>只读进程目录：running 时实时穿透 driver，hibernating 时按检查点（见 <a href="#fs">下文</a>）。</td></tr>
+            <tr><td><code>GET  /proc/:pid/fs?path=&amp;op=list|read&amp;ref=&lt;sha&gt;</code></td><td><code>ls</code>/<code>cat</code>/<code>get</code></td><td>只读进程目录的<strong>已提交态</strong>：读 CP 侧进程 <a href="proc-storage.html">git 仓库</a>（可带 <code>?ref=&lt;sha&gt;</code>，缺省取最新检查点）；<strong>不暴露运行中未提交态</strong>（见 <a href="#fs">下文</a>）。</td></tr>
+            <tr><td><code>GET/POST …/&lt;pid&gt;.git/…</code>（git smart-HTTP）</td><td>—</td><td>CP 暴露的进程 <a href="proc-storage.html">git 仓库</a> smart-HTTP 端点，供前端按 <code>ref</code> 直接读 tree/blob（只读已提交）。<strong>同会话鉴权</strong>（同源、同 token，经 <a href="#sharing">authorize(user,pid,role)</a>），是 <code>GET …/fs</code> 之外按 ref 拉状态的底层协议（见 <a href="#fs">下文</a>）。</td></tr>
             <tr><td colspan="3" style="background:var(--code-bg);font-weight:600">共享与权限（见 <a href="#sharing">共享</a>，仅 owner 可操作）</td></tr>
             <tr><td><code>GET    /proc/:pid/shares</code></td><td>—</td><td>列出该进程分享给了谁（成员 + 角色）。</td></tr>
             <tr><td><code>POST   /proc/:pid/shares</code></td><td><code>share</code></td><td>分享给某用户：<code>{ userId, role:'editor'|'viewer' }</code>。<strong>无需对方接收，直接生效</strong> + 给对方发通知。</td></tr>
@@ -133,7 +134,7 @@
             <tr><td><code>GET /proc/:pid</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
             <tr><td rowspan="5"><code>POST /proc</code><br><span style="color:var(--fg-subtle)">spawn</span></td><td>body</td><td><code>program</code></td><td>string</td><td>✓</td><td>要运行的程序 id（取自 <code>GET /programs</code>）。<strong>版本不可选</strong>：spawn 时取最新并钉死（见 <a href="#q-version">Q10</a>）</td></tr>
             <tr><td>body</td><td><code>name</code></td><td>string</td><td>✗</td><td>进程显示名（<a href="window.html#proclist">表单的「名称」</a>）</td></tr>
-            <tr><td>body</td><td><code>input</code></td><td>string</td><td>✗</td><td>初始输入（首次 wake 时随 bootstrap 灌入）</td></tr>
+            <tr><td>body</td><td><code>input</code></td><td>string</td><td>✗</td><td>初始输入（随进程 git 仓库落库，首次 wake 时 git clone 取回）</td></tr>
             <tr><td>body</td><td><code>resources</code></td><td>object</td><td>✗</td><td><code>{cpu,memory,disk}</code>；P0 暂不暴露（<a href="window.html#proclist">后续再加</a>）</td></tr>
             <tr><td>header</td><td><code>Idempotency-Key</code></td><td>string</td><td>✗</td><td>去重重复提交（见 <a href="#q-idem">Q8</a>）</td></tr>
             <tr><td><code>POST /proc/:pid/hibernate</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body</td></tr>
@@ -144,9 +145,10 @@
             <tr><td>body</td><td><code>kind</code></td><td><code>message</code>｜<code>file</code></td><td>✓</td><td>输入类型</td></tr>
             <tr><td>body</td><td><code>content</code></td><td>string</td><td>✓</td><td><code>message</code>=文本；<code>file</code>=文件内容（编码/传输方式见 <a href="#q-input">Q5</a>）</td></tr>
             <tr><td><code>POST /proc/:pid/interrupt</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号；无 body</td></tr>
-            <tr><td rowspan="3"><code>GET /proc/:pid/fs</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
+            <tr><td rowspan="4"><code>GET /proc/:pid/fs</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
             <tr><td>query</td><td><code>op</code></td><td><code>list</code>｜<code>read</code></td><td>✓</td><td>列目录 / 读文件</td></tr>
             <tr><td>query</td><td><code>path</code></td><td>string</td><td>✓</td><td>进程目录内相对路径（根为 <code>~/.aprog/&lt;pid&gt;/</code>）</td></tr>
+            <tr><td>query</td><td><code>ref</code></td><td>string（<a href="proc-storage.html">SHA</a>）</td><td>✗</td><td>按某检查点 <code>ref</code> 读已提交态；缺省=最新检查点（见 <a href="#q-fs">Q6</a>）</td></tr>
             <tr><td><code>GET /proc/:pid/shares</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号（仅 owner）</td></tr>
             <tr><td rowspan="3"><code>POST /proc/:pid/shares</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号（仅 owner）</td></tr>
             <tr><td>body</td><td><code>userId</code></td><td>string</td><td>✓</td><td>分享给谁</td></tr>
@@ -229,7 +231,7 @@
           <tbody>
             <tr><td><code>seq</code></td><td>number</td><td>全局单调序号；前端断线重连用作 <code>from</code> 游标</td></tr>
             <tr><td><code>ts</code></td><td>string</td><td>ISO-8601 时间戳</td></tr>
-            <tr><td><code>kind</code></td><td>string</td><td>事件类型：<code>turn.start|turn.end | item.start|item.delta|item.end | user | error</code></td></tr>
+            <tr><td><code>kind</code></td><td>string</td><td>事件类型：<code>turn.start|turn.end | item.start|item.delta|item.end | user | checkpoint-committed | error</code></td></tr>
             <tr><td><code>id</code></td><td>string</td><td>项标识（<code>item.*</code> / <code>user</code> 有）；前端按它幂等去重 + 折叠 delta</td></tr>
             <tr><td>（其余）</td><td>—</td><td>随 <code>kind</code> 不同（<code>patch</code> / <code>value</code> / <code>content</code> …），完整并集见 <a href="protocol.html">事件流协议</a></td></tr>
           </tbody>
@@ -247,7 +249,7 @@
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>适用</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td><code>source</code></td><td><code>live</code>｜<code>checkpoint</code></td><td>两者</td><td><code>live</code>=穿透运行中沙箱；<code>checkpoint</code>=按检查点（见 <a href="#q-fs">Q6</a>）</td></tr>
+            <tr><td><code>ref</code></td><td>string</td><td>两者</td><td>本次读所据的检查点 commit SHA（<code>checkpoint_ref</code>）；读的恒是<strong>已提交态</strong>（见 <a href="#q-fs">Q6</a>）</td></tr>
             <tr><td><code>entries</code></td><td>array</td><td><code>op=list</code></td><td>目录项列表</td></tr>
             <tr><td><code>entries[].name</code></td><td>string</td><td><code>op=list</code></td><td>名称</td></tr>
             <tr><td><code>entries[].kind</code></td><td><code>file</code>｜<code>dir</code></td><td><code>op=list</code></td><td>类型</td></tr>
@@ -386,15 +388,15 @@
 
         <h2 id="lifecycle">生命周期命令语义</h2>
         <p>
-          三个命令对应 <code>process/lifecycle.ts</code> 的 FSM。关键收敛：<strong><code>spawn</code> 纯控制平面（只建记录、不碰沙箱）</strong>，
-          <strong>起沙箱的活全在 <code>wake</code></strong>——首次运行与休眠后唤醒<strong>走完全相同的路径</strong>，唯一差别是灌入的 bundle（首次没有检查点，用 bootstrap）：
+          三个命令对应 <code>process/manager.ts</code> 的 FSM。关键收敛：<strong><code>spawn</code> 纯控制平面（只建记录、不碰沙箱）</strong>，
+          <strong>起沙箱的活全在 <code>wake</code></strong>——首次运行与休眠后唤醒<strong>走完全相同的路径</strong>，唯一差别是取回的状态（首次无检查点 = 空 / 初始 input，之后 <code>git clone</code> 回最新 commit）：
         </p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>命令</th><th>动作链</th><th>终态</th></tr></thead>
           <tbody>
-            <tr><td><code>spawn</code></td><td>分配 pid + 建进程目录（绑定 program + 初始 input）。<strong>纯控制平面，不碰沙箱。</strong></td><td><code>未运行</code></td></tr>
-            <tr><td><code>wake</code></td><td><code>provider.create</code> → driver 自启拨入 → <code>pushBundle</code> 灌入（<strong>首次</strong>=bootstrap：program+初始 input；<strong>之后</strong>=最新检查点）→ driver 拉起 harness（首次运行 / resume）</td><td><code>running</code></td></tr>
-            <tr><td><code>hibernate</code></td><td><code>control('hibernate-prepare')</code> + 末次检查点（<code>pullBundle</code>）→ <code>provider.destroy</code></td><td><code>未运行</code></td></tr>
+            <tr><td><code>spawn</code></td><td>分配 pid + 建进程 git 仓库（绑定 program + 初始 input）。<strong>纯控制平面，不碰沙箱。</strong></td><td><code>spawned</code></td></tr>
+            <tr><td><code>wake</code></td><td><code>provider.create</code> → driver 自启拨入 → <code>git clone --depth=1</code> + <code>checkout</code>（<strong>首次</strong>无检查点=空/初始 input；<strong>之后</strong>=最新 commit）→ driver 拉起 harness（首次运行 / resume）</td><td><code>running</code></td></tr>
+            <tr><td><code>hibernate</code></td><td><code>control('hibernate-prepare')</code> → 末次 commit + <code>git push</code> 到 CP remote → <code>provider.destroy</code></td><td><code>hibernating</code></td></tr>
           </tbody>
         </table></div>
         <div class="note">
@@ -408,17 +410,16 @@
           <strong>(a) 同步</strong>——阻塞到 <code>running</code> 才返回；<strong>(b) 异步</strong>——立刻 <code>202</code> 返回过渡态，前端订阅 <code>…/stream</code> 或轮询 <code>GET /proc/:pid</code> 观察转 <code>running</code>。
           我倾向 <strong>(b)</strong>：起沙箱的耗时不该占着 HTTP 连接，且前端本来就要连 stream。
         </div>
-        <div class="note warn" id="q-states">
-          <span class="note-label">待确认 Q3 · 进程状态集怎么定？</span>
-          <code>process/manager.ts</code> 现在只有 <code>running | hibernating</code>。新模型里，<code>spawn</code> 后「已建未运行」和 <code>hibernate</code> 后「休眠」
-          <strong>对平台是不是同一个状态</strong>（都=无沙箱、可 wake，差别只在有没有检查点）？若是，状态集就两态：<code>running</code> / <code>未运行</code>；
-          若否，需要区分 <code>新建未运行</code> 与 <code>休眠</code>。另外 Q2 选异步还要不要 <code>waking</code> 过渡态？这块归在<a href="#lifecycle">生命周期讨论</a>里一起定。
+        <div class="note ok" id="q-states">
+          <span class="note-label">已定 Q3 · 进程状态集 = 三态</span>
+          状态只由「有没有关联沙箱」决定：<code>spawned</code>（已建未运行、无检查点）/ <code>running</code>（有沙箱）/ <code>hibernating</code>（休眠、留检查点）。
+          <code>spawned</code> 与 <code>hibernating</code> 是<strong>不同</strong>状态（差别在有没有检查点），<strong>无终止态</strong>。详见 <a href="data-model.html#process">数据模型 · Process</a>。
+          唯一仍挂着的是 Q2：若 wake 走异步，可能要一个<strong>瞬时</strong> <code>waking</code> 过渡态（非第 4 个耐久态），见 <a href="proc-wake.html#sync-async">wake 同步/异步</a>。
         </div>
         <div class="note warn" id="q-end">
-          <span class="note-label">待确认 Q4 · 进程怎么「终结」？（无 kill / 无删除）</span>
-          已去掉 <code>kill</code>，也<strong>没有删除进程的操作</strong>——进程目录与历史永不删。那两个问题待定：
-          <strong>(a)</strong> 程序<strong>真的做完了</strong>（沙箱里 harness 自己退出）时，进程转成什么终态？自动 <code>hibernate</code> 保留现场？还是有个 <code>done/exited</code> 终态？
-          <strong>(b)</strong> 永不删除 → 进程目录无限累积，要不要 archive / GC 机制（仅清冷数据、不算「删进程」）？
+          <span class="note-label">Q4 · 进程怎么「终结」？（无终止态）</span>
+          已定:进程<strong>没有终止态、不可删</strong>——<code>kill</code> 与程序自己跑完都只是回到 <code>hibernating</code>（释放沙箱、留检查点），进程 git 仓库与历史永不删（见 <a href="data-model.html#process">数据模型</a>）。仍待定:
+          <strong>永不删除 → 进程仓库 / 历史无限累积，要不要 archive / GC 机制</strong>（仅清冷数据、不算「删进程」）？
         </div>
 
         <h2 id="stream">事件流端点</h2>
@@ -429,7 +430,8 @@
         <ul>
           <li><strong>游标</strong>：<code>from</code> = 客户端已渲染到的最后一条事件的 <a href="protocol.html">seq</a>。首连传 <code>0</code>。</li>
           <li><strong>投递语义</strong>：at-least-once；客户端按事件 <code>id</code> <strong>幂等去重</strong>（见 <a href="protocol.html#recover">协议 · 恢复与压实</a>）。</li>
-          <li><strong>载荷</strong>：每条 SSE message 是一个 <code>@aprog/protocol</code> 的 <code>Event</code>（<code>turn.* / item.start|delta|end / user / error</code>）。<strong>不是</strong>旧的 <code>agent.thinking</code> 形。</li>
+          <li><strong>载荷</strong>：每条 SSE message 是一个 <code>@aprog/protocol</code> 的 <code>Event</code>（<code>turn.* / item.start|delta|end / user / checkpoint-committed / error</code>）。<strong>不是</strong>旧的 <code>agent.thinking</code> 形。</li>
+          <li><strong>新保存点通知</strong>：新检查点落地时事件流推一条 <code>checkpoint-committed{ref}</code>（<a href="protocol.html">协议</a>的一种事件类型）；前端据此按新 <code>ref</code> 重拉 <a href="#fs">git fs</a>（见 <a href="proc-storage.html#frontend">进程状态存储 · 前端</a>）。</li>
           <li><strong>running 时</strong>：控制平面把 driver 上行的事件盖全局 seq、落库、扇出（透明中继 + 多端共看）。</li>
           <li><strong>未运行时</strong>：没有 live，只回放已落库的流到 head 后挂起；要恢复 live 须显式 <code>wake</code>。</li>
         </ul>
@@ -462,21 +464,23 @@
         <div class="note warn" id="q-input">
           <span class="note-label">待确认 Q5 · input 的返回 + 文件怎么传？</span>
           <strong>(a) 返回</strong>：<code>POST …/input</code> 投递成功该返回什么？我倾向 <code>202</code> + 该输入落库后的 <code>seq</code>（客户端可用它对齐自己在流里的回显），而非回显内容本身。认可吗？
-          <strong>(b) 文件输入</strong>：<code>kind:'file'</code> 时内容怎么传——内联 base64（小文件，简单）还是 <code>multipart</code> / 预签名直传（大文件）？大小阈值多少？以及它落到 <code>sendInput</code> 还是直接 <code>pushBundle</code> 进进程目录？
+          <strong>(b) 文件输入</strong>：<code>kind:'file'</code> 时内容怎么传——内联 base64（小文件，简单）还是 <code>multipart</code> / 预签名直传（大文件）？大小阈值多少？以及它落到 <code>sendInput</code> 还是直接写进进程目录？
         </div>
 
         <h2 id="fs">进程目录读</h2>
         <p>
-          <code>GET /proc/:pid/fs</code> 服务 <a href="window.html">前端</a>左下角的目录树与文件预览。只读，<strong>平台只按字节服务、不解释文件语义</strong>（<code>meta.yml / execution-state/ / artifacts/</code> 这些多是上层程序自己写的）。数据源随状态切换：
+          <code>GET /proc/:pid/fs</code> 服务 <a href="window.html">前端</a>左下角的目录树与文件预览。只读，<strong>平台只按字节服务、不解释文件语义</strong>（<code>meta.yml / execution-state/ / artifacts/</code> 这些多是上层程序自己写的）。
+          数据源<strong>不随状态切换</strong>：无论 running / hibernating，都读 CP 侧进程 <a href="proc-storage.html">git 仓库</a>的<strong>已提交态</strong>（按 <code>ref</code> 拉 tree/blob，缺省取最新检查点）：
         </p>
         <ul>
-          <li><strong>running</strong>：实时穿透 → <code>DriverChannel.fs.list/read</code>，读的是沙箱内 driver 的 cwd 实时态（见 <a href="interaction.html#dir-read">interaction · 实时目录读</a>）。</li>
-          <li><strong>hibernating</strong>：沙箱已销毁，按<strong>最新检查点</strong>服务。</li>
+          <li><strong>只读已提交</strong>：读的恒是程序 mark 过的一致快照（一个 commit），<strong>不暴露运行中未提交态</strong>——文件树停在上个保存点，等新 checkpoint 落地再整体跳一格。</li>
+          <li><strong>running 中的活动</strong>看事件流（live 里有 <code>tool_use: 写文件 X</code>），<strong>产物</strong>看 checkpoint（git）。原沙箱 fs 读穿透（<code>DriverChannel.fs</code>）<strong>已移除</strong>（见 <a href="interaction.html#data-plane">interaction</a> / <a href="proc-storage.html#driverchannel">DriverChannel 瘦身</a>）。</li>
+          <li><strong>实现</strong>：可直接走 CP 暴露的 <a href="proc-storage.html#frontend">git smart-HTTP</a> 按 ref 读，或经此 REST 端点包一层；二者同源、同会话鉴权。</li>
         </ul>
         <div class="note ok" id="q-fs">
-          <span class="note-label">已定 Q6 · 休眠时 fs = 读检查点数据，一致即真</span>
-          休眠时直接读控制平面上存的<strong>检查点数据</strong>。它是 state 的某个一致快照——<strong>读到什么，进程恢复时就按什么执行</strong>，二者同源、不存在不一致。
-          所以不必当作「残缺视图」来报警；响应仍带 <code>source: 'live'|'checkpoint'</code> 只为告诉客户端「这是检查点态」。检查点不含的运行期碎产物本就不参与恢复，读不到是符合预期的。
+          <span class="note-label">已定 Q6 · fs = 读 git 已提交态，一致即真</span>
+          fs 恒读控制平面上存的进程 <a href="proc-storage.html">git 仓库</a>里某个 commit 的<strong>检查点数据</strong>。它是 state 的某个一致快照——<strong>读到什么，进程恢复时就按什么执行</strong>，二者同源、不存在不一致。
+          所以不必当作「残缺视图」来报警；响应带 <code>ref</code> 只为告诉客户端「这是哪个检查点态」。检查点不含的运行期碎产物本就不参与恢复，读不到是符合预期的；运行中未提交的撕裂态本就不该给用户看（见 <a href="proc-storage.html#frontend">前端：状态拉 git</a>）。
         </div>
 
         <h2 id="sharing">共享与权限</h2>
@@ -536,9 +540,9 @@
             <tr><td><a href="#q-attach">Q1</a></td><td><strong>已定</strong>：attach/detach 不是端点（纯客户端订阅）；新建 = spawn + wake。</td></tr>
             <tr><td><a href="#q-async">Q2</a></td><td>wake 同步阻塞到 running，还是异步 202 + 观察过渡态？（spawn 恒同步）</td></tr>
             <tr><td><a href="#q-states">Q3</a></td><td>「已建未运行」与「休眠」是否同一状态？状态集是两态还是三态？要不要 waking 过渡态？</td></tr>
-            <tr><td><a href="#q-end">Q4</a></td><td>无 kill / 无删除下，进程怎么终结：程序做完转什么终态？要不要 archive/GC？</td></tr>
+            <tr><td><a href="#q-end">Q4</a></td><td>已定无终止态（kill / 做完都回 hibernating）；仍待定：要不要 archive/GC？</td></tr>
             <tr><td><a href="#q-input">Q5</a></td><td>input 的返回形态（202 + seq？）；文件输入的传输方式与落点。</td></tr>
-            <tr><td><a href="#q-fs">Q6</a></td><td><strong>已定</strong>：休眠读检查点数据，一致即真（= 恢复所据），<code>source</code> 仅作标记。</td></tr>
+            <tr><td><a href="#q-fs">Q6</a></td><td><strong>已定</strong>：fs 恒读进程 <a href="proc-storage.html">git 仓库</a>已提交态（按 ref，= 恢复所据），不暴露未提交态，<code>ref</code> 仅作标记。</td></tr>
             <tr><td><a href="#q-errors">Q7</a></td><td><strong>已定</strong>：北面另立一套客户端错误码，不复用南面 SandboxError。</td></tr>
             <tr><td><a href="#q-idem">Q8</a></td><td>spawn 幂等用 <code>Idempotency-Key</code> header？窗口多久？其他写操作要不要也支持？</td></tr>
             <tr><td><a href="#q-tenancy">Q9</a></td><td><strong>已定</strong>：进程一对多、共享即可写、不追踪发送者；并发=排队/打断（对齐 SDK）；权限 owner/editor/viewer 见<a href="#sharing">共享</a>。</td></tr>

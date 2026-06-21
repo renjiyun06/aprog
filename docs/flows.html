@@ -22,9 +22,9 @@
         <div class="eyebrow">流程</div>
         <h1>生命周期流程</h1>
         <p class="lead">
-          把组件串起来看一次进程的生老病死：spawn → attach → detach → hibernate → wake → exit。
-          每一步谁调用谁、沙箱与<a href="state.html#checkpoint">检查点</a>如何变化。文件搬运全走
-          <a href="interaction.html#data-plane">DriverChannel（B 平面）</a>，A 平面只起停沙箱。
+          把组件串起来看一次进程的生老病死：spawn → attach → detach → hibernate → wake → 完成/kill（回到 hibernating）。
+          每一步谁调用谁、沙箱与<a href="state.html#checkpoint">检查点</a>如何变化。耐久（检查点）走 <code>git push</code>、读文件走 git（见
+          <a href="proc-storage.html">进程状态存储（Git 模型）</a>），<a href="interaction.html#data-plane">DriverChannel（B 平面）</a>只剩事件上行 + input 下行，A 平面只起停沙箱。
         </p>
 
         <h2 id="spawn">spawn · 新建进程</h2>
@@ -67,7 +67,8 @@
             <span class="nt">🔌 <a href="components.html#driver">driver</a> 拨入 · 建 <a href="interaction.html#data-plane">DriverChannel</a></span>
             <ul class="acts">
               <li>driver 拨向 CP + <a href="interaction.html#trust">create-time 绑定</a> + 版本握手</li>
-              <li>CP <code>pushBundle</code>：skill 闭包 + per-process auth +（首次）初始输入 /（唤醒）最新检查点</li>
+              <li>CP 经握手下发 skill 闭包 + per-process auth + git deploy 凭证；driver 持凭证 <code>git clone --depth=1</code> + <code>checkout</code> 铺进程目录（首跑则空 / 初始 input）。<strong>fs 与检查点不经 DriverChannel</strong></li>
+              <li>工作树由 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 拉回最新检查点（首跑则是空 / 初始 input，见 <a href="proc-storage.html#transport">耐久传输</a>）</li>
               <li>driver 拉起 harness；<strong>首次</strong>由 harness 按 state 技能写出骨架</li>
               <li>harness 产出 → driver 局部定序 → CP <a href="interaction.html#seq">盖全局 seq</a> 落库 → 扇出前端</li>
             </ul>
@@ -94,23 +95,23 @@
         <p>沙箱<strong>还在</strong>，引擎可能还在跑。重新连上就是 reattach：跳过沙箱创建，<code>from=&lt;seq&gt;</code> 用上次游标补回间隙事件。</p>
 
         <h2 id="hibernate">hibernate · 释放沙箱</h2>
-        <p>用户在进程行点“休眠”按钮，显式释放算力。state 早已经检查点流回 CP，所以休眠很轻：</p>
+        <p>用户在进程行点“休眠”按钮，显式释放算力。state 早已随检查点 <code>git push</code> 到 CP remote，所以休眠很轻：</p>
         <div class="dgm">
           <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">POST /proc/&lt;pid&gt;/hibernate</span></div>
           <div class="ar down"><span class="gly">↓</span></div>
           <div class="node c-cp">
             <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a> 让出算力</span>
             <ul class="acts">
-              <li><code>control('hibernate-prepare')</code> → harness 在 <a href="state.html#quiescent">quiescent 点</a>落盘 + 末次检查点</li>
+              <li><code>control('hibernate-prepare')</code> → harness 在 <a href="state.html#quiescent">quiescent 点</a>落盘 + 末次检查点；确保末次 commit 已 <code>git push</code> 到 CP remote</li>
               <li><code>provider.destroy</code> → 释放<strong>全部</strong>资源（不用 stop：stop 仍计 disk 费）</li>
               <li><code>sandbox_id = null</code> → 语义上的 <span class="pill hib">休眠</span></li>
             </ul>
           </div>
         </div>
-        <p>耐久真相是 CP 侧检查点，destroy 后厂商成本归零。状态：<span class="pill hib">休眠</span>。引擎私有的 <code>session.jsonl</code> 随沙箱消失——无所谓，它不权威。</p>
+        <p>耐久真相是 CP 托管的 bare repo（已 <code>git push</code> 的检查点），destroy 后厂商成本归零。状态：<span class="pill hib">休眠</span>。引擎私有的 <code>session.jsonl</code> 随沙箱消失——无所谓，它不权威。</p>
 
         <h2 id="wake">wake · 重新关联沙箱</h2>
-        <p>用户在休眠进程点“唤醒”按钮。等同一次 attach：<code>provider.create</code> 起新沙箱、driver 拨入、<code>pushBundle</code> 灌回最新检查点。</p>
+        <p>用户在休眠进程点“唤醒”按钮。等同一次 attach：<code>provider.create</code> 起新沙箱、driver 拨入，工作树由 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 拉回最新检查点（见 <a href="proc-storage.html#transport">耐久传输</a>）。</p>
         <div class="note">
           <span class="note-label">冷启动靠状态</span>
           新沙箱里引擎是空上下文。它读进程目录的状态文件（<code>input_cursor</code> / <code>input.md</code> / <code>execution-state</code>）重建工作记忆，
@@ -118,23 +119,23 @@
           <a href="state.html#resume">唤醒靠状态，不靠对话</a>。
         </div>
 
-        <h2 id="exit">exit · 归档</h2>
-        <p>程序执行完毕，Driver 收到 SessionEnd：</p>
+        <h2 id="exit">完成 / kill · 回到休眠</h2>
+        <p>程序执行完毕（或被用户 kill），Driver 收到 SessionEnd。<strong>没有终止态</strong>——跑完 / 被杀都只是回到 <span class="pill hib">休眠</span>，处理同 hibernate：</p>
         <div class="dgm">
           <div class="seq-req"><span class="chip"><span class="cdot" style="background:#8250df"></span>Driver</span><span class="mono">SessionEnd</span></div>
           <div class="ar down"><span class="gly">↓</span></div>
           <div class="node c-cp">
-            <span class="nt">通知 <a href="components.html#control-plane">🧭 Control Plane</a> 归档</span>
+            <span class="nt">通知 <a href="components.html#control-plane">🧭 Control Plane</a> 让出算力</span>
             <ul class="acts">
-              <li>末次检查点经 <a href="interaction.html#data-plane">DriverChannel</a> 流回 CP</li>
+              <li>确保末次 commit 已 <code>git push</code> 到 CP remote（见 <a href="proc-storage.html#transport">耐久传输</a>）</li>
               <li><code>provider.destroy</code> 沙箱</li>
-              <li><code>sandbox_id = null, state = exited, last_exited_at = now</code></li>
+              <li><code>sandbox_id = null, state = hibernating, last_active_at = now</code></li>
             </ul>
           </div>
         </div>
         <p>
-          <strong>exited 不等于删除</strong>——只是没有沙箱关联。目录、产物、会话记录都还在，新输入到来还能重新 attach 回 running。
-          快照/检查点生命周期的事实源归属见 <a href="data-model.html">数据模型</a>。
+          <strong>回到 hibernating、状态永不删除</strong>——只是没有沙箱关联。目录、产物、会话记录都还在，新输入到来还能重新 attach 回 <span class="pill run">running</span>。
+          状态机只有 <code>spawned</code> / <code>running</code> / <code>hibernating</code>、无终止态，快照/检查点生命周期的事实源归属见 <a href="data-model.html#process">数据模型</a>。
         </p>
 
         <div class="pager" data-pager></div>

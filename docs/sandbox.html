@@ -123,14 +123,14 @@
         </p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
-            <div class="node c-state" style="min-width:200px"><span class="nt">hibernate</span><span class="nd">末次检查点经 DriverChannel 流回 CP → <code>provider.destroy</code>。厂商成本归零。</span></div>
+            <div class="node c-state" style="min-width:200px"><span class="nt">hibernate</span><span class="nd">确保末次 commit 已 <code>git push</code> 到 CP remote → <code>provider.destroy</code>。厂商成本归零。</span></div>
             <div class="ar"><span class="albl">检查点在 CP</span><span class="gly">→</span></div>
-            <div class="node c-sandbox" style="min-width:200px"><span class="nt">wake</span><span class="nd"><code>provider.create</code> 新沙箱 → <code>pushBundle</code> 灌回检查点 → driver 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
+            <div class="node c-sandbox" style="min-width:200px"><span class="nt">wake</span><span class="nd"><code>provider.create</code> → <code>git clone --depth=1</code> + <code>checkout &lt;ref&gt;</code> → harness <a href="state.html#resume">resume</a>。</span></div>
           </div>
           <div class="dgm-cap">
-            耐久真相是<strong>控制平面侧的检查点</strong>（运行中已持续经 <a href="interaction.html#data-plane">DriverChannel</a> 流回），不依赖任何厂商热令牌。
-            检查点天生<strong>跨厂商</strong>——迁移就是「在厂商 Y 起沙箱、灌回检查点」。完整语义见 <a href="state.html#checkpoint">进程目录与状态</a>。
-            <br><b>费用</b>：running 计 compute+disk；destroy 后归零。stop（免 compute、仍计 disk）/ archive（冷盘更便宜）对我们没意义——耐久不靠厂商留盘。
+            耐久真相是 <strong>CP 托管的 bare git repo</strong>（运行中持续 <code>git push</code>），不依赖任何厂商热令牌。
+            天然<strong>跨厂商</strong>——迁移就是「在厂商 Y 起沙箱后 <code>git clone</code> 同一个 remote」。完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>，语义见 <a href="state.html#checkpoint">进程目录与状态</a>。
+            <br><b>费用</b>：running 计 compute+disk；destroy 后归零。stop（免 compute、仍计 disk）/ archive（冷盘更便宜）对我们没意义——耐久不靠厂商留盘，靠 git remote。
           </div>
         </div>
 

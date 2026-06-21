@@ -58,6 +58,7 @@
             <tr><td><code>item.delta</code></td><td>项的增量</td><td>id, patch（text / args / output…）</td></tr>
             <tr><td><code>item.end</code></td><td>项完成，带 coalesced 全量</td><td>id, value</td></tr>
             <tr><td><code>turn.end</code></td><td>回合结束</td><td>turn, usage?</td></tr>
+            <tr><td><code>checkpoint-committed</code></td><td>一个新保存点已 push 到进程 git 仓库（前端据此重拉状态）</td><td>ref</td></tr>
             <tr><td><code>error</code></td><td>错误</td><td>message</td></tr>
           </tbody>
         </table></div>
@@ -81,6 +82,7 @@
             <tr><td><code>item.end</code></td><td><code>id:ItemId</code>、<code>value:ItemValue</code>（见下，<strong>已合并全量</strong>）</td></tr>
             <tr><td><code>turn.end</code></td><td><code>turn:TurnId</code>、<code>stop_reason:StopReason</code>（见下）、<code>raw_stop_reason?:string</code>、<code>usage?:{ input?, output?, context_window?, extra? }</code></td></tr>
             <tr><td><code>compaction</code></td><td><code>trigger:'auto'|'manual'</code>、<code>pre_tokens?:number</code>（引擎压缩了自己的上下文，见下）</td></tr>
+            <tr><td><code>checkpoint-committed</code></td><td><code>ref:string</code>（新保存点的 commit SHA，见下）</td></tr>
             <tr><td><code>error</code></td><td><code>severity:'fatal'|'transient'|'warning'</code>、<code>message:string</code>（见下）</td></tr>
           </tbody>
         </table></div>
@@ -113,6 +115,10 @@
         <div class="note">
           <span class="note-label">compaction ≠ 流的合并</span>
           <code>compaction</code> 事件记录的是<strong>引擎压缩了它自己的上下文</strong>（context compaction），和前面说的“流的合并 / 读时投影”是两码事——<strong>事件流本身永不删减</strong>。它如实落在流里，只为让用户在历史里看到“此处之前的上下文被引擎压缩过”。取自 Claude 的 <code>compact_boundary</code> / <code>SDKCompactBoundaryMessage</code>（带 <code>trigger</code> / <code>pre_tokens</code>）。
+        </div>
+        <div class="note">
+          <span class="note-label">checkpoint-committed：只通知，不搬运</span>
+          这条事件只是<strong>一个通知</strong>：一个新保存点已经 <code>commit</code> 并 <code>push</code> 到该进程的 git 仓库。<strong>检查点内容本身不走事件流</strong>——它存在 git 里、按 <code>ref</code> 拉取；事件流只负责告诉前端「有新保存点了」，前端据此按 <code>ref</code> 去重拉 git 状态。耐久与传输全是 <code>git push</code>，详见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
         </div>
         <div class="note ok">
           <span class="note-label">子代理：parent 字段</span>

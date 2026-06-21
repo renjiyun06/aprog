@@ -30,7 +30,7 @@
         <p>
           每个进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个目录（类比 <code>/proc/&lt;pid&gt;/</code>）。它<strong>就是底层 harness 的工作目录（cwd）</strong>——
           这点很重要：平台只关心这个目录里的东西，用户在界面上看到的进程目录也正是它。（harness 并不被禁止访问别处，只是别处平台不管。）
-          它<strong>不挂持久卷</strong>，活在沙箱本地盘上；耐久性靠<a href="#checkpoint">检查点</a>经 B 平面流回控制平面，而非靠卷。
+          它<strong>不挂持久卷</strong>，活在沙箱本地盘上；耐久性靠<a href="#checkpoint">检查点</a> commit 后 <code>git push</code> 到 CP 托管的 bare 仓库（完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>），而非靠卷。
           目录结构由 <strong>state 程序库</strong>统一定义：身份、输入流、有 schema 的执行状态、以及 resume 语义。
         </p>
         <div class="dgm">
@@ -90,9 +90,13 @@
         </div>
 
         <h2 id="checkpoint">检查点：耐久性归平台，一致性归程序</h2>
+        <div class="note">
+          <span class="note-label">存储 / 传输的完整模型</span>
+          下文谈的是检查点的<strong>语义</strong>（何时算一致、谁负责什么）。它<strong>怎么存、怎么传</strong>由 git 落地——<strong>一个检查点 = 一次 commit，<code>checkpoint_ref</code> = commit SHA</strong>，耐久靠 <code>git push</code>、唤醒靠 <code>git clone</code>。完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
+        </div>
         <p>
           沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠<strong>检查点</strong>——把进程目录的 state 子集
-          经 <a href="interaction.html#data-plane">B 平面</a>流回控制平面。但「什么时候算一个能安全 resume 的点」，<strong>平台判断不了，只有上层程序知道</strong>。所以职责这么分：
+          <strong>commit 并 <code>git push</code> 到 CP 托管的 bare 仓库</strong>。但「什么时候算一个能安全 resume 的点」，<strong>平台判断不了，只有上层程序知道</strong>。所以职责这么分：
         </p>
         <div class="tbl-wrap">
           <table>
@@ -106,7 +110,7 @@
         </div>
         <div class="note ok">
           <span class="note-label">平台只提供两件基础设施</span>
-          这一节的总纲：<strong>进程一致性主要是上层程序的事</strong>，平台只给两样最小的底座——① <strong>持久化进程目录</strong>（把 state 子集搬到控制平面、崩溃后灌回），
+          这一节的总纲：<strong>进程一致性主要是上层程序的事</strong>，平台只给两样最小的底座——① <strong>持久化进程目录</strong>（commit 后 <code>git push</code> 到 CP bare repo、崩溃后 <code>git clone</code> 灌回），
           ② 一个<strong>检查点工具</strong>，供程序在它认为一致的时刻调用。其余（什么算一致、外部副作用怎么对齐、resume 怎么续）全是程序的语义责任。
         </div>
 
@@ -137,7 +141,7 @@
             <thead><tr><th>决定</th><th>归谁</th><th>怎么做</th></tr></thead>
             <tbody>
               <tr><td><strong>此刻一致吗</strong>（commit mark）</td><td>程序</td><td>调检查点工具喊一声。可能落在 turn 边界，但判据是语义、不是空闲</td></tr>
-              <tr><td><strong>何时真捕获 + 真传</strong></td><td>平台 / driver</td><td>mark 只<strong>武装</strong>；真正捕获推迟到 <strong>harness 结束本回合回复（<code>turn.end</code>）</strong>、盘面静止时。再按 <strong>debounce</strong> 决定多久真推回 CP</td></tr>
+              <tr><td><strong>何时真捕获 + 真传</strong></td><td>平台 / driver</td><td>mark 只<strong>武装</strong>；真正捕获推迟到 <strong>harness 结束本回合回复（<code>turn.end</code>）</strong>、盘面静止时 <code>git add -A &amp;&amp; git commit</code>。再按 <strong>debounce</strong> 决定多久 <code>git push</code> 推回 CP bare repo</td></tr>
             </tbody>
           </table>
         </div>
@@ -192,7 +196,7 @@
 
         <h3 id="restore">恢复 = 纯 resume，没有「回退语义」</h3>
         <p>
-          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱热恢复 / 经 B 灌回检查点）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
+          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 灌回检查点）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
         </p>
         <ul>
           <li>底层 harness 启动后<strong>就是普通 resume</strong>，它不知道、也不关心「丢了一段活」。</li>

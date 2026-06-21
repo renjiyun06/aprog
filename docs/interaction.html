@@ -25,7 +25,8 @@
           <a href="sandbox.html">沙箱与镜像</a>讲了沙箱怎么烘、怎么起；这页讲沙箱<strong>起来之后</strong>，
           控制平面跟它之间到底发生哪些交互、这些交互该抽象成什么接口。结论一句话：交互分属<strong>两个正交的平面</strong>——
           一个把沙箱当<strong>托管资源</strong>管（厂商相关），一个跟<strong>烘在沙箱里的 driver</strong> 对话（厂商无关）。
-          <strong>所有文件搬运都走后者</strong>，于是前者瘦成纯生命周期。
+          后者<strong>只承载实时的事件上行 + input 下行</strong>，前者瘦成纯生命周期；
+          至于<strong>状态怎么存怎么传</strong>（检查点 = <code>git push</code>、前端读 = 按 ref 拉 git），已收敛到 <a href="proc-storage.html">进程状态存储（Git 模型）</a>，不再是这两个平面的事。
         </p>
 
         <h2 id="two-planes">两个平面</h2>
@@ -42,7 +43,7 @@
               </div>
               <div class="dgm-col grow">
                 <div class="ar down"><span class="albl">B · 数据平面（带内 / 我们的协议）</span><span class="gly">↓</span></div>
-                <div class="node c-driver"><span class="nt">DriverChannel <span class="tag">厂商无关</span></span><span class="nd"><strong>带内全包</strong>：<a href="protocol.html">协议</a>事件流、输入、控制、实时 fs 读、<strong>大块传输（bootstrap / 检查点 / 恢复）</strong>。同一个 driver、同一套协议。</span></div>
+                <div class="node c-driver"><span class="nt">DriverChannel <span class="tag">厂商无关</span></span><span class="nd"><strong>只承载两件实时的事</strong>：<a href="protocol.html">协议</a>事件上行 + input 下行（含控制信号）。检查点经 <code>git push</code>、前端读文件按 ref 拉 git（见 <a href="proc-storage.html">Git 模型</a>），都不再走它。同一个 driver、同一套协议。</span></div>
               </div>
             </div>
             <div class="dgm-group g-sandbox">
@@ -57,15 +58,17 @@
           <div class="dgm-cap">
             两个平面的<strong>厂商相关性恰好相反</strong>：A 平面每家 API 不同（<code>SandboxProvider</code> 吸收）；
             B 平面对所有厂商都一样（说话的是<strong>我们自己</strong>的 driver、跑<strong>我们自己</strong>的协议）。厂商在 B 平面只负责一件事——
-            给我们一根<strong>可达 driver 的字节管道</strong>。<strong>所有文件搬运（启动注入、运行检查点、唤醒恢复、UI 浏览）都在 B 平面</strong>，A 平面碰都不碰。
+            给我们一根<strong>可达 driver 的字节管道</strong>。<strong>B 平面只跑实时的事件上行 + input 下行</strong>，A 平面碰都不碰；
+            状态的耐久与读取（检查点 = <code>git push</code>、前端读 = 按 ref 拉 git）走<a href="proc-storage.html">独立的 git 通道</a>，两个平面都不沾。
           </div>
         </div>
         <div class="note ok">
-          <span class="note-label">为什么文件全在 B、A 一个文件接口都不留</span>
+          <span class="note-label">为什么 A 一个文件接口都不留</span>
           曾经的直觉是「整目录注入/导出该走厂商原生 fs（A 平面）」，理由是 ① 信任种子没法用还没建立的 B 通道送；② 耐久备份要扛住坏掉的 driver。
           这两条在收敛后的模型里都<strong>不成立</strong>：① 信任种子<strong>烘进镜像</strong>即可（镜像本身就是带外通道，见<a href="#trust">信任与启动序</a>）；
           ② 我们<strong>从不</strong>从坏掉的 driver 里抢救——driver 死 = 沙箱死 = 进程<strong>恢复到上一个检查点</strong>（见 <a href="state.html#checkpoint">检查点</a>），不需要事后导出。
-          于是 <code>injectDir/extractDir</code> 被<strong>彻底删除</strong>，<code>SandboxProvider</code> 的厂商面更小，也更 provider-neutral——而这正是当初做这层抽象的目标。
+          于是 <code>injectDir/extractDir</code> 被<strong>彻底删除</strong>，<code>SandboxProvider</code> 的厂商面更小，也更 provider-neutral。
+          至于进程目录的耐久与铺设，<strong>既不走 A、也不走 B，而是 driver 直接 <code>git push</code> / <code>clone</code> CP 托管的 bare repo</strong>（见 <a href="proc-storage.html">Git 模型</a>）——文件搬运彻底从这两个平面里拿掉了。
         </div>
 
         <h2 id="resource-plane">A · 资源平面：SandboxProvider</h2>
@@ -77,58 +80,56 @@
             <thead><tr><th>方法</th><th>方向</th><th>干什么</th></tr></thead>
             <tbody>
               <tr><td><code>create(image, res)</code></td><td>→</td><td>用烘好的 <a href="sandbox.html#image">ImageRef</a> 起沙箱。driver 随镜像 entrypoint <strong>自启并拨出</strong>（见 <a href="#trust">下文</a>）。</td></tr>
-              <tr><td><code>destroy(h)</code></td><td>→</td><td>销毁、释放全部资源（即进程 <a href="#hibernate">hibernate</a> 的落地）。状态早已经 B 平面落到控制平面。</td></tr>
+              <tr><td><code>destroy(h)</code></td><td>→</td><td>销毁、释放全部资源（即进程 <a href="#hibernate">hibernate</a> 的落地）。状态早已 <code>git push</code> 到 CP 托管的 bare repo。</td></tr>
             </tbody>
           </table>
         </div>
         <p>
           就这两个。<strong>没有 hibernate/wake/exec/openPty、没有 caps、没有任何文件接口</strong>——进程休眠就是 <code>destroy</code>（见 <a href="#hibernate">下文</a>），
-          文件全是 B 平面的事。这条纪律让 <code>SandboxProvider</code> 的厂商面收敛到最小：接一家新厂商，只要能 create/destroy + 让 driver 拨得出来，就够了。
+          文件的耐久与铺设是 <a href="proc-storage.html">git 的事</a>（driver 直接 push/clone），A 平面碰都不碰。这条纪律让 <code>SandboxProvider</code> 的厂商面收敛到最小：接一家新厂商，只要能 create/destroy + 让 driver 拨得出来，就够了。
           需要快速唤醒（厂商热令牌）、运维 shell、出站白名单时再按需加（YAGNI）。
         </p>
 
         <h2 id="data-plane">B · 数据平面：DriverChannel</h2>
         <p>
-          控制平面跟 driver 的<strong>双工对话</strong>。driver 拨上来、通道建立后，下面这套接口在所有厂商上都一样：
+          控制平面跟 driver 的<strong>双工对话</strong>，<strong>瘦身后只剩两件实时的事</strong>：事件上行 + input 下行（含控制信号）。
+          检查点的耐久（<code>git push</code>）与前端读文件（按 ref 拉 git）已搬到 <a href="proc-storage.html">Git 模型</a>，<strong>不再是本通道的职责</strong>。
+          driver 拨上来、通道建立后，下面这套接口在所有厂商上都一样：
         </p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>方法</th><th>方向</th><th>干什么</th></tr></thead>
             <tbody>
               <tr><td><code>subscribe(fromSeq)</code></td><td>←</td><td>可续订的 <code>AsyncIterable&lt;Envelope&gt;</code> 事件流。重连 / 唤醒时用 <code>fromSeq</code> 续上（见 <a href="#seq">seq 归属</a>）。</td></tr>
-              <tr><td><code>sendInput(item)</code></td><td>→</td><td>注入一条<a href="protocol.html">输入</a>：用户消息 / 文件。落到 harness 的 <code>input.md</code> 流。</td></tr>
-              <tr><td><code>control(signal)</code></td><td>→</td><td>带内控制信号：中断当前回合、checkpoint-now、hibernate-prepare 等。</td></tr>
-              <tr><td><code>fs.list(path)</code> / <code>fs.read(path)</code></td><td>⇆</td><td>UI 目录浏览的<strong>实时读</strong>：driver 在沙箱内 ls/cat 自己的 cwd（见 <a href="#dir-read">目录读取</a>）。</td></tr>
-              <tr><td><code>pushBundle</code> / <code>pullBundle</code></td><td>⇅</td><td><strong>大块传输</strong>：启动时灌进进程目录 + auth；检查点 / 唤醒时整段 state 子集进出。</td></tr>
+              <tr><td><code>sendInput(item)</code></td><td>→</td><td>注入一条<a href="protocol.html">输入</a>：用户消息。落到 harness 的 <code>input.md</code> 流。</td></tr>
+              <tr><td><code>control(signal)</code></td><td>→</td><td>带内控制信号：中断当前回合、checkpoint-now（触发一次 <code>git push</code>）、hibernate-prepare 等。</td></tr>
             </tbody>
           </table>
         </div>
         <div class="note ok">
-          <span class="note-label">已定 · 一条连接，按 stream 多路复用</span>
+          <span class="note-label">已定 · 一条连接，单条实时 stream</span>
           一个 driver（= 一个沙箱 = 一个运行中的进程）跟控制平面之间<strong>只建一条物理连接</strong>（HTTP/2 双工，driver 拨出），
-          内部按 <strong>stream</strong> 多路复用：一条常驻 <strong>control-stream</strong> 跑全部交互消息，外加按需开的 <strong>bulk-stream</strong> 跑大块传输——
-          几十 MB 的 bundle 单开一条 stream，靠 HTTP/2 帧交错 + 每流 flow-control，<strong>不头部阻塞</strong>实时事件流。
-          <strong>不拆成两条物理连接</strong>：两条连接换来的内核级隔离只省掉性能抖动，却引入「控制连接活、数据连接死」的<strong>部分失败</strong>与身份二次绑定——
-          拿可容忍的性能风险换不可容忍的状态一致性风险，不划算。所有 stream <strong>与连接同生死</strong>：连接断 = 全断，
-          重连一次、按 <a href="#seq">seq</a> 续上即可，没有「半通」中间态。落到线上的完整 schema 见 <a href="#schema">交互 schema</a>。
+          上面跑一条常驻 <strong>control-stream</strong>：全部交互消息（事件上行 + input/控制下行）都<strong>小、低延迟</strong>。
+          <strong>不再有 bulk-stream</strong>——大块传输（检查点 / 唤醒 / bootstrap）已交给 git，几十 MB 的 state 子集不再挤这条连接。
+          stream <strong>与连接同生死</strong>：连接断 = 断，重连一次、按 <a href="#seq">seq</a> 续上即可，没有「半通」中间态。落到线上的完整 schema 见 <a href="#schema">交互 schema</a>。
         </div>
 
         <h2 id="trust">信任与启动序</h2>
         <p>
-          既然文件全走 B，那 driver 必须能<strong>自己起来、自己拨出、且一拨上来就被信任</strong>。信任种子<strong>烘进镜像</strong>解决——镜像本身就是一条带外通道：
+          driver 必须能<strong>自己起来、自己拨出、且一拨上来就被信任</strong>——既为建 B 通道，也为拿到能 <code>git clone</code> 进程仓库的资格。信任种子<strong>烘进镜像</strong>解决——镜像本身就是一条带外通道：
         </p>
         <div class="dgm">
           <div class="dgm-stack tight">
             <div class="node c-muted"><span class="nt">① create</span><span class="nd">沙箱起来。镜像 entrypoint <strong>自启 driver</strong>；driver 知道控制平面地址（烘入 / create 时给 env）。</span></div>
             <div class="node c-driver"><span class="nt">② driver 拨出 + 握手</span><span class="nd">driver 持<strong>烘入镜像的凭证</strong>拨向控制平面 → B 通道建立 + <a href="sandbox.html#constraints">protocol 版本握手</a>。</span></div>
             <div class="node c-cp"><span class="nt">③ create-time 绑定</span><span class="nd">控制平面把这条拨入连接<strong>钉死</strong>到它刚 create 的那个沙箱/待命进程上。</span></div>
-            <div class="node c-state"><span class="nt">④ 灌 bootstrap</span><span class="nd">控制平面经 B <code>pushBundle</code>：skill 闭包 + <strong>per-process auth</strong>（用户 OAuth，不能烘）+（首次）用户初始输入 /（唤醒）最新检查点。</span></div>
+            <div class="node c-state"><span class="nt">④ 下发种子 + clone</span><span class="nd">CP 经 B 下发敏感种子：<strong>per-process auth</strong>（用户 OAuth，不能烘也不进 git）+ 每进程 git deploy 凭证。driver 据此 <code>git clone</code> CP 托管的 bare repo 铺好进程目录（含 skill 闭包 + 最新检查点；<strong>首次</strong>是空仓）。</span></div>
             <div class="node c-program"><span class="nt">⑤ driver 拉起 harness</span><span class="nd">cwd = 进程目录。<strong>首次</strong>由 harness 按 <a href="state.html">state 技能</a>自己写出骨架（平台不代笔）；产出经 driver 翻成信封流回来。</span></div>
           </div>
           <div class="dgm-cap">
             <strong>凭证为何能烘进去</strong>：bake 发生在 driver 说第一句话<strong>之前</strong>，等于把 B 通道的引导凭证安全地预置好了——鸡生蛋解除。
             它是<strong>整张镜像所有沙箱共享的静态秘密</strong>，只够证明「我是正版 aprog 沙箱」；要证明「我是进程 X」靠第 ③ 步的 create-time 绑定补齐。
-            <strong>per-process auth</strong> 敏感且因人而异、不能烘——但第 ④ 步通道已是 TLS + 凭证鉴权过的，经 B 送 auth 跟走任何厂商 API 一样安全。
+            <strong>per-process auth 与 git deploy 凭证</strong>敏感且因人而异、不能烘——但第 ④ 步通道已是 TLS + 凭证鉴权过的，经 B 送跟走任何厂商 API 一样安全。
           </div>
         </div>
         <div class="note">
@@ -159,27 +160,24 @@
 
         <h2 id="schema">交互 schema：一条连接上的消息与流</h2>
         <p>
-          把前面 <a href="#data-plane">B 平面方法</a>落到线上，就是这条连接里跑的两类 stream、三种帧。下面先定<strong>连接/流模型</strong>与<strong>帧信封</strong>，
+          把前面 <a href="#data-plane">B 平面方法</a>落到线上，就是这条连接里跑的<strong>一类 stream、三种帧</strong>。下面先定<strong>连接/流模型</strong>与<strong>帧信封</strong>，
           再按<strong>业务场景</strong>把它们串成消息序。约定：<code>→</code> = control-plane→driver，<code>←</code> = driver→control-plane。
+          注意：检查点 / 唤醒的大块传输已交给 git（见 <a href="proc-storage.html">Git 模型</a>），<strong>不在这条连接上</strong>。
         </p>
 
         <h3 id="schema-streams">连接与流模型</h3>
         <div class="dgm">
           <div class="dgm-stack tight">
             <div class="node c-driver"><span class="nt">1 driver ⇒ 1 连接</span><span class="nd">HTTP/2 双工，driver 拨出。运行中进程恰好一条；休眠进程零连接。连接是唯一的故障域。</span></div>
-            <div class="dgm-cols" style="flex-wrap:nowrap">
-              <div class="node c-cp" style="flex:1"><span class="nt">control-stream<span class="tag" style="margin-left:6px">常驻 1 条</span></span><span class="nd">双向帧流，跑 <code>hello</code> / <code>event</code> / 各类 <code>request</code>+<code>reply</code>。小、低延迟、绝不阻塞。</span></div>
-              <div class="node c-state" style="flex:1"><span class="nt">bulk-stream<span class="tag" style="margin-left:6px">按需 0..N 条</span></span><span class="nd">每次 bundle 传输单开一条，传完即关。大、吞吐型。与事件流帧交错，互不头阻。</span></div>
-            </div>
+            <div class="node c-cp"><span class="nt">control-stream<span class="tag" style="margin-left:6px">常驻 1 条（唯一一条）</span></span><span class="nd">双向帧流，跑 <code>hello</code> / <code>event</code> / 各类 <code>request</code>+<code>reply</code>。<strong>全部都小、低延迟</strong>。<strong>不再有 bulk-stream</strong>——大块传输（检查点 / 唤醒 / bootstrap）改走 git。</span></div>
           </div>
           <div class="dgm-cap">
-            两类 stream <strong>共享连接命运</strong>：连接断则全断 → 重连一次、<code>hello</code> 带水位续事件、未完成的 bundle 整段重传。
-            <strong>没有「control 活 / bulk 死」的半通态</strong>——这正是不拆两条物理连接换来的简单性。
+            连接断 → 重连一次、<code>hello</code> 带水位续事件即可。没有「control 活 / bulk 死」的半通态——因为只有一条实时 stream，且重的活儿都不在它上面。
           </div>
         </div>
 
         <h3 id="schema-frames">帧信封</h3>
-        <p>control-stream 上每个帧是 <code>Request</code> / <code>Reply</code> / <code>Event</code> 三者之一；bulk-stream 上是一段 <code>Bundle*</code> 序列。</p>
+        <p>control-stream 上每个帧是 <code>Request</code> / <code>Reply</code> / <code>Event</code> 三者之一。</p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>帧</th><th>方向</th><th>字段</th><th>说明</th></tr></thead>
@@ -187,7 +185,7 @@
               <tr>
                 <td><code>Request</code></td><td>→ / ←</td>
                 <td><code>id</code> string(ULID)·<code>op</code> enum·<code>body</code></td>
-                <td><code>op</code> ∈ <code>hello</code>(←) / <code>input</code> / <code>control</code> / <code>fs.list</code> / <code>fs.read</code>（除 hello 外均 →）。<code>id</code> 供 reply 回指。</td>
+                <td><code>op</code> ∈ <code>hello</code>(←) / <code>input</code> / <code>control</code>（除 hello 外均 →）。<code>id</code> 供 reply 回指。</td>
               </tr>
               <tr>
                 <td><code>Reply</code></td><td>← / →</td>
@@ -198,21 +196,6 @@
                 <td><code>Event</code></td><td>←</td>
                 <td><code>eventId</code> string·<code>localSeq</code> int·<code>payload</code></td>
                 <td>driver 单向推、<strong>不需 reply</strong>。<code>payload</code> 是 engine-neutral <a href="protocol.html">协议事件</a>；CP 落库时盖 <a href="#seq">global seq</a>。<code>eventId</code> 供 delta 折叠。</td>
-              </tr>
-              <tr>
-                <td><code>BundleBegin</code></td><td>→ / ←</td>
-                <td><code>bundleId</code>·<code>kind</code> enum·<code>byteLen</code>·<code>sha256</code>·<code>manifest?</code></td>
-                <td><code>kind</code> ∈ <code>bootstrap</code>(→) / <code>restore</code>(→) / <code>checkpoint</code>(←)。<code>sha256</code> 整体校验，<code>manifest</code> = 路径→大小清单。</td>
-              </tr>
-              <tr>
-                <td><code>BundleChunk</code></td><td>→ / ←</td>
-                <td><code>bundleId</code>·<code>idx</code> int·<code>bytes</code></td>
-                <td>有序分片。方向同本次 <code>BundleBegin</code>。</td>
-              </tr>
-              <tr>
-                <td><code>BundleEnd</code></td><td>→ / ←</td>
-                <td><code>bundleId</code>·<code>ok</code> bool·<code>error?</code></td>
-                <td>收尾。<code>ok=false</code> 或 sha256 不符 → 整段作废、重传（bundle 是幂等单元）。</td>
               </tr>
             </tbody>
           </table>
@@ -226,8 +209,8 @@
             <tbody>
               <tr><td>1</td><td>←</td><td><code>Request{op:hello, body:{driverVersion, protocol, bindCredential}}</code></td><td>持烘入镜像的静态凭证拨入 + <a href="sandbox.html#constraints">版本握手</a>。</td></tr>
               <tr><td>2</td><td>→</td><td><code>Reply{ok, result:{pid, mode, resendFromLocalSeq?}}</code></td><td>CP 据 <a href="#trust">create-time 绑定</a>认出这是哪个待命进程，钉死身份。<code>mode</code> ∈ <code>resume</code>/<code>restore</code>。版本不兼容 → <code>Reply{ok:false, error}</code>，拒连。</td></tr>
-              <tr><td>3a</td><td>←</td><td><code>Event</code> 重放（仅 <code>mode:resume</code>）</td><td><strong>同一 driver 还活着</strong>的网络抖动重连：driver 从 <code>resendFromLocalSeq</code> 重放自己缓冲区里的事件，CP 据已存 seq 去重。无需灌 bundle。</td></tr>
-              <tr><td>3b</td><td>→</td><td><code>BundleBegin{kind:bootstrap|restore}</code> + chunks + <code>BundleEnd</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：CP 经 bulk 灌 skill 闭包 + per-process auth +（首次）初始输入 /（唤醒）最新检查点。</td></tr>
+              <tr><td>3a</td><td>←</td><td><code>Event</code> 重放（仅 <code>mode:resume</code>）</td><td><strong>同一 driver 还活着</strong>的网络抖动重连：driver 从 <code>resendFromLocalSeq</code> 重放自己缓冲区里的事件，CP 据已存 seq 去重。</td></tr>
+              <tr><td>3b</td><td>—</td><td>driver <code>git clone</code> + <code>checkout</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：driver 持每进程 deploy 凭证 <code>git clone --depth=1</code> CP 托管的 bare repo + <code>checkout &lt;checkpoint_ref&gt;</code> 把进程目录铺好（取代旧的 bundle 灌回）。per-process auth 等敏感种子仍随握手从 CP 下发。详见 <a href="proc-storage.html#transport">Git 模型 · 耐久传输</a>。</td></tr>
               <tr><td>4</td><td>—</td><td>driver 拉起 harness</td><td>cwd = 进程目录；之后进入场景 ②。</td></tr>
             </tbody>
           </table>
@@ -235,7 +218,7 @@
         <div class="note">
           <span class="note-label">两种「续上」别混</span>
           <strong>瞬时重连</strong>靠 driver 端缓冲 + <code>resendFromLocalSeq</code> 重放（局部序，便宜）；<strong>跨休眠唤醒</strong>是新 driver、localSeq 归零，靠
-          <a href="#hibernate">检查点 restore</a> 续，连续性来自 CP 侧不断攀升的 global seq。<code>localSeq</code> 只在一次运行内有意义。
+          <a href="proc-storage.html#transport">git clone 检查点</a> 续，连续性来自 CP 侧不断攀升的 global seq。<code>localSeq</code> 只在一次运行内有意义。
         </div>
 
         <h3 id="s-stream">场景 ② 事件流 · 输入 · 控制</h3>
@@ -246,87 +229,78 @@
             <tbody>
               <tr><td>实时事件</td><td>←</td><td><code>Event{localSeq, eventId, payload}</code> ×N</td><td>harness 产出经 driver 翻成协议事件，持续上行。前端按 <a href="api.html#stream">SSE</a> 收 CP 扇出的全局序版本。</td></tr>
               <tr><td>用户输入</td><td>→<br>←</td><td><code>Request{op:input, body:{item}}</code> → <code>Reply{ok}</code><br>随后 <code>Event{payload: user 消息}</code></td><td><strong>echo-from-stream</strong>：输入被 driver 注入 input.md 流，再以一条 <code>user</code> 事件回灌——所有 viewer（含发起方）都从同一条事件流看到它，<a href="protocol.html">语义统一</a>。</td></tr>
-              <tr><td>控制</td><td>→<br>←</td><td><code>Request{op:control, body:{signal}}</code> → <code>Reply{ok}</code></td><td><code>signal</code> ∈ <code>interrupt</code>（打断当前回合）/ <code>checkpoint-now</code> / <code>hibernate-prepare</code>。后两者会触发场景 ④ 的 bulk 回流。</td></tr>
+              <tr><td>控制</td><td>→<br>←</td><td><code>Request{op:control, body:{signal}}</code> → <code>Reply{ok}</code></td><td><code>signal</code> ∈ <code>interrupt</code>（打断当前回合）/ <code>checkpoint-now</code> / <code>hibernate-prepare</code>。后两者会触发场景 ④ 的一次 <code>git push</code>。</td></tr>
             </tbody>
           </table>
         </div>
 
-        <h3 id="s-fs">场景 ③ 目录实时读</h3>
-        <p>UI 浏览<a href="state.html">进程目录</a>时（运行中），CP 当场打到 driver 的 cwd——纯请求/应答，可脏读：</p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>方向</th><th>帧</th><th>说明</th></tr></thead>
-            <tbody>
-              <tr><td>→</td><td><code>Request{op:fs.list, body:{path}}</code> → <code>Reply{ok, result:{entries:[{name,kind,size,mtime}]}}</code></td><td>列目录。</td></tr>
-              <tr><td>→</td><td><code>Request{op:fs.read, body:{path, range?}}</code> → <code>Reply{ok, result:{bytes, truncated}}</code></td><td>读文件，可带 range；大文件标 <code>truncated</code>。半写文件也能读（<a href="#dir-read">看可脏</a>）。</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="note">
-          <span class="note-label">休眠态走不到这条</span>
-          进程休眠时没有沙箱、连接已断，<code>fs.*</code> 无对端。此时 UI 的目录读由 CP <strong>直接从检查点快照</strong>应答（北向 API 内部完成），不进 B 平面。见 <a href="#dir-read">目录读取</a>。
+        <h3 id="s-fs">场景 ③ 目录读 = 按 ref 拉 git（已由 git 取代）</h3>
+        <div class="note warn">
+          <span class="note-label">沙箱 fs 读穿透已移除</span>
+          早期这里有一组 driver 侧的<strong>实时 fs 读</strong>（<code>fs.list</code> / <code>fs.read</code> 当场打到 driver 的 cwd，可脏读）专供前端浏览目录。
+          <strong>现已废弃</strong>：前端看文件 / 产物只看<strong>已提交的一致快照</strong>——直接按 <code>ref</code> 向 CP 托管的 bare git 仓库拉 tree/blob（只读已提交），<strong>运行中未提交的态不对前端暴露</strong>。
+          完整模型见 <a href="proc-storage.html#frontend">进程状态存储 · 前端：状态拉 git</a>。文件的实时活动改由<strong>事件流</strong>体现（如 <code>tool_use: 写文件 X</code>），落地的产物再随新检查点整体跳一格。
         </div>
 
         <h3 id="s-ckpt">场景 ④ 检查点 · 休眠回流</h3>
-        <p>耐久真相靠检查点经 bulk 上行到 CP。三种触发，同一条 bulk 路径：</p>
+        <p>
+          耐久真相靠检查点落地——但<strong>检查点不走这条连接</strong>：driver 在沙箱里 <code>git commit</code> + <code>git push</code> 到 CP 托管的 bare repo（见 <a href="proc-storage.html#transport">Git 模型 · 耐久传输</a>）。
+          B 平面这边只剩<strong>控制信号</strong>，触发或宣告这次 push：
+        </p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>触发</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td><strong>程序 mark</strong>（checkpoint 工具）</td><td>←</td><td><code>BundleBegin{kind:checkpoint}</code> + chunks + <code>BundleEnd</code></td><td><strong>主要来源</strong>：harness 内的程序在<a href="state.html#ckpt-tool">语义一致点</a>调检查点工具——这只是 <strong>mark</strong>；driver 挂起，等 <strong><code>turn.end</code>（结束回复）</strong>盘面静止才捕获，且 mark 后没再调修改性工具才算数。再据 <strong>debounce</strong> 决定是否真推（无需 CP Request，直接开 bulk-stream）。CP 收齐校验后置为新的耐久真相。</td></tr>
-              <tr><td><code>control:checkpoint-now</code></td><td>→ 然后 ←</td><td>先 <code>Reply{ok}</code>，driver 随即推 checkpoint bulk</td><td>CP 主动要一份（如分享前、迁移前）。</td></tr>
-              <tr><td><code>control:hibernate-prepare</code></td><td>→ 然后 ←</td><td>driver 落最后一份 checkpoint bulk → <code>Reply{ok}</code></td><td>CP 收到 ok 后调 <a href="#resource-plane">provider.destroy</a>（A 平面，<strong>不在本连接上</strong>）→ 连接随沙箱销毁而断。这是连接的正常终点。</td></tr>
+              <tr><td><strong>程序 mark</strong>（checkpoint 工具）</td><td>—</td><td>不经本连接：driver 自行 <code>commit</code> + <code>push</code></td><td><strong>主要来源</strong>：harness 内的程序在<a href="state.html#ckpt-tool">语义一致点</a>调检查点工具——这只是 <strong>mark</strong>；driver 挂起，等 <strong><code>turn.end</code>（结束回复）</strong>盘面静止才捕获，且 mark 后没再调修改性工具才算数。再据 <strong>debounce</strong> 决定是否真 <code>push</code>。push 成功后 driver 发一条 <code>checkpoint-committed{ref}</code> 事件，前端据此按新 ref 重拉 git。</td></tr>
+              <tr><td><code>control:checkpoint-now</code></td><td>→ 然后 —</td><td><code>Reply{ok}</code>，driver 随即 <code>commit</code> + <code>push</code></td><td>CP 主动要一份（如分享前、迁移前）。</td></tr>
+              <tr><td><code>control:hibernate-prepare</code></td><td>→ 然后 ←</td><td>driver 落最后一次 <code>push</code> → <code>Reply{ok}</code></td><td>CP 收到 ok 后调 <a href="#resource-plane">provider.destroy</a>（A 平面，<strong>不在本连接上</strong>）→ 连接随沙箱销毁而断。这是连接的正常终点。</td></tr>
             </tbody>
           </table>
         </div>
         <div class="note ok">
           <span class="note-label">连接的两种终结</span>
-          <strong>正常</strong>：<code>hibernate-prepare</code> → 末次 checkpoint 落地 → destroy → 断（进程完好休眠）。
-          <strong>异常</strong>：连接意外断 = driver/沙箱死。<strong>不抢救</strong>——进程恢复到<a href="state.html#checkpoint">上一个检查点</a>，下次唤醒走场景 ①-3b。两条路都收敛到「检查点是唯一真相」。
+          <strong>正常</strong>：<code>hibernate-prepare</code> → 末次 <code>push</code> 落地 → destroy → 断（进程完好休眠）。
+          <strong>异常</strong>：连接意外断 = driver/沙箱死。<strong>不抢救</strong>——进程恢复到<a href="state.html#checkpoint">上一个检查点</a>（即 remote 上最后一次 push），下次唤醒走场景 ①-3b。两条路都收敛到「检查点是唯一真相」。
         </div>
 
-        <h2 id="hibernate">休眠 = destroy，唤醒 = create + 灌检查点</h2>
+        <h2 id="hibernate">休眠 = destroy，唤醒 = create + git clone</h2>
         <p>
           这里说的休眠是<strong>进程</strong>的休眠，目的就是把沙箱资源<strong>全部让出</strong>。进程在 <a href="state.html#checkpoint">quiescent 点</a>时
-          state 子集早已经 B 平面落到控制平面，所以休眠很轻——直接 <code>destroy</code>：
+          检查点早已 <code>git push</code> 到 CP 托管的 bare repo，所以休眠很轻——直接 <code>destroy</code>：
         </p>
         <div class="dgm">
           <div class="dgm-stack tight">
-            <div class="node c-state"><span class="nt">休眠 = <code>destroy</code></span><span class="nd">末次检查点经 B 流回 CP → <code>provider.destroy</code> 释放全部资源。<strong>不用厂商 stop</strong>——stop 免 compute 却仍计 disk 费，进程常隔很久才回，留盘白烧钱。厂商成本归零。</span></div>
-            <div class="node c-sandbox"><span class="nt">唤醒 = <code>create</code> + 灌回</span><span class="nd"><code>provider.create</code> 新沙箱 → driver 拨入 → 经 B <code>pushBundle</code> 把检查点灌回去 → driver 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
+            <div class="node c-state"><span class="nt">休眠 = <code>destroy</code></span><span class="nd">末次检查点已 <code>git push</code> 到 CP remote → <code>provider.destroy</code> 释放全部资源。<strong>不用厂商 stop</strong>——stop 免 compute 却仍计 disk 费，进程常隔很久才回，留盘白烧钱。厂商成本归零。</span></div>
+            <div class="node c-sandbox"><span class="nt">唤醒 = <code>create</code> + <code>git clone</code></span><span class="nd"><code>provider.create</code> 新沙箱 → driver 拨入 → driver <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 铺好进程目录 → 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
           </div>
           <div class="dgm-cap">
-            耐久真相是<strong>控制平面侧的检查点</strong>（运行中已持续经 B 流回），不依赖任何厂商热令牌或留盘。检查点天生<strong>跨厂商</strong>——
-            迁移就是「在厂商 Y 起沙箱、把检查点经 B 灌给它的 driver」。所以 <code>SandboxProvider</code> 不需要 hibernate/wake——它们就是 destroy / create。完整语义见 <a href="state.html#checkpoint">进程目录与状态</a>。
+            耐久真相是<strong>CP 托管 bare repo 上的检查点</strong>（运行中已持续 <code>git push</code>），不依赖任何厂商热令牌或留盘。检查点天生<strong>跨厂商</strong>——
+            迁移就是「在厂商 Y 起沙箱、让它的 driver <code>clone</code> 同一个 remote」。所以 <code>SandboxProvider</code> 不需要 hibernate/wake——它们就是 destroy / create。完整语义见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
           </div>
         </div>
 
         <h2 id="dir-read">目录读取：UI 看到的是谁的数据</h2>
         <p>
           用户在<a href="window.html">工作窗口</a>里看到的进程目录是<strong>只读</strong>的。一条硬边界：<strong>UI 永远对着控制平面，从不直连沙箱</strong>
-          （浏览器没凭证、也没路由能摸到厂商云里的沙箱；多 tab 还要在控制平面收敛扇出）。但控制平面这份数据的<strong>新鲜度来源</strong>取决于进程状态：
+          （浏览器没凭证、也没路由能摸到厂商云里的沙箱；多 tab 还要在控制平面收敛扇出）。<strong>且不论进程运行还是休眠，新鲜度来源只有一个：CP 托管的 git 仓库</strong>——按 <code>ref</code> 拉 tree/blob：
         </p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
             <div class="node c-program" style="min-width:140px"><span class="nt">浏览器 UI</span><span class="nd">只跟控制平面说话</span></div>
-            <div class="ar"><span class="albl">读</span><span class="gly">→</span></div>
+            <div class="ar"><span class="albl">按 ref 拉 git</span><span class="gly">→</span></div>
             <div class="dgm-col grow">
-              <div class="node c-cp"><span class="nt">控制平面</span><span class="nd">运行中 = <strong>透明中继</strong>（不吃自己的缓存）；休眠中 = <strong>喂检查点</strong>。</span></div>
-              <div class="dgm-cols" style="flex-wrap:nowrap;margin-top:8px">
-                <div class="node c-driver" style="flex:1"><span class="nt">运行中 → 经 B 实时拉沙箱</span><span class="nd"><code>fs.list/read</code> 当场读 driver 的 cwd。同步按钮 / 轮询都打到这。<strong>能看到正在被写的文件</strong>。</span></div>
-                <div class="node c-state" style="flex:1"><span class="nt">休眠中 → 上一份检查点</span><span class="nd">没沙箱可拉，给控制平面存的检查点。只读、可能略旧，UI 标「休眠快照」。</span></div>
-              </div>
+              <div class="node c-cp"><span class="nt">控制平面 · git smart-HTTP</span><span class="nd">同源、同 token，前端经 CP 的薄鉴权门读 <code>…/&lt;pid&gt;.git/</code>。<strong>只读已提交</strong>，运行 / 休眠一视同仁。</span></div>
+              <div class="node c-state"><span class="nt">展示的永远是一致快照</span><span class="nd">文件树停在上个检查点；收到 <code>checkpoint-committed{ref}</code> 事件再按新 ref 整体跳一格。<strong>运行中未提交的态不暴露</strong>，绝不出现写到一半的撕裂态。</span></div>
             </div>
           </div>
           <div class="dgm-cap">
-            所以「UI 同步的是沙箱还是控制平面的数据」——对端永远是控制平面，但运行时它只是<strong>管道</strong>、把沙箱实时态原样转发，不是缓存。
+            原来「运行中经 B 实时拉沙箱 cwd / 休眠中喂检查点」的两套读路<strong>已统一为按 ref 拉 git</strong>，沙箱 fs 读穿透移除。完整模型见 <a href="proc-storage.html#frontend">Git 模型 · 前端：状态拉 git</a>。
           </div>
         </div>
         <div class="note">
-          <span class="note-label">两种读、两种节奏</span>
-          同一条 B 平面 <code>fs</code>、同一份沙箱磁盘，被两种目的以两种节奏读：
-          <strong>UI 实时拉</strong>可任意时刻发生（哪怕回合进行中、文件半写也无妨，它只是「看」）；
-          <strong>检查点</strong>必须 <a href="state.html#checkpoint">quiescent 点</a> gate（要能 resume，必须是一致点）。看可脏，存必净。
+          <span class="note-label">活动看 live，产物看 checkpoint</span>
+          文件的实时活动由<strong>事件流</strong>体现（如 <code>tool_use: 写文件 X</code>）；落地的<strong>产物 / 文件内容</strong>看 git 上的检查点。
+          <strong>检查点</strong>必须在 <a href="state.html#checkpoint">quiescent 点</a> gate（要能 resume，必须是一致点）——所以 git 上的每个 commit 天然是一致快照，<strong>看到的永远是净的</strong>。
         </div>
 
         <h2 id="summary">小结：三套抽象各管一段</h2>
@@ -336,13 +310,13 @@
             <tbody>
               <tr><td><code>ImageBaker</code></td><td>构建期</td><td><strong>高</strong>（四种模型）</td><td>把东西烘进镜像 → <code>ImageRef</code></td></tr>
               <tr><td><code>SandboxProvider</code><span class="tag" style="margin-left:6px">A 平面</span></td><td>生命周期拐点</td><td>中</td><td>沙箱作为资源：<strong>create / destroy</strong>（hibernate=destroy、wake=create）。<strong>不碰文件</strong></td></tr>
-              <tr><td><code>DriverChannel</code><span class="tag" style="margin-left:6px">B 平面</span></td><td>运行期持续</td><td><strong>无</strong></td><td>跟 driver 的协议对话：事件流、输入、控制、实时 fs、<strong>所有文件搬运</strong></td></tr>
+              <tr><td><code>DriverChannel</code><span class="tag" style="margin-left:6px">B 平面</span></td><td>运行期持续</td><td><strong>无</strong></td><td>跟 driver 的协议对话：<strong>只剩事件上行 + input 下行</strong>（含控制信号）。检查点 / 文件读已交给 git，不在此</td></tr>
             </tbody>
           </table>
         </div>
         <p>
           这套收敛模型对应的代码：<code>SandboxProvider</code> 收敛到 <code>create/destroy</code>（删掉 hibernate/wake/exec/openPty/caps 与 <code>Dormant</code>），
-          新增 <code>DriverChannel</code> 接口承载 B 平面。检查点 / resume 的细节见 <a href="state.html#checkpoint">进程目录与状态</a>。
+          <code>DriverChannel</code> 瘦身为只承载事件 + input（去掉 <code>fs.*</code> 与 <code>pushBundle/pullBundle</code>）。检查点存储 / resume 走 git，细节见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
         </p>
 
         <div class="pager" data-pager></div>

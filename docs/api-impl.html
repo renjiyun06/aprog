@@ -68,7 +68,7 @@
   routes/
     auth.ts            /auth/login · /auth/logout
     programs.ts        /programs
-    proc.ts            /proc · spawn · wake · hibernate · input · interrupt · fs
+    proc.ts            /proc · spawn · wake · hibernate · input · interrupt · fs（fs 读走 git repos，非 DriverChannel）
     shares.ts          /proc/:pid/shares*
     notifications.ts   /notifications · /notifications/read
   sse.ts               GET …/stream · /notifications/stream（流式，自成一路）</code></pre>
@@ -112,12 +112,13 @@
             <tr><td><code>procs</code></td><td><code>ProcessManager</code></td><td>ps / spawn / wake / hibernate / 取 PCB</td></tr>
             <tr><td><code>store</code></td><td><code>StreamStore</code></td><td>事件流回放（盖 seq、落库）</td></tr>
             <tr><td><code>hub</code></td><td><code>StreamHub</code></td><td>事件流 live 扇出</td></tr>
-            <tr><td><code>channelFor(pid)</code></td><td>→ <code>DriverChannel</code></td><td>input / interrupt / fs（穿透 running 沙箱内 driver）</td></tr>
+            <tr><td><code>repos</code></td><td>进程 <a href="proc-storage.html">git 仓库存储</a></td><td><code>GET …/fs</code> 按 <code>ref</code> 读已提交 tree/blob（CP 托管 bare repo）+ git smart-HTTP 端点</td></tr>
+            <tr><td><code>channelFor(pid)</code></td><td>→ <code>DriverChannel</code></td><td>input / interrupt（下行到 running 沙箱内 driver）。<strong>fs 读穿透已移除</strong>，改走 <code>repos</code></td></tr>
           </tbody>
         </table></div>
         <div class="note warn">
           <span class="note-label">接缝现状：pending 占位</span>
-          <code>stream/*</code> 等子系统目前仍是接口、无实现，<code>http.ts</code> 暂用 <code>pending('StreamStore')</code> 这类
+          <code>stream/*</code>、进程 <a href="proc-storage.html">git 仓库存储</a>（<code>repos</code>）等子系统目前仍是接口、无实现，<code>http.ts</code> 暂用 <code>pending('StreamStore')</code> 这类
           <strong>Proxy 占位</strong>注入——一旦被处理器触达就抛「子系统尚未装配」的清晰错误，而不是静默 <code>undefined</code>。
           <code>procs</code> 是唯一已到位的（但其方法本身也还 <code>throw</code>）。
         </div>
@@ -126,7 +127,7 @@
         <ul>
           <li><strong>已立</strong>：目录结构、<code>Deps</code>/<code>ReqCtx</code> 类型、路由器、<code>withErrors</code>/<code>withAuth</code> 组合、<code>sseResponse</code> 帧格式、错误信封、分页信封——全部 <code>tsc</code> 通过。</li>
           <li><strong>桩</strong>：每个端点处理器体 = <code>throw 'not implemented'</code>，授权/鉴权同（需用户/会话存储）。</li>
-          <li><strong>前置依赖</strong>：处理器要调的子系统（<code>stream/store·hub·resync</code>、<code>process/manager·lifecycle</code>、<code>driver-channel</code>）多数还是接口——它们落地前，端点填不实。</li>
+          <li><strong>前置依赖</strong>：处理器要调的子系统（<code>stream/store·hub·resync</code>、<code>process/manager·lifecycle</code>、<code>driver-channel</code>、进程 <a href="proc-storage.html">git 仓库存储</a> <code>repos</code>）多数还是接口——它们落地前，端点填不实。</li>
           <li><strong>设计待定</strong>：几处端点行为还卡在 <a href="api.html#open">api.html 的开放问题</a>（Q2 wake 同步/异步、Q3 状态集、Q4 进程终结、Q5 input 返回/文件）。</li>
         </ul>
         <p>所以落地顺序：<strong>定开放问题 → 对齐 <code>ProcessRecord</code>/<code>ProcessState</code> 类型 → 实现子系统 → 把端点从桩填实</strong>。本骨架保证那一步到来时，只需在对应 <code>routes/*.ts</code> 里把 <code>throw</code> 换成真调用。</p>

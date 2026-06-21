@@ -214,11 +214,12 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           第三层 <strong>Process</strong> 的数据模型（PCB 表 + 状态机 + 操作副作用 + 事实源边界）已实现：
           PCB 进 <code>processes</code> 表、生命周期 spawn / ps / wake / hibernate / kill 走
           <code>control-plane/src/process</code>。<strong>所有「碰沙箱」的动作（起停沙箱、检查点）经 <code>SandboxGateway</code> 收口，当前用 <code>MockSandboxGateway</code> 顶</strong>——只造假 <code>sandbox_id</code> / <code>checkpoint_ref</code>，不起真实算力。
-          运行时机制（沙箱编排、检查点回流、唤醒）的深入细节见 <a href="state.html">进程目录与状态</a>、<a href="sandbox.html">沙箱与镜像</a>、<a href="flows.html">生命周期流程</a>。
+          运行时机制（沙箱编排、检查点存储 / <code>git push</code>、唤醒）的深入细节见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>、<a href="state.html">进程目录与状态</a>、<a href="sandbox.html">沙箱与镜像</a>、<a href="flows.html">生命周期流程</a>。
         </div>
         <p>
           Process = 一个 program 的<strong>一次运行</strong>，类比 OS 进程，平台的主 noun。版本在 <code>spawn</code> 时<strong>钉死</strong>、一生不变（升级是显式迁移）。
           它有两处载体：控制平面的 <strong>PCB 行</strong>（可查询的关系事实）与磁盘上的<strong>进程目录</strong> <code>~/.aprog/&lt;pid&gt;/</code>（权威内容态）。
+          进程目录的状态如何存储 / 传输 / 唤醒取回（<strong>进程 = git 仓库、检查点 = commit</strong>）见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
         </p>
 
         <p><strong>① 进程控制块（PCB）—— <code>processes</code> 表</strong></p>
@@ -234,7 +235,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>running</code> / <code>hibernating</code>（见状态机）</td></tr>
             <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
             <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / hibernating）时为 null</td></tr>
-            <tr><td>checkpoint_ref</td><td>TEXT?</td><td>最新检查点引用；唤醒时灌回新沙箱（见 <a href="state.html#checkpoint">检查点</a>）。spawned 时尚无</td></tr>
+            <tr><td>checkpoint_ref</td><td>TEXT?</td><td>最新 commit 的 SHA（进程 git 仓库的 HEAD）；唤醒时 <code>git clone</code>/<code>checkout</code> 取回（见 <a href="proc-storage.html">Git 模型</a> / <a href="state.html#checkpoint">检查点</a>）。spawned 尚无 commit</td></tr>
             <tr><td>created_at</td><td>TEXT</td><td>spawn 时间（ISO）</td></tr>
             <tr><td>last_active_at</td><td>TEXT?</td><td>末次活跃（驱动 UI uptime/最近、休眠回收策略）</td></tr>
           </tbody>
@@ -254,11 +255,11 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             </div>
             <div class="node c-sandbox" style="flex:1">
               <span class="nt">running <span class="tag"><span class="pill run">运行</span></span></span>
-              <span class="nd"><code>sandbox_id</code> 非空，有 live 沙箱与对话。检查点经 driver 持续流回控制平面。</span>
+              <span class="nd"><code>sandbox_id</code> 非空，有 live 沙箱与对话。检查点 commit 后持续 <code>git push</code> 到 CP 托管的 bare 仓库。</span>
             </div>
             <div class="node c-muted" style="flex:1">
               <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
-              <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>、留 <code>checkpoint_ref</code>。<code>wake</code> 即在新沙箱灌回检查点续跑。</span>
+              <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>、留 <code>checkpoint_ref</code>。<code>wake</code> 即在新沙箱 <code>git clone</code>/<code>checkout</code> 取回该 commit 续跑。</span>
             </div>
           </div>
           <div class="dgm-cap">
@@ -272,7 +273,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <thead><tr><th>操作</th><th>前置 state</th><th>后置 state</th><th>对 PCB / 沙箱的副作用</th></tr></thead>
           <tbody>
             <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 program@version、eager 存初始 input；<code>sandbox_id=null</code>，<strong>不起沙箱</strong></td></tr>
-            <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>running</code></td><td>provider.create 起新沙箱 → 回填 <code>sandbox_id</code> + <code>provider</code>；灌 bootstrap（spawned）或灌 <code>checkpoint_ref</code>（hibernating）；拉起 harness</td></tr>
+            <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>running</code></td><td>provider.create 起新沙箱 → 回填 <code>sandbox_id</code> + <code>provider</code>；<code>git clone --depth=1</code> + <code>checkout</code>（hibernating 取回该 commit；spawned 为空 / 初始 input）；拉起 harness</td></tr>
             <tr><td><code>detach</code></td><td>running</td><td><code>running</code>（不变）</td><td><strong>仅前端退订</strong>；沙箱与 harness 照常跑。属运行时 UI 态，<strong>不落库</strong></td></tr>
             <tr><td><code>hibernate</code></td><td>running</td><td><code>hibernating</code></td><td>落盘末次检查点 → provider.destroy；<code>sandbox_id=null</code>，更新 <code>checkpoint_ref</code></td></tr>
             <tr><td>完成 / <code>kill</code></td><td>running</td><td><code>hibernating</code></td><td>同 hibernate（尽力末次检查点 → provider.destroy、<code>sandbox_id=null</code>、记 <code>last_active_at</code>）；只是触发方不同（程序自身完成 / 用户强制），<strong>不产生新状态</strong></td></tr>
@@ -289,8 +290,8 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             <tr><td><code>execution-state/</code>（state.yaml + by-ref blob）</td><td>进程目录</td><td>有 schema 的执行状态，权威</td></tr>
             <tr><td><code>artifacts/</code>（程序产物）</td><td>进程目录</td><td>权威</td></tr>
             <tr><td><code>session.aprog.jsonl</code>（会话逐字流）</td><td>进程目录</td><td><strong>不权威、不进快照</strong>——读时投影，仅展示/审计</td></tr>
-            <tr><td>检查点（运行中经 driver 流回 / 休眠态耐久真相）</td><td>控制平面侧存储</td><td>跨厂商；<code>checkpoint_ref</code> 指向它</td></tr>
-            <tr><td>沙箱（临时算力）</td><td>厂商侧</td><td>易失，hibernate / kill 即销毁，wake 重建</td></tr>
+            <tr><td>检查点（commit；运行中持续 <code>git push</code>）</td><td>进程 git 仓库（bare，CP 托管 <code>/srv/aprog-repos/&lt;pid&gt;.git</code>）</td><td>跨厂商耐久真相；<code>checkpoint_ref</code> 指向 HEAD 的 commit SHA（见 <a href="proc-storage.html">Git 模型</a>）</td></tr>
+            <tr><td>沙箱（临时算力，工作树）</td><td>厂商侧（沙箱临时盘）</td><td>易失，hibernate / kill 即销毁；wake 由 <code>git clone</code> 重建</td></tr>
           </tbody>
         </table></div>
 

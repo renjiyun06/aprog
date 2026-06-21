@@ -43,7 +43,8 @@
         </p>
         <p>
           进程的<strong>真正状态</strong>落在它的目录 <code>~/.aprog/&lt;pid&gt;/</code> 里（类比 <code>/proc/&lt;pid&gt;/</code>，也是 harness 的 cwd）。
-          它不挂持久卷，靠<a href="state.html#checkpoint">检查点</a>持久化。这个目录就是进程，详见 <a href="state.html">进程目录与状态</a>。
+          它<strong>不挂持久卷</strong>，靠<a href="state.html#checkpoint">检查点</a>持久化——<strong>一个进程就是一个 git 仓库，进程目录是它的工作树，一个检查点 = 一次 commit</strong>，耐久靠 <code>git push</code> 到控制平面托管的仓库。
+          这个目录就是进程，存储模型详见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>，目录布局详见 <a href="state.html">进程目录与状态</a>。
         </p>
         <div class="note">
           <span class="note-label">两种状态</span>
@@ -67,8 +68,8 @@
           当前由 <strong>Daytona</strong> 云提供 lifecycle 与 exec 能力。
         </p>
         <p>
-          沙箱是<strong>临时算力</strong>，本身无权威状态——它随时可以销毁重建。进程休眠就是释放沙箱，唤醒就是重新分配一个沙箱并把进程目录注入进去。
-          所有“要紧的东西”都在进程目录里，不在沙箱里。
+          沙箱是<strong>临时算力</strong>，本身无权威状态——它随时可以销毁重建，<strong>磁盘是临时盘、不挂持久卷</strong>。进程休眠就是释放沙箱；唤醒就是重新分配一个沙箱、<code>git clone</code> 进程仓库到它的工作树里（见 <a href="proc-storage.html">Git 模型</a>）。
+          所有“要紧的东西”都已提交进 git、推到控制平面，不在沙箱里。
         </p>
 
         <h2 id="decoupling">三层抽象，互不知情</h2>
@@ -128,17 +129,17 @@
             <div class="ar down"><span class="gly">↓</span></div>
             <a class="node c-muted" href="flows.html#hibernate">
               <span class="nt">hibernate <span class="tag"><span class="pill hib">休眠</span></span></span>
-              <span class="nd">释放沙箱；目录与状态完整保留在平台快照里</span>
+              <span class="nd">释放沙箱；状态已 commit 并 push 到控制平面托管的进程仓库，完整保留</span>
             </a>
             <div class="ar down"><span class="albl">↺ 可反复 wake / hibernate</span><span class="gly">↓</span></div>
             <a class="node c-sandbox" href="state.html#resume">
               <span class="nt">wake <span class="tag"><span class="pill run">运行</span></span></span>
-              <span class="nd">重新分配沙箱，引擎<strong>冷启动</strong>，靠状态文件重建工作记忆——<strong>不重放对话</strong></span>
+              <span class="nd">重新分配沙箱，<code>git clone</code> 进程仓库到工作树，引擎<strong>冷启动</strong>，靠状态文件重建工作记忆——<strong>不重放对话</strong></span>
             </a>
             <div class="ar down"><span class="gly">↓</span></div>
             <a class="node c-bad" href="flows.html#exit">
               <span class="nt">exit <span class="tag">已退出</span></span>
-              <span class="nd">快照进程目录、销毁沙箱。状态<strong>永不删除</strong>，新输入可再 attach 回来</span>
+              <span class="nd">最后一次 commit + push、销毁沙箱。进程仓库<strong>永不删除</strong>，新输入可再 attach 回来</span>
             </a>
           </div>
         </div>

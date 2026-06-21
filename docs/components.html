@@ -37,8 +37,8 @@
               <span class="glabel">aprog 自家 VM</span>
               <div class="dgm-col">
                 <a class="node c-cp" href="#control-plane"><span class="nt">🧭 Control Plane</span><span class="nd">协调 · 编排 · 流中枢</span></a>
-                <div class="ar down"><span class="albl">检查点 ▼</span><span class="gly">↓</span></div>
-                <a class="node c-muted" href="state.html#checkpoint"><span class="nt">💽 检查点存储</span></a>
+                <div class="ar down"><span class="albl">git push ▼</span><span class="gly">↓</span></div>
+                <a class="node c-muted" href="proc-storage.html"><span class="nt">💽 检查点存储 = 进程 git 仓库（bare）</span></a>
               </div>
             </div>
             <div class="ar accent" style="margin-top:14px"><span class="albl">A 起停 · B driver 拨回</span><span class="gly">⇄</span></div>
@@ -58,7 +58,7 @@
         <p>
           一句话：<strong>前端</strong>只跟 <strong>Control Plane</strong> 通信；Control Plane 用 provider SDK 起停<strong>沙箱</strong>（A 平面）；
           沙箱里常驻一个 <strong>Driver</strong>（内含 <strong>Engine</strong>），driver 自启后拨回 CP 建一条活满沙箱生命周期的 <strong>DriverChannel</strong>（B 平面），
-          事件流、输入、文件搬运全走它。
+          它<strong>只承载事件上行 + input 下行</strong>；检查点 / 文件则走 git（driver 直接 push/clone CP 托管的进程仓库，见 <a href="proc-storage.html">Git 模型</a>）。
         </p>
 
         <h2 id="table">组件一览</h2>
@@ -66,9 +66,9 @@
           <table>
             <thead><tr><th>组件</th><th>跑在哪</th><th>生命周期</th><th>职责</th><th>谁出的</th></tr></thead>
             <tbody>
-              <tr><td><strong>Web 前端</strong> (@aprog/web)</td><td>用户浏览器</td><td>会话期</td><td>用户入口：进程列表、对话区、目录区。发指令、看事件流、只读浏览文件</td><td>aprog</td></tr>
-              <tr><td><strong>Control Plane</strong></td><td>aprog VM</td><td>长跑 service</td><td>鉴权 / 进程元数据 / 检查点 / 沙箱编排（A）/ 持有 DriverChannel + 盖 seq + 扇出（B）</td><td>aprog</td></tr>
-              <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>自启拨回 CP；翻译引擎事件、当 harness 父进程、承载 DriverChannel。当前是 <code>claude-driver</code>（TS）</td><td>aprog</td></tr>
+              <tr><td><strong>Web 前端</strong> (@aprog/web)</td><td>用户浏览器</td><td>会话期</td><td>用户入口：进程列表、对话区、目录区。发指令、看事件流（SSE）、按 ref 拉 git 只读浏览已提交文件</td><td>aprog</td></tr>
+              <tr><td><strong>Control Plane</strong></td><td>aprog VM</td><td>长跑 service</td><td>鉴权 / 进程元数据 / 沙箱编排（A）/ 持有 DriverChannel 盖 seq 扇出（B）/ 托管进程 git 仓库（bare）+ git-http 鉴权门</td><td>aprog</td></tr>
+              <tr><td><strong>Engine Driver</strong></td><td>沙箱内</td><td>沙箱生命周期</td><td>自启拨回 CP；翻译引擎事件、当 harness 父进程、承载 DriverChannel（事件上行 + input 下行）；检查点经 <code>git push</code> 到 CP 仓库。当前是 <code>claude-driver</code>（TS）</td><td>aprog</td></tr>
               <tr><td><strong>Engine</strong></td><td>沙箱内（Driver 拉起）</td><td>同 Driver</td><td>Claude Agent SDK 的 <code>query()</code> 跑 agent loop</td><td>外部依赖</td></tr>
               <tr><td><strong>Sandbox</strong></td><td>外部 cloud</td><td>per-process</td><td>提供文件系统 + 进程 + 网络（出站，供 driver 拨回）</td><td>外部依赖</td></tr>
             </tbody>
@@ -93,11 +93,11 @@
         </p>
         <div class="cards">
           <div class="card"><div class="k">api</div><div class="t">HTTP / SSE 端点</div><p class="d">前端的所有请求入口；事件流订阅走 SSE（<code>from=&lt;seq&gt;</code>）</p></div>
-          <div class="card"><div class="k">auth</div><div class="t">鉴权</div><p class="d">login / logout / token，单一鉴权面</p></div>
+          <div class="card"><div class="k">auth</div><div class="t">鉴权</div><p class="d">login / logout / token，单一鉴权面；也给 git smart-HTTP 加薄鉴权门</p></div>
           <div class="card"><div class="k">process</div><div class="t">进程编排</div><p class="d">spawn / attach / detach / hibernate / wake / exit 的流程</p></div>
-          <div class="card"><div class="k">checkpoint</div><div class="t">检查点持久化</div><p class="d">存 DriverChannel 流回的 state 子集，是耐久事实源（<a href="state.html#checkpoint">详</a>）</p></div>
-          <div class="card"><div class="k">sandbox</div><div class="t">A 平面 · 沙箱封装</div><p class="d">provider SDK 封装：create/destroy/hibernate/wake（不碰文件）</p></div>
-          <div class="card"><div class="k">driver-channel</div><div class="t">B 平面 · 流中枢</div><p class="d">受理 driver 拨入、盖全局 seq 落库、扇出给前端、下发输入/控制/fs</p></div>
+          <div class="card"><div class="k">git-host</div><div class="t">进程 git 仓库（bare）</div><p class="d">托管每进程的 bare repo（<code>&lt;pid&gt;.git</code>），是耐久事实源；driver <code>git push</code> 入、前端按 ref 拉（<a href="proc-storage.html">详</a>）</p></div>
+          <div class="card"><div class="k">sandbox</div><div class="t">A 平面 · 沙箱封装</div><p class="d">provider SDK 封装：create/destroy（hibernate=destroy、wake=create，不碰文件）</p></div>
+          <div class="card"><div class="k">driver-channel</div><div class="t">B 平面 · 流中枢</div><p class="d">受理 driver 拨入、盖全局 seq 落库、扇出给前端、下发 input/控制（不再有 fs 读 / 大块传输）</p></div>
         </div>
         <p>
           为什么所有流量都过 Control Plane、不让前端直连沙箱？单一鉴权面、沙箱不暴露公网入站端口、provider 抽象不外漏。
@@ -106,12 +106,13 @@
 
         <h2 id="driver">Engine Driver</h2>
         <p>
-          沙箱内<strong>常驻</strong>的进程，随镜像 entrypoint 自启、持烘入凭证拨回 Control Plane，跨 attach/detach 持续活着。它做三件事：
+          沙箱内<strong>常驻</strong>的进程，随镜像 entrypoint 自启、持烘入凭证拨回 Control Plane，跨 attach/detach 持续活着。它做四件事：
         </p>
         <ol>
           <li>当 <strong>harness 父进程</strong>：拉起 Engine（<code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，streaming-input 模式），掌控其生命周期。</li>
           <li>翻译协议：把 SDK 私有的 <code>AssistantMessage / SystemMessage / ResultMessage</code> 翻成 <strong>engine-neutral 的 aprog 事件</strong>，局部定序后经 DriverChannel 上行（全局 seq 由 CP 落库时盖）。</li>
-          <li>承载 <a href="interaction.html#data-plane">DriverChannel</a>：接收 CP 下发的输入 / 控制信号 / 实时 fs 读，并在 quiescent 点经它把 state 子集流回当检查点。</li>
+          <li>承载 <a href="interaction.html#data-plane">DriverChannel</a>：上行事件、接收 CP 下发的 input / 控制信号（<strong>仅此两类实时往来</strong>，不再有 fs 读穿透 / 大块传输）。</li>
+          <li>管 git：在 quiescent 点 <code>git commit</code> + <code>git push</code> 进程仓库到 CP 托管的 bare repo 当检查点；冷启动 <code>git clone</code> 铺好进程目录（见 <a href="proc-storage.html">Git 模型</a>）。</li>
         </ol>
         <p>
           为什么要一个常驻 Driver、而不是裸跑 Engine？detach 后前端走了，但 DriverChannel 是 <strong>per-sandbox 常驻</strong>、不随 detach 关；

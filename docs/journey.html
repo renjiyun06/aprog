@@ -108,13 +108,14 @@
               休眠的进程<strong>不占沙箱</strong>。它在列表里照常显示（含版本号），随时能唤醒。<strong>状态永不删</strong>。
             </span>
             <ul class="acts">
-              <li>末次检查点经 DriverChannel 流回控制平面、<code>destroy</code> 沙箱（让出全部资源，不用 stop）</li>
-              <li>DB 置 <code>state=hibernating</code>；事件流留在平台侧（不丢）</li>
+              <li>末次检查点 <code>commit</code> + <code>git push</code> 到 CP 托管的 bare 仓库、<code>destroy</code> 沙箱（让出全部资源，不用 stop；工作树在沙箱临时盘，随沙箱一起没，耐久真相在 remote）</li>
+              <li>DB 置 <code>state=hibernating</code>；事件流留在平台侧（不丢）。<strong>状态永不删</strong>——没有终止态，跑完 / kill 也只是回到 <code>hibernating</code></li>
             </ul>
             <div class="legend">
               <a class="chip" href="flows.html#hibernate">深入 · hibernate 调用链 →</a>
               <a class="chip" href="sandbox.html#hibernate">深入 · 休眠让出算力 →</a>
               <a class="chip" href="state.html#checkpoint">深入 · 检查点与持久化 →</a>
+              <a class="chip" href="proc-storage.html">深入 · 进程状态存储（Git 模型）→</a>
             </div>
           </div>
         </div>
@@ -129,13 +130,14 @@
               对你来说是连续的。但底层是一个<strong>全新沙箱、引擎冷启动、空上下文</strong>——它怎么知道做到哪了？
             </span>
             <ul class="acts">
-              <li>起新沙箱 + driver 自启拨入 + 经 DriverChannel 灌回<strong>钉死版本</strong>的程序闭包 + 最新检查点</li>
+              <li>起新沙箱 + driver 自启拨入 + 注入<strong>钉死版本</strong>的程序闭包；进程目录靠 <code>git clone</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 从 CP bare 仓库拉回最新检查点（取代旧的 <code>pushBundle</code> 灌回）</li>
               <li>程序按 <a href="state.html#resume">resume 协议</a>读状态文件接着干，<strong>绝不反向重建引擎对话上下文</strong></li>
               <li>前端重连，按事件流游标补齐缺口 + 续 live —— 历史对话完整呈现</li>
             </ul>
             <div class="legend">
               <a class="chip" href="flows.html#wake">深入 · wake 调用链 →</a>
               <a class="chip" href="state.html#resume">深入 · 唤醒靠状态不靠对话 →</a>
+              <a class="chip" href="proc-storage.html#transport">深入 · wake = git clone →</a>
             </div>
           </div>
         </div>

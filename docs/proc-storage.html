@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>进程状态存储（Git 模型）· aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="proc-storage">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">状态与持久化</div>
+        <h1>进程状态存储（Git 模型）</h1>
+        <p class="lead">
+          一个进程的状态<strong>表现为一个目录、带一串保存点</strong>——这正是 git 的模型。aprog 据此把存储定死:
+          <strong>一个进程 = 一个 git 仓库,一个检查点 = 一次 commit</strong>;耐久性靠 <code>git push</code> 到控制平面托管的 bare 仓库,
+          唤醒靠 <code>git clone</code>,前端查看状态直接<strong>按 ref 拉 git</strong>。本页是这套模型的<strong>唯一出处</strong>,
+          <a href="state.html">进程目录与状态</a> / <a href="flows.html">生命周期流程</a> / <a href="data-model.html#process">数据模型</a> / <a href="proc-wake.html">wake 流程</a> 等页与此对齐。
+        </p>
+
+        <div class="note">
+          <span class="note-label">这取代了什么</span>
+          早期设计里检查点是「进程目录的 state 子集<strong>经 DriverChannel(B 平面)流回 CP</strong>」的一套<strong>自定义传输</strong>,
+          唤醒时再 <code>pushBundle</code> 灌回沙箱。本决策<strong>用 git 取代这套自定义传输</strong>:传输就是 <code>git push</code> / <code>clone</code>,
+          对象库就是 git 自带的内容寻址存储。<strong>什么是检查点、何时打、装什么</strong>(程序 mark + <code>turn.end</code> 去抖、不含 <code>session.jsonl</code>)<strong>不变</strong>;变的只是<strong>它怎么存、怎么传</strong>。
+        </div>
+
+        <h2 id="model">进程 = 仓库,检查点 = commit</h2>
+        <p>把「目录 + 保存点」逐字映射到 git,存储方案就自洽了:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>git 概念</th><th>aprog 对应</th></tr></thead>
+          <tbody>
+            <tr><td>仓库（bare，权威副本）</td><td>一个进程的耐久状态,托管在 CP 侧 <code>/srv/aprog-repos/&lt;pid&gt;.git</code></td></tr>
+            <tr><td>工作树</td><td>运行中沙箱里的进程目录(沙箱<strong>临时盘</strong>,不挂持久卷)</td></tr>
+            <tr><td>一次 commit</td><td>一个检查点 / 保存点(不可变快照)</td></tr>
+            <tr><td>commit SHA(HEAD)</td><td>PCB 的 <a href="data-model.html#process"><code>checkpoint_ref</code></a></td></tr>
+            <tr><td>对象库(内容寻址 + 去重)</td><td>检查点存储——跨保存点、跨进程去重,全历史很便宜</td></tr>
+            <tr><td><code>checkout &lt;sha&gt;</code></td><td>rewind 到某个保存点</td></tr>
+            <tr><td>分支</td><td>从某保存点 fork 一个进程(分享 / 试错)</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok">
+          <span class="note-label">为什么是 git 而不是自建</span>
+          内容寻址、增量去重、全历史、diff、分支、<code>push/pull</code> 传输——全是现成的。自建 CAS 等于重造半个 git。
+          状态子集主要是 <code>yaml</code>/<code>md</code>/<code>jsonl</code> 文本,对 git 近乎完美;大二进制(<code>artifacts/</code>)另议(见 <a href="#open">开放点</a>)。
+        </div>
+
+        <h2 id="checkpoint">检查点 = 一次 commit（语义不变）</h2>
+        <p>
+          检查点的<strong>语义</strong>沿用 <a href="state.html#checkpoint">进程目录与状态</a> 已定的:<strong>一致性归程序、耐久性归平台</strong>。
+          git 只是把它落成具体动作:
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>问题</th><th>谁负责</th><th>git 落法</th></tr></thead>
+          <tbody>
+            <tr><td>此刻一致吗(commit mark)</td><td><strong>程序</strong></td><td>在语义干净点调检查点工具喊一声(mark / 意向)</td></tr>
+            <tr><td>何时真捕获</td><td>平台 / driver</td><td><code>turn.end</code> 时若 mark 仍干净 → <code>git add -A &amp;&amp; git commit</code></td></tr>
+            <tr><td>怎么耐久</td><td>平台 / driver</td><td><code>git push</code> 到 CP bare remote(去抖,见 <a href="#transport">耐久传输</a>)</td></tr>
+            <tr><td>装什么</td><td>协议</td><td>进程目录的 <strong>state 子集</strong>(<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code> / <code>artifacts/</code>);<strong>不含</strong> <code>session.jsonl</code>(引擎私有缓存,<a href="#open">artifacts 见开放点</a>)</td></tr>
+          </tbody>
+        </table></div>
+        <p>「mark 武装、<code>turn.end</code> 捕获」的去抖纪律不变:调用只是意向,捕获前若又写脏则等下一个干净 mark。<code>checkpoint_ref</code> = 这次 commit 的 SHA。</p>
+
+        <h2 id="transport">耐久传输:git push,不再走 B 平面</h2>
+        <p>
+          沙箱本地盘随时可能没(回收 / OOM / 崩溃)。耐久靠把 commit <strong>推到 CP 托管的 bare 仓库</strong>——
+          这就是「同步到控制平面」的全部,<strong>不再有经 DriverChannel 的自定义检查点传输</strong>。
+        </p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
+            <div class="node c-sandbox" style="flex:1">
+              <span class="nt">沙箱(工作树)</span>
+              <span class="nd"><code>turn.end</code> → <code>commit</code> → <code>git push</code> 到 CP remote。持<strong>每进程一把、仅授权该 repo</strong> 的 deploy 凭证(短时、可轮换)。</span>
+            </div>
+            <div class="node c-cp" style="flex:1">
+              <span class="nt">CP 托管 bare repo</span>
+              <span class="nd"><code>/srv/aprog-repos/&lt;pid&gt;.git</code>。耐久真相在此,跨厂商。CP 退化成<strong>一个哑 git 端点 + 鉴权门</strong>,不再是自定义 relay。</span>
+            </div>
+            <div class="node c-muted" style="flex:1">
+              <span class="nt">wake = clone</span>
+              <span class="nd"><code>provider.create</code> 新沙箱 → <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> → harness <a href="state.html#resume">resume</a>。取代旧的 <code>pushBundle</code> 灌回。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            迁移 = 在厂商 Y 起沙箱、<code>clone</code> 同一个 remote——天然跨厂商,不依赖任何厂商热令牌。
+            历史留在 remote(供 rewind / 分支),沙箱只 <code>--depth=1</code> 拿最新态,冷启不必拉全历史。
+          </div>
+        </div>
+        <div class="note warn">
+          <span class="note-label">不因换 git 而消失</span>
+          <strong>崩溃窗口照旧</strong>:mark 后、push 成功前崩,丢的是上次 push 以来那段(git 改的是传输,不是去抖丢失语义)。
+          <strong>外部副作用照旧</strong>:程序自己开发的项目里的 <code>git push</code> 和「进程状态 repo」是<strong>两个不同的 repo</strong>,后者变 git 不解决前者的逃逸(见 <a href="state.html#external">外部副作用</a>)。
+        </div>
+
+        <h2 id="frontend">前端:状态拉 git,事件走 CP</h2>
+        <p>前端数据收敛成<strong>两个来源</strong>,<strong>不碰沙箱</strong>:</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>前端要的</th><th>来源</th><th>机制</th></tr></thead>
+          <tbody>
+            <tr><td>进程状态 / 文件 / 产物 / 保存点历史 / diff</td><td><strong>git</strong>(CP 托管 bare repo)</td><td>smart-HTTP 按 <code>ref</code> 读 tree/blob;<strong>只读已提交</strong></td></tr>
+            <tr><td>对话 / 事件(live + 回放)</td><td><strong>CP 事件流</strong></td><td>SSE <code>subscribe({from:seq})</code>(见 <a href="protocol.html">事件流协议</a>)</td></tr>
+            <tr><td>新保存点通知</td><td><strong>CP 事件流</strong>(一种事件)</td><td>收到 <code>checkpoint-committed{ref}</code> → 按新 ref 重拉 git</td></tr>
+            <tr><td>spawn / wake / hibernate / kill · input / 打断</td><td><strong>CP</strong> REST</td><td>不变</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok">
+          <span class="note-label">只展示一致快照</span>
+          <strong>尚未提交的态不给用户看</strong>。文件浏览器永远只显示程序 mark 过的一致快照,绝不出现写到一半的撕裂态——文件树停在上个保存点,等新 checkpoint 落地再整体跳一格。
+          <strong>活动看 live(事件流里有 <code>tool_use: 写文件 X</code>),产物看 checkpoint(git)。</strong> 故<strong>沙箱 fs 读穿透被移除</strong>(见 <a href="interaction.html#data-plane">DriverChannel</a>)。
+        </div>
+        <div class="note">
+          <span class="note-label">鉴权 + 单对端</span>
+          浏览器不能拿裸 repo 访问——「谁能看这个进程」的授权仍在 CP(<a href="api.html">authorize(user,pid,role)</a>)。
+          做法:<strong>CP 给 git smart-HTTP 加一道薄鉴权门</strong>,前端用<strong>同一个会话</strong>请求 <code>…/&lt;pid&gt;.git/</code>,同源、同 token。
+          于是<strong>前端唯一网络对端仍是 CP</strong>,只是对它说三种话:REST + SSE + git-http。CP 退出数据搬运,仍是<strong>策略权威</strong>。
+        </div>
+
+        <h2 id="driverchannel">DriverChannel 瘦身</h2>
+        <p>检查点传输(→ git push)与 fs 读穿透(→ 前端拉 git)都拿走后,<a href="interaction.html#data-plane">DriverChannel(B 平面)</a> 只剩两件实时的事:</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-driver"><span class="nt">事件上行</span><span class="nd">harness 产出 → driver 定序 → CP 盖全局 seq 落库 + 扇出前端</span></div>
+            <div class="node c-frontend"><span class="nt">input 下行</span><span class="nd">前端 → CP → DriverChannel → driver → 喂引擎</span></div>
+          </div>
+          <div class="dgm-cap">
+            <strong>耐久(检查点)= git、读文件 = git</strong>,都不再是 B 平面的职责。原 <code>FsServer</code> 读路径(<a href="interaction.html#data-plane">interaction.html</a>)随之移除。
+          </div>
+        </div>
+
+        <h2 id="rewind">rewind 与分支</h2>
+        <p>
+          检查点能把进程<strong>倒带</strong>到上一个 commit(<code>checkout</code>)。但别 <code>force-push</code> 覆盖历史——
+          <strong>倒带后往前跑就开一条分支</strong>,顺带把「从某保存点 fork 一个进程(分享 / 试错)」这个能力白送了。
+          倒带不了已逃出 repo 的外部副作用(典型 <code>git push</code> 到远端项目),处理仍见 <a href="state.html#external">外部副作用与游标</a>。
+        </p>
+
+        <h2 id="open">开放点</h2>
+        <ul>
+          <li><strong>artifacts/ 大二进制</strong>:权威产物但可能大。进同一 git(靠 LFS),还是单列 blob 路径?倾向 LFS 起步,实测再调。</li>
+          <li><strong>remote 托管位置</strong>:默认 <strong>CP 托管 bare repo</strong>(保住单对端 + 单鉴权);是否允许指向外部 host(Gitea/Forgejo)做卸载?那会让前端多一个对端,暂不开。</li>
+          <li><strong>shallow / 历史保留</strong>:沙箱 <code>--depth=1</code>;CP 侧全历史保留(去重后很便宜);是否需要 GC / 老 commit 归档,留待规模上来再定。</li>
+          <li><strong>checkpoint-committed 事件</strong>:作为 <a href="protocol.html">协议</a> 的一种事件类型落地,让前端据此重拉 git。</li>
+        </ul>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

@@ -45,6 +45,7 @@
       group: '状态与持久化',
       items: [
         { page: 'state',        label: '进程目录与状态' },
+        { page: 'proc-storage', label: '进程状态存储 (Git)' },
         { page: 'data-model',   label: '数据模型' },
       ],
     },
@@ -52,6 +53,7 @@
       group: '流程',
       items: [
         { page: 'flows',        label: '生命周期流程' },
+        { page: 'proc-wake',    label: 'wake 唤醒流程' },
       ],
     },
     {
