@@ -13,14 +13,15 @@ export type ProcessState = 'spawned' | 'running' | 'hibernating';
 
 export interface ProcessRecord {
   pid: number;
-  name: string | null;
+  name: string;
   userId: string;
   programId: string;
   programVersion: string | null;
   state: ProcessState;
   provider: string | null;
   sandboxId: string | null;
-  checkpointRef: string | null;
+  /** 进程 git 仓库的 clone URL（spawn 建库时由后端写入）。 */
+  repoUrl: string | null;
   createdAt: string;
   lastActiveAt: string | null;
 }
@@ -50,11 +51,15 @@ export async function loadProcesses(): Promise<void> {
 
 const replace = (rec: ProcessRecord): void => { setProcs((list) => list.map((p) => (p.pid === rec.pid ? rec : p))); };
 
-/** spawn：建进程（state=spawned，不起沙箱）。返回新 PCB；失败返回 undefined。 */
-export async function spawnProcess(programId: string, name?: string): Promise<ProcessRecord | undefined> {
-  const body = name && name.trim() ? { programId, name: name.trim() } : { programId };
+/** spawn：建进程（state=spawned，不起沙箱；后端建私有 git 仓库并回填 repoUrl）。name 必填。失败返回 undefined。 */
+export async function spawnProcess(programId: string, name: string): Promise<ProcessRecord | undefined> {
+  const trimmed = name.trim();
+  if (trimmed === '') {
+    console.warn('[proc] spawn 取消：name 必填');
+    return undefined;
+  }
   try {
-    const rec = await api.post<ProcessRecord>('/proc', body);
+    const rec = await api.post<ProcessRecord>('/proc', { programId, name: trimmed });
     setProcs((list) => [rec, ...list]);
     return rec;
   } catch (e) {

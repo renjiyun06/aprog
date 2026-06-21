@@ -133,7 +133,7 @@
             <tr><td>query</td><td><code>limit</code></td><td>number</td><td>✗</td><td>每页条数</td></tr>
             <tr><td><code>GET /proc/:pid</code></td><td>path</td><td><code>pid</code></td><td>number</td><td>✓</td><td>进程号</td></tr>
             <tr><td rowspan="5"><code>POST /proc</code><br><span style="color:var(--fg-subtle)">spawn</span></td><td>body</td><td><code>program</code></td><td>string</td><td>✓</td><td>要运行的程序 id（取自 <code>GET /programs</code>）。<strong>版本不可选</strong>：spawn 时取最新并钉死（见 <a href="#q-version">Q10</a>）</td></tr>
-            <tr><td>body</td><td><code>name</code></td><td>string</td><td>✗</td><td>进程显示名（<a href="window.html#proclist">表单的「名称」</a>）</td></tr>
+            <tr><td>body</td><td><code>name</code></td><td>string</td><td>✓</td><td><strong>必填</strong>进程名（<a href="window.html#proclist">表单的「名称」</a>，不可空）</td></tr>
             <tr><td>body</td><td><code>input</code></td><td>string</td><td>✗</td><td>初始输入（随进程 git 仓库落库，首次 wake 时 git clone 取回）</td></tr>
             <tr><td>body</td><td><code>resources</code></td><td>object</td><td>✗</td><td><code>{cpu,memory,disk}</code>；P0 暂不暴露（<a href="window.html#proclist">后续再加</a>）</td></tr>
             <tr><td>header</td><td><code>Idempotency-Key</code></td><td>string</td><td>✗</td><td>去重重复提交（见 <a href="#q-idem">Q8</a>）</td></tr>
@@ -249,7 +249,7 @@
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>适用</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td><code>ref</code></td><td>string</td><td>两者</td><td>本次读所据的检查点 commit SHA（<code>checkpoint_ref</code>）；读的恒是<strong>已提交态</strong>（见 <a href="#q-fs">Q6</a>）</td></tr>
+            <tr><td><code>ref</code></td><td>string</td><td>两者</td><td>本次读所据的 commit SHA（缺省 = 仓库 HEAD / 最新检查点）；读的恒是<strong>已提交态</strong>（见 <a href="#q-fs">Q6</a>）</td></tr>
             <tr><td><code>entries</code></td><td>array</td><td><code>op=list</code></td><td>目录项列表</td></tr>
             <tr><td><code>entries[].name</code></td><td>string</td><td><code>op=list</code></td><td>名称</td></tr>
             <tr><td><code>entries[].kind</code></td><td><code>file</code>｜<code>dir</code></td><td><code>op=list</code></td><td>类型</td></tr>

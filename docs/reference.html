@@ -63,12 +63,11 @@
         <p>Control Plane 持久化的实体（字段详见 <a href="data-model.html">数据模型</a>）：</p>
         <pre><code>users         (id, username, password_hash, created_at, last_login_at)
 auth_sessions (id/token, user_id, created_at, last_used_at, expires_at, revoked_at)
-processes     (pid, program, user_id, state, phase, checkpoint_ref,
-               sandbox_id, sandbox_started_at, created_at,
-               last_attached_at, last_active_at)</code></pre>
+processes     (pid, name, user_id, program_id, program_version, state,
+               provider, sandbox_id, repo_url, created_at, last_active_at)</code></pre>
         <p>
           <code>state</code> 仅 <code>spawned</code> / <code>running</code> / <code>hibernating</code>（<strong>无终止态</strong>：跑完 / kill 都回到 <code>hibernating</code>，状态永不删）。
-          <code>checkpoint_ref</code> 是进程 git 仓库 HEAD 的 commit SHA；进程状态以 git 仓库存储（<code>git push</code> / <code>clone</code> 到 CP 托管 bare repo），无文件系统快照路径。详见 <a href="data-model.html#process">数据模型 · process</a> 与 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
+          进程状态以 git 仓库存储（<code>git push</code> / <code>clone</code> 到 CP 托管 bare repo，仓库名 <code>aprog-proc-&lt;pid&gt;</code>，地址存 <code>repo_url</code>）；<strong>最新检查点 = 仓库 HEAD，不在 PCB 存 commit 指针</strong>，无文件系统快照路径。详见 <a href="data-model.html#process">数据模型 · process</a> 与 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
           Program 不入库——由文件系统扫描得到。
         </p>
 

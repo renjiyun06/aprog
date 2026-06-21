@@ -10,34 +10,37 @@
 
 import type { Database } from 'bun:sqlite';
 import type { SandboxGateway } from './sandbox-gateway.ts';
+import type { RepoGateway } from './repo-gateway.ts';
 
 export type ProcessState = 'spawned' | 'running' | 'hibernating';
 
-/** 进程控制块（PCB）。权威内容态在进程目录；这里只放需要查询/编排的关系字段。 */
+/** 进程控制块（PCB）。权威内容态在进程目录；这里只放需要查询/编排的关系字段。
+ *  无 commit 指针——「最新检查点」= 仓库 HEAD（可推导，见 docs/proc-storage.html#provisioning）。 */
 export interface ProcessRecord {
   pid: number;
-  name: string | null;
+  name: string;
   userId: string;
   programId: string;
   programVersion: string | null;
   state: ProcessState;
   provider: string | null;
   sandboxId: string | null;
-  checkpointRef: string | null;
+  /** 进程 git 仓库的实际 clone URL（spawn 建库时写入；建库前的瞬时窗口内可能为 null）。 */
+  repoUrl: string | null;
   createdAt: string;
   lastActiveAt: string | null;
 }
 
 interface ProcessRow {
   pid: number;
-  name: string | null;
+  name: string;
   user_id: string;
   program_id: string;
   program_version: string | null;
   state: ProcessState;
   provider: string | null;
   sandbox_id: string | null;
-  checkpoint_ref: string | null;
+  repo_url: string | null;
   created_at: string;
   last_active_at: string | null;
 }
@@ -51,7 +54,7 @@ const view = (r: ProcessRow): ProcessRecord => ({
   state: r.state,
   provider: r.provider,
   sandboxId: r.sandbox_id,
-  checkpointRef: r.checkpoint_ref,
+  repoUrl: r.repo_url,
   createdAt: r.created_at,
   lastActiveAt: r.last_active_at,
 });
@@ -62,6 +65,7 @@ export class ProcessManager {
   constructor(
     private readonly db: Database,
     private readonly sandbox: SandboxGateway,
+    private readonly repos: RepoGateway,
   ) {}
 
   /** ps：列出某用户的进程（新建在前）。 */
@@ -78,21 +82,30 @@ export class ProcessManager {
     return r === null ? undefined : view(r);
   }
 
-  /** spawn：建 PCB 行，state=spawned，不起沙箱。pid 由 SQLite 自增（类比 OS pid）。 */
-  spawn(p: {
+  /** spawn：建 PCB 行（state=spawned，不起沙箱）+ 建私有 git 仓库（aprog-proc-<pid>）→ 回填 repo_url。
+   *  pid 由 SQLite 自增（类比 OS pid）。建库失败则回滚 PCB 行（不留半成品）。沙箱仍 mock。 */
+  async spawn(p: {
     userId: string;
     programId: string;
     programVersion: string | null;
-    name?: string | null;
-  }): ProcessRecord {
+    name: string;
+  }): Promise<ProcessRecord> {
     const res = this.db
       .query(
         `INSERT INTO processes
-           (name, user_id, program_id, program_version, state, provider, sandbox_id, checkpoint_ref, created_at, last_active_at)
+           (name, user_id, program_id, program_version, state, provider, sandbox_id, repo_url, created_at, last_active_at)
          VALUES (?, ?, ?, ?, 'spawned', NULL, NULL, NULL, ?, NULL)`,
       )
-      .run(p.name ?? null, p.userId, p.programId, p.programVersion, now());
-    return this.get(Number(res.lastInsertRowid))!;
+      .run(p.name, p.userId, p.programId, p.programVersion, now());
+    const pid = Number(res.lastInsertRowid);
+    try {
+      const { repoUrl } = await this.repos.create({ pid, programId: p.programId });
+      this.db.query('UPDATE processes SET repo_url = ? WHERE pid = ?').run(repoUrl, pid);
+    } catch (e) {
+      this.db.query('DELETE FROM processes WHERE pid = ?').run(pid); // 建库失败：回滚 PCB 行
+      throw e;
+    }
+    return this.get(pid)!;
   }
 
   /** wake / attach 首跑：起沙箱 → running。已 running 则幂等；进程不存在返回 undefined。 */
@@ -126,12 +139,10 @@ export class ProcessManager {
     const cur = this.get(pid);
     if (cur === undefined) return undefined;
     if (cur.state !== 'running' || cur.sandboxId === null) return cur; // 已无沙箱：spawned/hibernating，幂等
-    const { checkpointRef } = await this.sandbox.destroy({ pid, sandboxId: cur.sandboxId });
+    await this.sandbox.destroy({ pid, sandboxId: cur.sandboxId }); // 检查点改走 git（沙箱侧，mock）；PCB 不存 commit 指针
     this.db
-      .query(
-        "UPDATE processes SET state = 'hibernating', sandbox_id = NULL, checkpoint_ref = ?, last_active_at = ? WHERE pid = ?",
-      )
-      .run(checkpointRef, now(), pid);
+      .query("UPDATE processes SET state = 'hibernating', sandbox_id = NULL, last_active_at = ? WHERE pid = ?")
+      .run(now(), pid);
     return this.get(pid);
   }
 }

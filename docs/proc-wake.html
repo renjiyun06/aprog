@@ -48,7 +48,7 @@
         </table></div>
 
         <h2 id="two-cases">一个接口,两种唤醒</h2>
-        <p>同一个 <code>wake</code> 覆盖两种入态,内部靠<strong>有没有 <code>checkpoint_ref</code></strong> 分叉——对前端透明,对后端是两条灌料路径:</p>
+        <p>同一个 <code>wake</code> 覆盖两种入态,内部靠<strong>仓库有没有 commit</strong>(即 <code>state</code> 是 spawned 还是 hibernating)分叉——对前端透明,对后端是两条路径:</p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
             <div class="node c-muted" style="flex:1">
@@ -57,11 +57,11 @@
             </div>
             <div class="node c-muted" style="flex:1">
               <span class="nt">hibernating → running <span class="tag"><span class="pill hib">恢复</span></span></span>
-              <span class="nd"><strong>跑过、留了检查点</strong>。新沙箱 + <code>git clone</code>/<code>checkout &lt;checkpoint_ref&gt;</code> 取回工作记忆,harness 按 <a href="state.html#resume">resume</a> 续跑。进程目录、产物都还在。</span>
+              <span class="nd"><strong>跑过、有 commit</strong>。新沙箱 + <code>git clone</code> 取回工作记忆(默认 HEAD = 最新检查点),harness 按 <a href="state.html#resume">resume</a> 续跑。进程目录、产物都还在。</span>
             </div>
           </div>
           <div class="dgm-cap">
-            两条路径只在<strong>第 ③ 步「取回什么」</strong>不同(空 / 初始 input vs 该 commit);起沙箱、<code>git clone</code>/<code>checkout</code>、拉 harness、建通道、回写 PCB 全相同。
+            两条路径只在<strong>第 ③ 步「取回什么」</strong>不同(空 / 初始 input vs HEAD 最新检查点);起沙箱、<code>git clone</code>、拉 harness、建通道、回写 PCB 全相同。
             <code>running</code> 入态则<strong>幂等</strong>:已有沙箱,直接回当前 PCB,不重起。
           </div>
         </div>
@@ -91,8 +91,8 @@
           <div class="node c-cp">
             <span class="nt">③ <code>git clone</code> + <code>checkout</code> 取回状态 <span class="tag"><span class="pill">待</span></span></span>
             <ul class="acts">
-              <li><code>git clone --depth=1</code> CP 托管的进程 bare 仓库 → <code>checkout &lt;checkpoint_ref&gt;</code>,工作树落在沙箱<strong>临时盘</strong>(<strong>不挂持久卷</strong>);得到进程目录 <code>~/.aprog/&lt;pid&gt;/</code>(<a href="state.html">权威内容态</a>:meta.yml / input.md / execution-state/)</li>
-              <li>hibernating 取回该 commit;spawned 无 commit,工作树为空 / 只放初始 input。耐久真相在 CP bare 仓库,不随沙箱生灭(见 <a href="proc-storage.html">Git 模型</a>)</li>
+              <li><code>git clone --depth=1</code> CP 托管的进程 bare 仓库(<strong>默认检出 HEAD = 最新检查点</strong>),工作树落在沙箱<strong>临时盘</strong>(<strong>不挂持久卷</strong>);得到进程目录 <code>~/.aprog/&lt;pid&gt;/</code>(<a href="state.html">权威内容态</a>:meta.yml / input.md / execution-state/)</li>
+              <li>hibernating 取回 HEAD;spawned 仓库空,工作树为空 / 只放初始 input。耐久真相在 CP bare 仓库,不随沙箱生灭(见 <a href="proc-storage.html">Git 模型</a>)</li>
             </ul>
           </div>
           <div class="ar down"><span class="albl">B 平面 · driver 拨入 ▼</span><span class="gly">↓</span></div>
@@ -109,7 +109,7 @@
             <span class="nt">⑤ 回写 PCB + 返回 <span class="tag"><span class="pill run">现</span></span></span>
             <ul class="acts">
               <li><code>UPDATE</code>:<code>state='running'</code>、回填 <code>sandbox_id</code> + <code>provider</code>、刷 <code>last_active_at</code></li>
-              <li><code>checkpoint_ref</code> 保留(恢复后旧 commit 仍是历史真相,下次休眠 <code>push</code> 新 commit 后更新指向)</li>
+              <li>无需回写 commit 指针——仓库 HEAD 自己就是最新检查点,<code>wake</code> 不改它</li>
               <li>序列化最新 PCB 返回前端 → 列表那行变 <span class="pill run">运行</span></li>
             </ul>
           </div>
@@ -127,7 +127,6 @@
             <tr><td><code>state</code></td><td><code>spawned</code> / <code>hibernating</code></td><td><code>running</code></td></tr>
             <tr><td><code>sandbox_id</code></td><td><code>null</code></td><td>新沙箱 id</td></tr>
             <tr><td><code>provider</code></td><td><code>null</code>(首跑)/ 沿用(恢复)</td><td>本次厂商</td></tr>
-            <tr><td><code>checkpoint_ref</code></td><td><code>null</code>(首跑)/ 上次 commit SHA(恢复)</td><td><strong>不变</strong>(恢复时按它 <code>checkout</code>;旧 commit 留作历史,下次休眠 <code>push</code> 新 commit 后再更新)</td></tr>
             <tr><td><code>last_active_at</code></td><td>上次值 / null</td><td>now</td></tr>
           </tbody>
         </table></div>
@@ -141,13 +140,13 @@ async wake(pid) {
   if (cur.state === 'running') return cur           // ① 幂等
   const { sandboxId, provider } =
     await this.sandbox.create({ pid, programId, programVersion })  // ② mock:造假 id
-  // ③ git clone --depth=1 + checkout <checkpoint_ref> / ④ 拉 harness:真实实现补在这里(mock 跳过)
+  // ③ git clone --depth=1（默认 HEAD）/ ④ 拉 harness:真实实现补在这里(mock 跳过)
   UPDATE processes SET state='running', sandbox_id=?, provider=?, last_active_at=?  // ⑤
   return this.get(pid)
 }</code></pre>
         <div class="note">
           <span class="note-label">接入真实沙箱时</span>
-          只需把 <code>MockSandboxGateway</code> 换成真实 provider 实现(<code>create</code> 真起容器),并在 <code>create</code> 之后补第 ③④ 步(<code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 到临时盘 / 首跑置初始 input、拉 harness、建 DriverChannel)。
+          只需把 <code>MockSandboxGateway</code> 换成真实 provider 实现(<code>create</code> 真起容器),并在 <code>create</code> 之后补第 ③④ 步(<code>git clone --depth=1</code> 默认 HEAD 到临时盘 / 首跑置初始 input、拉 harness、建 DriverChannel)。
           <code>wake()</code> 的编排骨架与 <code>routes/proc.ts</code> 不动——这正是 <a href="data-model.html#process"><code>SandboxGateway</code> 收口</a>的目的。
         </div>
 

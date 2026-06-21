@@ -15,6 +15,7 @@ import { ProgramCatalog } from '../catalog/programs.ts';
 import { InstallStore } from '../catalog/installs.ts';
 import { ProcessManager } from '../process/manager.ts';
 import { MockSandboxGateway } from '../process/sandbox-gateway.ts';
+import { GitHubRepoGateway, MockRepoGateway } from '../process/repo-gateway.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
 import * as installations from './routes/installations.ts';
@@ -35,8 +36,13 @@ export function startApi(config: Config): void {
   const catalog = new ProgramCatalog(db); // 启动时把程序目录 upsert 进表
   const installs = new InstallStore(db);
   // 进程编排：PCB 走 DB；沙箱动作当前用 mock（未对接真实 provider）。
-  const procs = new ProcessManager(db, new MockSandboxGateway());
+  // 进程仓库：配了 GITHUB_TOKEN 就真在 GitHub 建私有库，否则 mock（造假 clone URL）。
+  const repos = config.github ? new GitHubRepoGateway(config.github) : new MockRepoGateway();
+  const procs = new ProcessManager(db, new MockSandboxGateway(), repos);
   console.log('[control-plane] 沙箱：mock（未对接真实 provider）');
+  console.log(
+    `[control-plane] 进程仓库：${config.github ? `GitHub（owner=${config.github.owner}）` : 'mock（未配 GITHUB_TOKEN）'}`,
+  );
   void seedAdmin(users);
 
   const deps: Deps = {

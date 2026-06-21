@@ -92,7 +92,7 @@
         <h2 id="checkpoint">检查点：耐久性归平台，一致性归程序</h2>
         <div class="note">
           <span class="note-label">存储 / 传输的完整模型</span>
-          下文谈的是检查点的<strong>语义</strong>（何时算一致、谁负责什么）。它<strong>怎么存、怎么传</strong>由 git 落地——<strong>一个检查点 = 一次 commit，<code>checkpoint_ref</code> = commit SHA</strong>，耐久靠 <code>git push</code>、唤醒靠 <code>git clone</code>。完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
+          下文谈的是检查点的<strong>语义</strong>（何时算一致、谁负责什么）。它<strong>怎么存、怎么传</strong>由 git 落地——<strong>一个检查点 = 一次 commit；最新检查点 = 仓库 HEAD（不在 PCB 存指针）</strong>，耐久靠 <code>git push</code>、唤醒靠 <code>git clone</code>。完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
         </div>
         <p>
           沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠<strong>检查点</strong>——把进程目录的 state 子集
@@ -196,7 +196,7 @@
 
         <h3 id="restore">恢复 = 纯 resume，没有「回退语义」</h3>
         <p>
-          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 灌回检查点）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
+          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱 <code>git clone --depth=1</code> 灌回检查点，默认检出 HEAD）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
         </p>
         <ul>
           <li>底层 harness 启动后<strong>就是普通 resume</strong>，它不知道、也不关心「丢了一段活」。</li>

@@ -3,6 +3,7 @@
 // 这里只 import 再组合进总 Config。
 
 import type { DaytonaConfig } from '@aprog/sandbox';
+import type { GitHubRepoConfig } from './process/repo-gateway.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +24,8 @@ export interface Config {
     provider: 'daytona';
     daytona: DaytonaConfig;
   };
+  /** 进程仓库提供方（GitHub）。未配 GITHUB_TOKEN 则为 undefined（→ MockRepoGateway，造假 URL）。 */
+  github?: GitHubRepoConfig;
 }
 
 export interface SmtpConfig {
@@ -43,6 +46,7 @@ export function loadConfig(): Config {
     controlPlaneUrl: process.env.APROG_CONTROL_PLANE_URL ?? 'https://localhost:8099',
     webUrl: process.env.APROG_WEB_URL ?? 'https://localhost:5174',
     smtp: loadSmtp(),
+    github: loadGithub(),
     sandbox: {
       provider: 'daytona',
       daytona: {
@@ -55,6 +59,18 @@ export function loadConfig(): Config {
         autoStopIntervalMin: Number(process.env.APROG_DAYTONA_AUTOSTOP_MIN ?? 30),
       },
     },
+  };
+}
+
+/** 从环境变量读 GitHub 仓库配置；未设 GITHUB_TOKEN 则返回 undefined（回退 MockRepoGateway）。
+ *  GITHUB_OWNER：org 名或用户名；GITHUB_OWNER_IS_ORG：是否组织（默认 true）。 */
+function loadGithub(): GitHubRepoConfig | undefined {
+  const token = process.env.GITHUB_TOKEN;
+  if (token === undefined || token === '') return undefined;
+  return {
+    token,
+    owner: process.env.GITHUB_OWNER ?? '',
+    ownerIsOrg: (process.env.GITHUB_OWNER_IS_ORG ?? 'true') === 'true',
   };
 }
 

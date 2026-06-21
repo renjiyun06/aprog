@@ -74,17 +74,21 @@ export function applyMigrations(db: Database): void {
 
   // 进程控制块（PCB）。一个 program 的一次运行，类比 OS 进程（pid 自增整数）。模型见 docs/data-model.html#process。
   // state 只由「有没有关联沙箱」驱动：spawned / running / hibernating，无终止态、状态永不删除（无 deleted 列）。
+  // name 必填（spawn 校验）。repo_url = 进程 git 仓库实际 clone URL（spawn 建库时写入；见 docs/proc-storage.html#provisioning）。
+  // 不存 commit 指针：「最新检查点」= 仓库 HEAD，可推导故不入表（故无 checkpoint_ref 列）。
   // phase/status 是程序内部 FSM 态，住进程目录 meta.yml，不进此表。沙箱动作当前为 mock。
+  // 开发期：schema 直接是目标态（CREATE TABLE IF NOT EXISTS），不写迁移代码——破坏性改动时删库重建即可（无生产数据）。
+  // 等首次有需保留的数据 / 多环境时，再引入版本化迁移（db/migrations + schema_version 表）。
   db.run(`CREATE TABLE IF NOT EXISTS processes (
     pid             INTEGER PRIMARY KEY,
-    name            TEXT,
+    name            TEXT NOT NULL,
     user_id         TEXT NOT NULL,
     program_id      TEXT NOT NULL,
     program_version TEXT,
     state           TEXT NOT NULL,
     provider        TEXT,
     sandbox_id      TEXT,
-    checkpoint_ref  TEXT,
+    repo_url        TEXT,
     created_at      TEXT NOT NULL,
     last_active_at  TEXT
   )`);

@@ -213,7 +213,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <span class="note-label">后端已按此模型落地（沙箱动作 mock）</span>
           第三层 <strong>Process</strong> 的数据模型（PCB 表 + 状态机 + 操作副作用 + 事实源边界）已实现：
           PCB 进 <code>processes</code> 表、生命周期 spawn / ps / wake / hibernate / kill 走
-          <code>control-plane/src/process</code>。<strong>所有「碰沙箱」的动作（起停沙箱、检查点）经 <code>SandboxGateway</code> 收口，当前用 <code>MockSandboxGateway</code> 顶</strong>——只造假 <code>sandbox_id</code> / <code>checkpoint_ref</code>，不起真实算力。
+          <code>control-plane/src/process</code>。<strong>所有「碰沙箱」的动作（起停沙箱、检查点）经 <code>SandboxGateway</code> 收口，当前用 <code>MockSandboxGateway</code> 顶</strong>——只造假 <code>sandbox_id</code>，不起真实算力、不真 <code>push</code>。
           运行时机制（沙箱编排、检查点存储 / <code>git push</code>、唤醒）的深入细节见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>、<a href="state.html">进程目录与状态</a>、<a href="sandbox.html">沙箱与镜像</a>、<a href="flows.html">生命周期流程</a>。
         </div>
         <p>
@@ -228,14 +228,14 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
             <tr><td>pid</td><td>INTEGER PK</td><td>进程 id，自增整数（类比 OS pid），如 <code>1042</code></td></tr>
-            <tr><td>name</td><td>TEXT?</td><td>用户可起的进程名（UI 列表显示「圆点 + 名字」）；留空回退 program 名</td></tr>
+            <tr><td>name</td><td>TEXT</td><td><strong>必填</strong>的进程名（spawn 时校验，不可空）；UI 列表显示「圆点 + 名字」</td></tr>
             <tr><td>user_id</td><td>TEXT</td><td>owner，<code>users.id</code></td></tr>
             <tr><td>program_id</td><td>TEXT</td><td><strong>钉死</strong>的程序 slug（= skill id）</td></tr>
             <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。当前映射到扁平 <code>programs.version</code>；<a href="#skillversion">SkillVersion</a> 落地后升级为 <code>(skill_name, version)</code> + 依赖闭包锁</td></tr>
             <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>running</code> / <code>hibernating</code>（见状态机）</td></tr>
             <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
             <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / hibernating）时为 null</td></tr>
-            <tr><td>checkpoint_ref</td><td>TEXT?</td><td>最新 commit 的 SHA（进程 git 仓库的 HEAD）；唤醒时 <code>git clone</code>/<code>checkout</code> 取回（见 <a href="proc-storage.html">Git 模型</a> / <a href="state.html#checkpoint">检查点</a>）。spawned 尚无 commit</td></tr>
+            <tr><td>repo_url</td><td>TEXT</td><td>进程 git 仓库的<strong>实际 clone URL</strong>（不含凭证），如 <code>https://&lt;cp&gt;/aprog-proc-&lt;pid&gt;.git</code>；spawn 建库时写入（见 <a href="proc-storage.html#provisioning">寻址</a>）</td></tr>
             <tr><td>created_at</td><td>TEXT</td><td>spawn 时间（ISO）</td></tr>
             <tr><td>last_active_at</td><td>TEXT?</td><td>末次活跃（驱动 UI uptime/最近、休眠回收策略）</td></tr>
           </tbody>
@@ -245,13 +245,19 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <strong>无终止态、不设 <code>deleted</code> 列</strong>：进程跑完 / 被杀也只是回到 <code>hibernating</code>（释放沙箱、留检查点）——<strong>状态永不删除</strong>，进程目录与产物始终保留、随时可唤醒。
           <code>created_at</code> / <code>last_active_at</code> 是<strong>功能字段</strong>（uptime、回收策略），非审计样板，故保留；不加 <code>updated_at</code>。
         </div>
+        <div class="note">
+          <span class="note-label">仓库：存地址、不存 commit 指针</span>
+          进程 = 一个 git 仓库，名为 <code>aprog-proc-&lt;pid&gt;</code>（pid 仍是数字内部 PK；裸数字虽合法但不全局唯一、难读，故加前缀）。
+          仓库的<strong>实际地址存 <code>repo_url</code></strong>——名带前缀 / 命名空间、外部 host 的 URL 由对方给定，真实地址不再是 pid 的纯函数，故 <strong>store, not derive</strong>。
+          但<strong>不存 commit 指针</strong>：「最新检查点是哪个 commit」= 仓库 HEAD，<code>git ls-remote</code> 可查、<strong>可推导故不入 PCB</strong>；spawned/hibernating 的区分由 <code>state</code> 列承载，默认 <code>wake</code> = <code>git clone</code> 自动检出 HEAD。详见 <a href="proc-storage.html#provisioning">仓库创建与寻址</a>。
+        </div>
 
         <p><strong>② 状态机 —— 由「有没有关联沙箱」驱动</strong></p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
             <div class="node c-muted" style="flex:1">
               <span class="nt">spawned <span class="tag"><span class="pill hib">待起</span></span></span>
-              <span class="nd">刚 <code>spawn</code>，<strong>从未起过沙箱</strong>。无 <code>sandbox_id</code>、无 <code>checkpoint_ref</code>，只 eager 存了初始 input。<strong>不写骨架、不烧算力。</strong></span>
+              <span class="nd">刚 <code>spawn</code>，<strong>从未起过沙箱</strong>。无 <code>sandbox_id</code>，仓库还空（无 commit），只 eager 存了初始 input。<strong>不写骨架、不烧算力。</strong></span>
             </div>
             <div class="node c-sandbox" style="flex:1">
               <span class="nt">running <span class="tag"><span class="pill run">运行</span></span></span>
@@ -259,7 +265,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             </div>
             <div class="node c-muted" style="flex:1">
               <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
-              <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>、留 <code>checkpoint_ref</code>。<code>wake</code> 即在新沙箱 <code>git clone</code>/<code>checkout</code> 取回该 commit 续跑。</span>
+              <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>，仓库 HEAD 即最新检查点。<code>wake</code> 即在新沙箱 <code>git clone</code> 取回（默认 HEAD）续跑。</span>
             </div>
           </div>
           <div class="dgm-cap">
@@ -272,10 +278,10 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
         <div class="tbl-wrap"><table>
           <thead><tr><th>操作</th><th>前置 state</th><th>后置 state</th><th>对 PCB / 沙箱的副作用</th></tr></thead>
           <tbody>
-            <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 program@version、eager 存初始 input；<code>sandbox_id=null</code>，<strong>不起沙箱</strong></td></tr>
+            <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 program@version、eager 存初始 input；<strong>建空仓库 <code>aprog-proc-&lt;pid&gt;</code> 并写 <code>repo_url</code></strong>（见 <a href="proc-storage.html#provisioning">寻址</a>）；<code>sandbox_id=null</code>，<strong>不起沙箱</strong></td></tr>
             <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>running</code></td><td>provider.create 起新沙箱 → 回填 <code>sandbox_id</code> + <code>provider</code>；<code>git clone --depth=1</code> + <code>checkout</code>（hibernating 取回该 commit；spawned 为空 / 初始 input）；拉起 harness</td></tr>
             <tr><td><code>detach</code></td><td>running</td><td><code>running</code>（不变）</td><td><strong>仅前端退订</strong>；沙箱与 harness 照常跑。属运行时 UI 态，<strong>不落库</strong></td></tr>
-            <tr><td><code>hibernate</code></td><td>running</td><td><code>hibernating</code></td><td>落盘末次检查点 → provider.destroy；<code>sandbox_id=null</code>，更新 <code>checkpoint_ref</code></td></tr>
+            <tr><td><code>hibernate</code></td><td>running</td><td><code>hibernating</code></td><td>末次 commit + <code>git push</code> → provider.destroy；<code>sandbox_id=null</code>（仓库 HEAD 即最新检查点）</td></tr>
             <tr><td>完成 / <code>kill</code></td><td>running</td><td><code>hibernating</code></td><td>同 hibernate（尽力末次检查点 → provider.destroy、<code>sandbox_id=null</code>、记 <code>last_active_at</code>）；只是触发方不同（程序自身完成 / 用户强制），<strong>不产生新状态</strong></td></tr>
           </tbody>
         </table></div>
@@ -284,13 +290,13 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
         <div class="tbl-wrap"><table>
           <thead><tr><th>东西</th><th>放哪</th><th>权威性</th></tr></thead>
           <tbody>
-            <tr><td>PCB（pid / owner / 钉死版本 / state / sandbox_id / checkpoint_ref…）</td><td>DB <code>processes</code></td><td>关系元数据权威；<code>state</code> 为控制平面驱动的生命周期态</td></tr>
+            <tr><td>PCB（pid / owner / 钉死版本 / state / sandbox_id / repo_url…）</td><td>DB <code>processes</code></td><td>关系元数据权威；<code>state</code> 为控制平面驱动的生命周期态</td></tr>
             <tr><td><code>meta.yml</code>（phase / input_cursor / status）</td><td>进程目录</td><td><strong>resume 权威</strong>；<code>phase</code>/<code>status</code> 是程序内部 FSM 态，<strong>不进 PCB</strong></td></tr>
             <tr><td><code>input.md</code>（append-only 输入流）</td><td>进程目录</td><td>权威意图流</td></tr>
             <tr><td><code>execution-state/</code>（state.yaml + by-ref blob）</td><td>进程目录</td><td>有 schema 的执行状态，权威</td></tr>
             <tr><td><code>artifacts/</code>（程序产物）</td><td>进程目录</td><td>权威</td></tr>
             <tr><td><code>session.aprog.jsonl</code>（会话逐字流）</td><td>进程目录</td><td><strong>不权威、不进快照</strong>——读时投影，仅展示/审计</td></tr>
-            <tr><td>检查点（commit；运行中持续 <code>git push</code>）</td><td>进程 git 仓库（bare，CP 托管 <code>/srv/aprog-repos/&lt;pid&gt;.git</code>）</td><td>跨厂商耐久真相；<code>checkpoint_ref</code> 指向 HEAD 的 commit SHA（见 <a href="proc-storage.html">Git 模型</a>）</td></tr>
+            <tr><td>检查点（commit；运行中持续 <code>git push</code>）</td><td>进程 git 仓库（bare，CP 托管 <code>/srv/aprog-repos/aprog-proc-&lt;pid&gt;.git</code>）</td><td>跨厂商耐久真相；最新检查点 = 仓库 HEAD（<strong>不在 PCB 存指针</strong>，见 <a href="proc-storage.html">Git 模型</a>）</td></tr>
             <tr><td>沙箱（临时算力，工作树）</td><td>厂商侧（沙箱临时盘）</td><td>易失，hibernate / kill 即销毁；wake 由 <code>git clone</code> 重建</td></tr>
           </tbody>
         </table></div>

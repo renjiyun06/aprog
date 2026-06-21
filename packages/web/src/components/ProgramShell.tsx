@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount, For, Show, type Component, type JSX } from 'solid-js';
+import { createSignal, createEffect, onCleanup, onMount, For, Show, type Component, type JSX } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import { highlightFile } from '../lib/highlight';
 import { auth } from '../stores/auth';
@@ -216,7 +216,7 @@ export interface ProgramShellProps {
 
   /* process lifecycle */
   onAttach?: (pid: number) => void;
-  onSpawn?: (name: string) => void;
+  onSpawn?: (name: string) => boolean | void | Promise<boolean | void>;
   /** hibernate a running process (drop its sandbox) */
   onHibernate?: (pid: number) => void;
   /** wake a hibernating process (re-associate a sandbox) */
@@ -386,6 +386,16 @@ const EventView: Component<{ e: SessionEvent }> = (props) => (
 export const ProgramShell: Component<ProgramShellProps> = (p) => {
   const [spawning, setSpawning] = createSignal(false);
   const [name, setName] = createSignal('');
+  // 创建进程要等后端（含真·GitHub 建库，约 1~2s）——整窗忙态 + 终端 braille spinner，避免"卡住"观感。
+  const [creating, setCreating] = createSignal(false);
+  const [createErr, setCreateErr] = createSignal('');
+  const [spin, setSpin] = createSignal(0);
+  const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  createEffect(() => {
+    if (!creating()) return;
+    const t = setInterval(() => setSpin((i) => (i + 1) % SPIN_FRAMES.length), 80);
+    onCleanup(() => clearInterval(t));
+  });
   const treeW = () => p.treeW ?? 256;
   const [sidebarW, setSidebarW] = createSignal(232);
 
@@ -568,15 +578,27 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
     onCleanup(() => clearInterval(t));
   });
 
-  const submit = () => {
+  const submit = async () => {
     const n = name().trim();
-    if (!n) return;
-    p.onSpawn?.(n);
-    setName('');
-    setSpawning(false);
+    if (!n || creating()) return;
+    setCreateErr('');
+    setCreating(true); // 整窗进入忙态；弹窗中心转 spinner
+    try {
+      const ok = await p.onSpawn?.(n);
+      if (ok === false) {
+        setCreateErr('创建失败，请重试'); // 原地报错，不静默关窗
+      } else {
+        setName('');
+        setSpawning(false);
+      }
+    } finally {
+      setCreating(false);
+    }
   };
   const cancel = () => {
+    if (creating()) return; // 建库进行中不允许关闭
     setName('');
+    setCreateErr('');
     setSpawning(false);
   };
 
@@ -780,29 +802,45 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
         </aside>
       </Show>
 
-      {/* ── spawn-process form (name only for now; cpu/mem later) ── */}
+      {/* ── spawn-process form / creating state — overlays whole window ── */}
       <Show when={spawning()}>
-        <div class="spawn-overlay" onClick={cancel}>
+        <div class={`spawn-overlay ${creating() ? 'busy' : ''}`} onClick={cancel}>
           <div class="spawn-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>新建进程</h3>
-            <p class="spawn-hint">为这次 {p.procTitle} 执行起个名字.</p>
-            <div class="spawn-field">
-              <label>名称</label>
-              <input
-                class="spawn-input"
-                ref={(el) => queueMicrotask(() => el.focus())}
-                value={name()}
-                onInput={(e) => setName(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submit();
-                  if (e.key === 'Escape') cancel();
-                }}
-              />
-            </div>
-            <div class="spawn-actions">
-              <button class="btn" onClick={cancel}>取消</button>
-              <button class="btn primary" onClick={submit} disabled={!name().trim()}>创建</button>
-            </div>
+            <Show
+              when={creating()}
+              fallback={
+                <>
+                  <h3>新建进程</h3>
+                  <p class="spawn-hint">为这次 {p.procTitle} 执行起个名字.</p>
+                  <Show when={createErr()}>
+                    <div class="spawn-err">⚠ {createErr()}</div>
+                  </Show>
+                  <div class="spawn-field">
+                    <label>名称</label>
+                    <input
+                      class="spawn-input"
+                      ref={(el) => queueMicrotask(() => el.focus())}
+                      value={name()}
+                      onInput={(e) => setName(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submit();
+                        if (e.key === 'Escape') cancel();
+                      }}
+                    />
+                  </div>
+                  <div class="spawn-actions">
+                    <button class="btn" onClick={cancel}>取消</button>
+                    <button class="btn primary" onClick={submit} disabled={!name().trim()}>创建</button>
+                  </div>
+                </>
+              }
+            >
+              <div class="spawn-creating">
+                <span class="spin">{SPIN_FRAMES[spin()]}</span>
+                <div class="msg">正在创建进程 <b>{name()}</b></div>
+                <div class="sub">请稍候…</div>
+              </div>
+            </Show>
           </div>
         </div>
       </Show>

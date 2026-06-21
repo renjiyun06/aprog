@@ -125,7 +125,7 @@
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
             <div class="node c-state" style="min-width:200px"><span class="nt">hibernate</span><span class="nd">确保末次 commit 已 <code>git push</code> 到 CP remote → <code>provider.destroy</code>。厂商成本归零。</span></div>
             <div class="ar"><span class="albl">检查点在 CP</span><span class="gly">→</span></div>
-            <div class="node c-sandbox" style="min-width:200px"><span class="nt">wake</span><span class="nd"><code>provider.create</code> → <code>git clone --depth=1</code> + <code>checkout &lt;ref&gt;</code> → harness <a href="state.html#resume">resume</a>。</span></div>
+            <div class="node c-sandbox" style="min-width:200px"><span class="nt">wake</span><span class="nd"><code>provider.create</code> → <code>git clone --depth=1</code>（默认 HEAD）→ harness <a href="state.html#resume">resume</a>。</span></div>
           </div>
           <div class="dgm-cap">
             耐久真相是 <strong>CP 托管的 bare git repo</strong>（运行中持续 <code>git push</code>），不依赖任何厂商热令牌。

@@ -501,6 +501,18 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .spawn-input::placeholder { color: var(--text-4); }
 .spawn-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .spawn-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* spawn in flight — subtle dim + terminal braille spinner（无整窗辉光） */
+.spawn-overlay.busy { background: rgba(0,0,0,0.55); }
+.spawn-creating { text-align: center; padding: 12px 6px 8px; }
+.spawn-creating .spin {
+  display: block; font-family: var(--font-mono); font-size: 32px; line-height: 1;
+  color: var(--accent); margin-bottom: 16px;
+}
+.spawn-creating .msg { font-size: 14px; color: var(--fg); margin-bottom: 8px; }
+.spawn-creating .msg b { color: var(--accent); font-weight: 600; }
+.spawn-creating .sub { font-size: 12px; color: var(--text-3); font-family: var(--font-mono); }
+.spawn-err { font-size: 12px; color: var(--danger); margin: -8px 0 14px; }
 .btn.primary { background: var(--accent); color: var(--accent-on); border-color: rgba(255,255,255,0.10); }
 .btn.primary:hover { background: var(--accent-2); }
 .btn.primary:disabled { opacity: 0.45; cursor: default; }

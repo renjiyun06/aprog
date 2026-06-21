@@ -68,7 +68,7 @@
             <ul class="acts">
               <li>driver 拨向 CP + <a href="interaction.html#trust">create-time 绑定</a> + 版本握手</li>
               <li>CP 经握手下发 skill 闭包 + per-process auth + git deploy 凭证；driver 持凭证 <code>git clone --depth=1</code> + <code>checkout</code> 铺进程目录（首跑则空 / 初始 input）。<strong>fs 与检查点不经 DriverChannel</strong></li>
-              <li>工作树由 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 拉回最新检查点（首跑则是空 / 初始 input，见 <a href="proc-storage.html#transport">耐久传输</a>）</li>
+              <li>工作树由 <code>git clone --depth=1</code> 拉回最新检查点（默认检出 HEAD；首跑则是空 / 初始 input，见 <a href="proc-storage.html#transport">耐久传输</a>）</li>
               <li>driver 拉起 harness；<strong>首次</strong>由 harness 按 state 技能写出骨架</li>
               <li>harness 产出 → driver 局部定序 → CP <a href="interaction.html#seq">盖全局 seq</a> 落库 → 扇出前端</li>
             </ul>
@@ -111,7 +111,7 @@
         <p>耐久真相是 CP 托管的 bare repo（已 <code>git push</code> 的检查点），destroy 后厂商成本归零。状态：<span class="pill hib">休眠</span>。引擎私有的 <code>session.jsonl</code> 随沙箱消失——无所谓，它不权威。</p>
 
         <h2 id="wake">wake · 重新关联沙箱</h2>
-        <p>用户在休眠进程点“唤醒”按钮。等同一次 attach：<code>provider.create</code> 起新沙箱、driver 拨入，工作树由 <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 拉回最新检查点（见 <a href="proc-storage.html#transport">耐久传输</a>）。</p>
+        <p>用户在休眠进程点“唤醒”按钮。等同一次 attach：<code>provider.create</code> 起新沙箱、driver 拨入，工作树由 <code>git clone --depth=1</code> 拉回最新检查点（默认检出 HEAD，见 <a href="proc-storage.html#transport">耐久传输</a>）。</p>
         <div class="note">
           <span class="note-label">冷启动靠状态</span>
           新沙箱里引擎是空上下文。它读进程目录的状态文件（<code>input_cursor</code> / <code>input.md</code> / <code>execution-state</code>）重建工作记忆，

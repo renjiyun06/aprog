@@ -68,9 +68,13 @@ export function makeProgram(programId: string, procTitle: string): Component<Pro
     const av = (): View => { const a = active(); return a ? viewOf(a.pid) : emptyView(); };
 
     /* 生命周期 → 后端（stores/processes）。 */
-    const onSpawn = async (name: string): Promise<void> => {
+    const onSpawn = async (name: string): Promise<boolean> => {
       const rec = await spawnProcess(programId, name);
-      if (rec) setActiveId(rec.pid);
+      if (rec) {
+        setActiveId(rec.pid);
+        return true;
+      }
+      return false;
     };
     const onHibernate = (pid: number): void => { void hibernateProcess(pid); };
     const onWake = (pid: number): void => { void wakeProcess(pid); };

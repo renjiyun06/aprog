@@ -210,7 +210,7 @@
               <tr><td>1</td><td>←</td><td><code>Request{op:hello, body:{driverVersion, protocol, bindCredential}}</code></td><td>持烘入镜像的静态凭证拨入 + <a href="sandbox.html#constraints">版本握手</a>。</td></tr>
               <tr><td>2</td><td>→</td><td><code>Reply{ok, result:{pid, mode, resendFromLocalSeq?}}</code></td><td>CP 据 <a href="#trust">create-time 绑定</a>认出这是哪个待命进程，钉死身份。<code>mode</code> ∈ <code>resume</code>/<code>restore</code>。版本不兼容 → <code>Reply{ok:false, error}</code>，拒连。</td></tr>
               <tr><td>3a</td><td>←</td><td><code>Event</code> 重放（仅 <code>mode:resume</code>）</td><td><strong>同一 driver 还活着</strong>的网络抖动重连：driver 从 <code>resendFromLocalSeq</code> 重放自己缓冲区里的事件，CP 据已存 seq 去重。</td></tr>
-              <tr><td>3b</td><td>—</td><td>driver <code>git clone</code> + <code>checkout</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：driver 持每进程 deploy 凭证 <code>git clone --depth=1</code> CP 托管的 bare repo + <code>checkout &lt;checkpoint_ref&gt;</code> 把进程目录铺好（取代旧的 bundle 灌回）。per-process auth 等敏感种子仍随握手从 CP 下发。详见 <a href="proc-storage.html#transport">Git 模型 · 耐久传输</a>。</td></tr>
+              <tr><td>3b</td><td>—</td><td>driver <code>git clone</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：driver 持每进程 deploy 凭证 <code>git clone --depth=1</code> CP 托管的 bare repo（默认检出 HEAD = 最新检查点）把进程目录铺好（取代旧的 bundle 灌回）。per-process auth 等敏感种子仍随握手从 CP 下发。详见 <a href="proc-storage.html#transport">Git 模型 · 耐久传输</a>。</td></tr>
               <tr><td>4</td><td>—</td><td>driver 拉起 harness</td><td>cwd = 进程目录；之后进入场景 ②。</td></tr>
             </tbody>
           </table>
@@ -271,7 +271,7 @@
         <div class="dgm">
           <div class="dgm-stack tight">
             <div class="node c-state"><span class="nt">休眠 = <code>destroy</code></span><span class="nd">末次检查点已 <code>git push</code> 到 CP remote → <code>provider.destroy</code> 释放全部资源。<strong>不用厂商 stop</strong>——stop 免 compute 却仍计 disk 费，进程常隔很久才回，留盘白烧钱。厂商成本归零。</span></div>
-            <div class="node c-sandbox"><span class="nt">唤醒 = <code>create</code> + <code>git clone</code></span><span class="nd"><code>provider.create</code> 新沙箱 → driver 拨入 → driver <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 铺好进程目录 → 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
+            <div class="node c-sandbox"><span class="nt">唤醒 = <code>create</code> + <code>git clone</code></span><span class="nd"><code>provider.create</code> 新沙箱 → driver 拨入 → driver <code>git clone --depth=1</code>（默认 HEAD）铺好进程目录 → 拉起 harness <a href="state.html#resume">resume</a>。</span></div>
           </div>
           <div class="dgm-cap">
             耐久真相是<strong>CP 托管 bare repo 上的检查点</strong>（运行中已持续 <code>git push</code>），不依赖任何厂商热令牌或留盘。检查点天生<strong>跨厂商</strong>——

@@ -130,7 +130,7 @@
               对你来说是连续的。但底层是一个<strong>全新沙箱、引擎冷启动、空上下文</strong>——它怎么知道做到哪了？
             </span>
             <ul class="acts">
-              <li>起新沙箱 + driver 自启拨入 + 注入<strong>钉死版本</strong>的程序闭包；进程目录靠 <code>git clone</code> + <code>checkout &lt;checkpoint_ref&gt;</code> 从 CP bare 仓库拉回最新检查点（取代旧的 <code>pushBundle</code> 灌回）</li>
+              <li>起新沙箱 + driver 自启拨入 + 注入<strong>钉死版本</strong>的程序闭包；进程目录靠 <code>git clone</code> 从 CP bare 仓库拉回最新检查点（默认检出 HEAD，取代旧的 <code>pushBundle</code> 灌回）</li>
               <li>程序按 <a href="state.html#resume">resume 协议</a>读状态文件接着干，<strong>绝不反向重建引擎对话上下文</strong></li>
               <li>前端重连，按事件流游标补齐缺口 + 续 live —— 历史对话完整呈现</li>
             </ul>

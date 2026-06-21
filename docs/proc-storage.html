@@ -43,7 +43,7 @@
             <tr><td>仓库（bare，权威副本）</td><td>一个进程的耐久状态,托管在 CP 侧 <code>/srv/aprog-repos/&lt;pid&gt;.git</code></td></tr>
             <tr><td>工作树</td><td>运行中沙箱里的进程目录(沙箱<strong>临时盘</strong>,不挂持久卷)</td></tr>
             <tr><td>一次 commit</td><td>一个检查点 / 保存点(不可变快照)</td></tr>
-            <tr><td>commit SHA(HEAD)</td><td>PCB 的 <a href="data-model.html#process"><code>checkpoint_ref</code></a></td></tr>
+            <tr><td>commit SHA(HEAD)</td><td>最新检查点 = 仓库自身的 HEAD(<strong>不入 PCB</strong>,<code>git ls-remote</code> 可查)</td></tr>
             <tr><td>对象库(内容寻址 + 去重)</td><td>检查点存储——跨保存点、跨进程去重,全历史很便宜</td></tr>
             <tr><td><code>checkout &lt;sha&gt;</code></td><td>rewind 到某个保存点</td></tr>
             <tr><td>分支</td><td>从某保存点 fork 一个进程(分享 / 试错)</td></tr>
@@ -53,6 +53,39 @@
           <span class="note-label">为什么是 git 而不是自建</span>
           内容寻址、增量去重、全历史、diff、分支、<code>push/pull</code> 传输——全是现成的。自建 CAS 等于重造半个 git。
           状态子集主要是 <code>yaml</code>/<code>md</code>/<code>jsonl</code> 文本,对 git 近乎完美;大二进制(<code>artifacts/</code>)另议(见 <a href="#open">开放点</a>)。
+        </div>
+
+        <h2 id="provisioning">仓库创建与寻址</h2>
+        <p>进程 = 仓库,那「仓库何时建、叫什么、地址记不记」就要定死。结论:<strong>spawn 时建,仓库名 <code>aprog-proc-&lt;pid&gt;</code>,实际地址 <code>repo_url</code> 入库</strong>。</p>
+
+        <p><strong>① spawn 的附加动作:建一个空仓库</strong></p>
+        <p>
+          <a href="flows.html#spawn">spawn</a> 除了插 <a href="data-model.html#process">PCB 行</a>,还建一个 bare 仓库:CP 托管时是 <code>git init --bare /srv/aprog-repos/aprog-proc-&lt;pid&gt;.git</code>(外部 host 则调对方 API 建库)。
+          CP 托管路径是<strong>纯控制平面文件操作</strong>(毫秒级、不碰沙箱),与「spawn 只在控制平面记一笔、瞬时返回」一致——不像 <a href="proc-wake.html">wake</a> 那样要等几秒起沙箱。
+        </p>
+        <div class="note">
+          <span class="note-label">建空 repo,不提交 commit-0</span>
+          spawned 的工作树<strong>为空</strong>、仓库无 commit——<code>spawned</code>(无检查点)与 <code>hibernating</code>(有检查点)的区分由 <code>state</code> 列承载,不靠某个 commit 指针。
+          初始 <code>input</code> 先随 PCB 存着;<strong>首次 wake</strong> 由 harness 写出进程目录骨架时,把它和首份 state 一起提交为第一个 commit。
+          repo 创建与 PCB 行要<strong>一致</strong>:建失败则不留 PCB 行(或可重跑);<code>git init --bare</code> 本身幂等。
+        </div>
+
+        <p><strong>② 仓库名:<code>aprog-proc-&lt;pid&gt;</code>,不裸用数字</strong></p>
+        <p>
+          pid 是数字、只在 CP 内自增唯一。<strong>裸数字名</strong>(如 <code>1042</code>)虽然在 GitHub / Gitea 上<strong>合法</strong>,但放到外部 host 既不全局唯一、又难读、还易和 issue / PR 号混。
+          故仓库另起一个带前缀的合法名 <code>aprog-proc-&lt;pid&gt;</code>;<strong>pid 仍是数字、仍作内部 PK</strong>(channelFor / parsePid / UI 都靠它,不动)。
+        </p>
+
+        <p><strong>③ 实际地址 <code>repo_url</code> 入库(store, not derive)</strong></p>
+        <p>
+          <a href="data-model.html#process">PCB</a> 加一列 <code>repo_url</code>,存仓库的<strong>实际 clone URL</strong>(不含凭证),spawn 建库时确定并写入。
+          为什么不靠 pid 推导:① 仓库名已带前缀 / 命名空间,② 建在外部 host 时 URL 由对方给定(可能有去重后缀)——<strong>真实地址不再是 pid 的纯函数,必须存</strong>。
+          于是各归其位:<strong>pid = 谁</strong>(内部 PK)、<strong><code>repo_url</code> = 在哪</strong>;<strong>「最新是哪个 commit」= 仓库 HEAD</strong>(可推导、不入 PCB,见 <a href="#checkpoint">下节</a>)。
+        </p>
+        <div class="note">
+          <span class="note-label">repo_url 里不放凭证</span>
+          <code>repo_url</code> 只是位置(如 <code>https://&lt;cp&gt;/aprog-proc-&lt;pid&gt;.git</code>);push / clone 用的<strong>每进程 deploy 凭证</strong>另走(见 <a href="#transport">耐久传输</a>),不进这列、也不进 git。
+          要不要再拆成 <code>repo_host</code> + <code>repo_name</code>?除非要让 host 随意搬而不改名,否则一个 <code>repo_url</code> 最贴合「实际地址」,先这样。
         </div>
 
         <h2 id="checkpoint">检查点 = 一次 commit（语义不变）</h2>
@@ -69,7 +102,12 @@
             <tr><td>装什么</td><td>协议</td><td>进程目录的 <strong>state 子集</strong>(<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code> / <code>artifacts/</code>);<strong>不含</strong> <code>session.jsonl</code>(引擎私有缓存,<a href="#open">artifacts 见开放点</a>)</td></tr>
           </tbody>
         </table></div>
-        <p>「mark 武装、<code>turn.end</code> 捕获」的去抖纪律不变:调用只是意向,捕获前若又写脏则等下一个干净 mark。<code>checkpoint_ref</code> = 这次 commit 的 SHA。</p>
+        <p>「mark 武装、<code>turn.end</code> 捕获」的去抖纪律不变:调用只是意向,捕获前若又写脏则等下一个干净 mark。这次 commit 即仓库新的 <strong>HEAD = 最新检查点</strong>。</p>
+        <div class="note">
+          <span class="note-label">PCB 不存 commit 指针</span>
+          「最新检查点是哪个 commit」就是仓库 <strong>HEAD</strong>——<code>git ls-remote &lt;url&gt; HEAD</code> 一查即得,<strong>可推导故不入 PCB</strong>(对齐精简 schema)。
+          去掉它还省一桩一致性:不必每次 <code>push</code> 都把新 SHA 回写 PCB。默认 <code>wake</code> = <code>git clone</code> 自动检出 HEAD、无需传 SHA;只有 <a href="#rewind">rewind</a> 到旧保存点才显式 <code>checkout &lt;目标 commit&gt;</code>。
+        </div>
 
         <h2 id="transport">耐久传输:git push,不再走 B 平面</h2>
         <p>
@@ -88,7 +126,7 @@
             </div>
             <div class="node c-muted" style="flex:1">
               <span class="nt">wake = clone</span>
-              <span class="nd"><code>provider.create</code> 新沙箱 → <code>git clone --depth=1</code> + <code>checkout &lt;checkpoint_ref&gt;</code> → harness <a href="state.html#resume">resume</a>。取代旧的 <code>pushBundle</code> 灌回。</span>
+              <span class="nd"><code>provider.create</code> 新沙箱 → <code>git clone --depth=1</code>(默认检出 HEAD = 最新检查点) → harness <a href="state.html#resume">resume</a>。取代旧的 <code>pushBundle</code> 灌回。</span>
             </div>
           </div>
           <div class="dgm-cap">
