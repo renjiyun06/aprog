@@ -65,7 +65,7 @@
             <ul class="acts">
               <li>建<strong>进程目录</strong> <code>~/.aprog/&lt;pid&gt;/</code>（meta.yml + input.md + execution-state/）</li>
               <li>DB 记一行 <code>process</code>，<strong>钉死</strong> <code>skill@version</code> + 依赖闭包（不同进程可跑不同版本）</li>
-              <li>起一个<strong>沙箱</strong>（driver+引擎+capability 已烘在镜像里），注入程序闭包 + 进程目录</li>
+              <li>起一个<strong>沙箱</strong>（程序依赖的那版镜像里已烘了引擎+driver+所需工具），注入程序闭包 + 进程目录</li>
             </ul>
             <div class="legend">
               <a class="chip" href="flows.html#spawn">深入 · spawn 调用链 →</a>

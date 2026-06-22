@@ -308,7 +308,7 @@
           <table>
             <thead><tr><th>抽象</th><th>时机</th><th>厂商相关性</th><th>管什么</th></tr></thead>
             <tbody>
-              <tr><td><code>ImageBaker</code></td><td>构建期</td><td><strong>高</strong>（四种模型）</td><td>把东西烘进镜像 → <code>ImageRef</code></td></tr>
+              <tr><td><code>bake.ts</code><span class="tag" style="margin-left:6px">每版本一份</span></td><td>构建期</td><td><strong>高</strong>（直调厂商 SDK）</td><td>跑某镜像版本目录的 <code>bake.ts</code>，把 base+引擎+工具烘进镜像 → <code>ImageRef</code></td></tr>
               <tr><td><code>SandboxProvider</code><span class="tag" style="margin-left:6px">A 平面</span></td><td>生命周期拐点</td><td>中</td><td>沙箱作为资源：<strong>create / destroy</strong>（hibernate=destroy、wake=create）。<strong>不碰文件</strong></td></tr>
               <tr><td><code>DriverChannel</code><span class="tag" style="margin-left:6px">B 平面</span></td><td>运行期持续</td><td><strong>无</strong></td><td>跟 driver 的协议对话：<strong>只剩事件上行 + input 下行</strong>（含控制信号）。检查点 / 文件读已交给 git，不在此</td></tr>
             </tbody>

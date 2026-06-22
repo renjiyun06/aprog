@@ -1,6 +1,6 @@
 // 沙箱层（A 平面）的公共类型。把沙箱当一个被托管的资源来管，各厂商高度一致，
-// 所以这些类型是 provider-neutral 的；唯独「烘镜像」差异大，被关进 ImageBaker（见 baker.ts）
-// 后只对外暴露一个不透明的 ImageRef。
+// 所以这些类型是 provider-neutral 的；运行时只认一个不透明的 ImageRef——镜像怎么烘出来的
+// （仓库顶层 images/<名>/<版本>/bake.ts，见 docs/sandbox.html#bake）对运行时不可见。
 
 /** 厂商标识。 */
 export type ProviderId = 'daytona' | 'e2b' | 'northflank' | 'morph';

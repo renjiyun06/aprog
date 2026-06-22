@@ -54,14 +54,26 @@ export function applyMigrations(db: Database): void {
     expires_at TEXT NOT NULL
   )`);
 
-  // 程序目录（薄镜像）。权威态是磁盘 skill 注册表；这里只放可查询的元数据（见 docs/data-model.html）。
+  // 程序身份（目录薄镜像，跨版本稳定）。权威态是磁盘 skill 注册表；这里只放可查询的元数据。
+  // version 不在此表——拆到 program_versions（每版本一行）；current_version 指当前版本。见 docs/data-model.html#program-versions。
   db.run(`CREATE TABLE IF NOT EXISTS programs (
-    id        TEXT PRIMARY KEY,
-    name      TEXT NOT NULL,
-    version   TEXT,
-    summary   TEXT,
-    category  TEXT,
-    publisher TEXT
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    summary         TEXT,
+    category        TEXT,
+    publisher       TEXT,
+    current_version TEXT
+  )`);
+
+  // 程序版本（每版本一行，发布后不可变）。核心是承载「这版程序依赖哪版镜像」。
+  // image 用 name + version 两列（非合成串）→ 便于「谁还指着某镜像版本」查询（GC）。镜像本身是仓库目录，不入库。
+  db.run(`CREATE TABLE IF NOT EXISTS program_versions (
+    program_id    TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    image_name    TEXT NOT NULL,
+    image_version TEXT NOT NULL,
+    published_at  TEXT,
+    PRIMARY KEY (program_id, version)
   )`);
 
   // 安装记录：用户 × 程序的边。装即在桌面、卸即删行；不存摆放位置（任务栏只显示已打开的进程）。

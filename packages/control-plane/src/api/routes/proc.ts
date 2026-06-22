@@ -31,7 +31,9 @@ async function spawn(ctx: AuthCtx): Promise<Response> {
   if (programId === '') throw validation('缺少 programId');
   const prog = ctx.deps.catalog.get(programId);
   if (prog === undefined) throw validation(`未知程序 ${programId}`);
-  const programVersion = str(b.version).trim() || prog.version; // 不传则钉当前目录版本
+  const programVersion = str(b.version).trim() || prog.currentVersion; // 不传则钉当前目录版本
+  if (ctx.deps.catalog.resolveImage(programId, programVersion) === undefined)
+    throw validation(`程序 ${programId} 无此版本 ${programVersion}`); // 版本须存在（兼校验镜像依赖可解析）
   const name = str(b.name).trim();
   if (name === '') throw validation('缺少进程名 name'); // name 必填
   const rec = await ctx.deps.procs.spawn({ userId: ctx.user.id, programId, programVersion, name });

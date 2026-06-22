@@ -29,19 +29,19 @@
         </p>
 
         <h2 id="catalog">模型目录</h2>
-        <p>一眼看清每个数据模型的落地状态（<strong>已实现 6（含 Process 沙箱 mock）/ 规划中 3</strong>）；点模型名跳到详情。</p>
+        <p>一眼看清每个数据模型的落地状态（<strong>已实现 6（含 Process 沙箱 mock）/ 规划中 2</strong>）；点模型名跳到详情。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>模型</th><th>说明</th><th>持久层</th><th>状态</th></tr></thead>
           <tbody>
             <tr><td><a href="#users"><code>users</code></a></td><td>用户身份与激活状态</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
             <tr><td><a href="#auth-codes"><code>auth_codes</code></a></td><td>邮箱验证 token + 登录验证码</td><td>SQLite（短时）</td><td><span class="pill run">已实现</span></td></tr>
             <tr><td><a href="#tokens"><code>tokens</code></a></td><td>会话 token（不透明串）</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
-            <tr><td><a href="#programs"><code>programs</code></a></td><td>程序目录薄镜像</td><td>SQLite（镜像，权威在磁盘）</td><td><span class="pill run">已实现</span></td></tr>
+            <tr><td><a href="#programs"><code>programs</code></a></td><td>程序身份（目录项；拟拆出版本）</td><td>SQLite（镜像，权威在磁盘）</td><td><span class="pill run">已实现</span></td></tr>
             <tr><td><a href="#installations"><code>installations</code></a></td><td>用户 × 程序的安装边</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
-            <tr><td><a href="#skillversion">SkillVersion</a></td><td>不可变版本 + 依赖闭包锁</td><td>DB + 磁盘只读副本</td><td><span class="pill">规划中</span></td></tr>
+            <tr><td><a href="#program-versions"><code>program_versions</code></a></td><td>程序版本 + 镜像依赖（每版本一行）</td><td>SQLite（DB 权威）</td><td><span class="pill">规划中 · 本轮拍板</span></td></tr>
             <tr><td><a href="#capability">Capability / CapabilityGrant</a></td><td>能力授权（CLI / MCP + scope）</td><td>DB（密钥在 Vault）</td><td><span class="pill">规划中</span></td></tr>
             <tr><td><a href="#process">Process</a></td><td>程序的一次运行实例（PCB + 进程目录）</td><td>DB（PCB）+ 进程目录</td><td><span class="pill run">已实现·沙箱mock</span></td></tr>
-            <tr><td><a href="#snapshot-entity">Snapshot</a></td><td>沙箱镜像注册</td><td>DB（指针）+ 厂商侧</td><td><span class="pill">规划中</span></td></tr>
+            <tr><td><a href="#snapshot-entity">镜像</a></td><td>不是 DB 实体（仓库目录 + 厂商侧 snapshot）</td><td>文件系统 + 厂商侧</td><td><span class="pill">外部</span></td></tr>
           </tbody>
         </table></div>
         <div class="note">
@@ -56,7 +56,7 @@
           <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
             <div class="node c-cp" style="flex:1">
               <span class="nt">🗄 SQLite <span class="tag">关系管理</span></span>
-              <span class="nd">用户、认证码、会话 token、程序目录镜像、安装记录（已落地）；进程 / 镜像注册（规划）。可查询，存<strong>指针 + 关系事实</strong>，不存重内容。</span>
+              <span class="nd">用户、认证码、会话 token、程序目录、安装记录（已落地）；程序版本 / 进程（规划）。可查询，存<strong>指针 + 关系事实</strong>，不存重内容。</span>
             </div>
             <div class="node c-state" style="flex:1">
               <span class="nt">📁 文件系统 <span class="tag">权威内容</span></span>
@@ -142,11 +142,12 @@ CREATE UNIQUE INDEX users_email_lower ON users (lower(email)) WHERE status = 'ac
             <tr><td>publisher</td><td>TEXT?</td><td>发布者</td></tr>
           </tbody>
         </table></div>
-        <div class="note">
-          <span class="note-label">派生为主</span>
-          因目录权威在磁盘，<code>installations.program_id</code> <strong>只引用 slug</strong>，不向本表做强制外键；
-          本表丢了可随时从 skill 注册表重建。它是<a href="#planned">规划中</a> Skill / SkillVersion 模型的<strong>扁平先行版</strong>——
-          目前一行只记一个 <code>version</code> 字符串，尚无不可变版本注册与依赖闭包锁。
+        <div class="note warn">
+          <span class="note-label">本轮已拍板：拆成「身份 + 版本」两表</span>
+          现状是<strong>一个程序一行、就一个 <code>version</code> 列</strong>（<code>INSERT OR REPLACE</code> 播种 → 只留得住最新版本、历史被覆盖）。
+          这撑不住<a href="sandbox.html#program-dep">程序依赖镜像</a>：进程钉在旧版本时，得能查到那版的镜像依赖，而单行模型把旧版本覆盖没了。
+          故拆成 <strong>身份表 <code>programs</code></strong>（去掉 <code>version</code>、加 <code>current_version</code>）+ <strong>版本表 <a href="#program-versions"><code>program_versions</code></a></strong>（每版本一行、承载镜像依赖）。详见下节。
+          目录权威仍在磁盘 skill 注册表，本表是可重建的薄镜像；<code>installations.program_id</code> 只引用 slug、不做强制外键。
         </div>
 
         <h3 id="installations"><code>installations</code> —— 用户安装的程序</h3>
@@ -177,29 +178,46 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
         <div class="note warn">
           <span class="note-label">以下尚未实现</span>
           本节是<strong>目标架构</strong>，描述程序运行时（Process / Snapshot）、不可变版本（SkillVersion）与能力授权（Capability）模型。
-          当前代码里<strong>都还没有对应表</strong>——程序模型先以扁平的 <code>programs</code> 占位。按既定优先级，运行时部分待沙箱接入后落地。
+          当前代码里<strong>都还没有对应表</strong>。其中 <strong><code>program_versions</code>（拆分程序模型）本轮已拍板</strong>、待落地；运行时部分待沙箱接入后落地。
         </div>
 
-        <h3 id="skillversion">SkillVersion <span class="pill">规划中</span></h3>
-        <p>一个技能的某个版本，<strong>发布后不可变</strong>，进程钉死的就是它。把现 <code>programs.version</code> 字符串升级成独立的版本注册：</p>
+        <h3 id="program-versions"><code>program_versions</code> —— 程序版本（承载镜像依赖） <span class="pill">规划中 · 本轮拍板</span></h3>
+        <p>
+          把现 <code>programs.version</code> 单列升级成<strong>独立的版本表</strong>：一个程序的每个版本一行、<strong>发布后不可变</strong>，进程钉死的就是它。
+          它存在的核心理由，是承载「这版程序依赖哪版镜像」这条<strong>按版本变化</strong>的事实（见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）。
+        </p>
+        <p><strong>① 身份表 <code>programs</code>（拆分后）</strong>——跨版本稳定的展示元数据：</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td>skill_name + version</td><td>string + semver</td><td>主键，如 <code>design@0.4.0</code></td></tr>
-            <tr><td>description</td><td>string</td><td>简介（界面 <strong>?</strong> 与程序商店展示）</td></tr>
-            <tr><td>depends_lock</td><td>json</td><td><strong>依赖闭包锁</strong>：解析后的库版本，如 <code>{state@0.3.0, live-annotate@0.4.0}</code>，保证闭包可复现</td></tr>
-            <tr><td>capabilities</td><td>json</td><td>声明需要的 capability + scope（spawn 时据此授权）</td></tr>
-            <tr><td>store_path</td><td>path</td><td><code>/var/lib/aprog/skills/&lt;name&gt;/&lt;version&gt;/</code>（只读副本，publish 时拷入）</td></tr>
+            <tr><td>id</td><td>TEXT PK</td><td>slug = skill id</td></tr>
+            <tr><td>name / summary / category / publisher</td><td>TEXT</td><td>商店展示（身份层，跨版本稳定）</td></tr>
+            <tr><td>current_version</td><td>TEXT</td><td><strong>当前版本</strong>（商店展示 / spawn 默认），<strong>显式指针</strong> → <code>program_versions.version</code>；不靠 SQL 比 semver 大小</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>② 版本表 <code>program_versions</code></strong>——每版本一行，主键 <code>(program_id, version)</code>：</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>program_id + version</td><td>TEXT + TEXT</td><td>主键，如 <code>design@0.4.0</code>；发布后不可变</td></tr>
+            <tr><td>image_name</td><td>TEXT</td><td>依赖的镜像 = <code>images/&lt;image_name&gt;/&lt;image_version&gt;</code></td></tr>
+            <tr><td>image_version</td><td>TEXT</td><td>两列分开存（不是合成串）→ GC 直接可查「谁还指着某镜像版本」</td></tr>
+            <tr><td>published_at</td><td>TEXT?</td><td>发布时间（ISO）</td></tr>
           </tbody>
         </table></div>
         <div class="note">
-          <span class="note-label">源 → publish → 副本</span>
-          repo 的 <code>programs/</code> 是<strong>编写源</strong>；一次 publish 把目录拷成版本化只读副本并写 SkillVersion 行。
-          Control Plane <strong>只从副本注入</strong>，不读可编辑的源——所以改程序发新版不影响钉旧版的进程。
+          <span class="note-label">刻意精简</span>
+          <code>program_versions</code> 现在<strong>只</strong>承载镜像依赖 + 主键 + 发布时间。<strong>故意不加</strong> changelog / 下架（yanked）/ 发布渠道 / 依赖闭包锁——YAGNI，要时再加。
+          <code>summary</code> 留身份表（商店展示用），将来要每版本 changelog 再下沉。
+        </div>
+        <div class="note ok">
+          <span class="note-label">这就是原「SkillVersion」的落地形态</span>
+          早先规划的不可变版本实体 <strong>SkillVersion</strong>，现由 <code>program_versions</code> 实现——被「程序依赖镜像」触发而提前落地。
+          依赖闭包锁（depends_lock）、capability 声明、只读副本路径（<code>store_path</code>）等可在需要时作为列加回；当前先立住「版本 + 镜像依赖」这一对。
         </div>
 
         <h3 id="capability">Capability &amp; CapabilityGrant <span class="pill">规划中</span></h3>
-        <p>capability = 给 harness 调的工具（CLI / MCP），<strong>全量烘在沙箱镜像里</strong>；按 program 差异化在 spawn 时控制暴露面。详见 <a href="sandbox.html">沙箱与镜像</a>。</p>
+        <p>capability = 给 harness 调的工具（CLI / MCP），作为<strong>镜像的材料按需烘进对应镜像</strong>（不是一个全宇宙镜像装下所有工具）；程序经<a href="sandbox.html#program-dep">依赖镜像</a>获得它们，spawn 时再控制暴露面 / 注入凭据。详见 <a href="sandbox.html#tools">工具 = 镜像的材料</a>。</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>实体 / 字段</th><th>说明</th></tr></thead>
           <tbody>
@@ -231,7 +249,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             <tr><td>name</td><td>TEXT</td><td><strong>必填</strong>的进程名（spawn 时校验，不可空）；UI 列表显示「圆点 + 名字」</td></tr>
             <tr><td>user_id</td><td>TEXT</td><td>owner，<code>users.id</code></td></tr>
             <tr><td>program_id</td><td>TEXT</td><td><strong>钉死</strong>的程序 slug（= skill id）</td></tr>
-            <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。当前映射到扁平 <code>programs.version</code>；<a href="#skillversion">SkillVersion</a> 落地后升级为 <code>(skill_name, version)</code> + 依赖闭包锁</td></tr>
+            <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。与 <code>program_id</code> 一起 join <a href="#program-versions"><code>program_versions</code></a>，据此<strong>派生</strong>该用哪个镜像（<code>process → program@版本 → image@版本</code>，见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）</td></tr>
             <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>running</code> / <code>hibernating</code>（见状态机）</td></tr>
             <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
             <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / hibernating）时为 null</td></tr>
@@ -250,6 +268,11 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           进程 = 一个 git 仓库，名为 <code>aprog-proc-&lt;pid&gt;</code>（pid 仍是数字内部 PK；裸数字虽合法但不全局唯一、难读，故加前缀）。
           仓库的<strong>实际地址存 <code>repo_url</code></strong>——名带前缀 / 命名空间、外部 host 的 URL 由对方给定，真实地址不再是 pid 的纯函数，故 <strong>store, not derive</strong>。
           但<strong>不存 commit 指针</strong>：「最新检查点是哪个 commit」= 仓库 HEAD，<code>git ls-remote</code> 可查、<strong>可推导故不入 PCB</strong>；spawned/hibernating 的区分由 <code>state</code> 列承载，默认 <code>wake</code> = <code>git clone</code> 自动检出 HEAD。详见 <a href="proc-storage.html#provisioning">仓库创建与寻址</a>。
+        </div>
+        <div class="note">
+          <span class="note-label">镜像：派生，不入 PCB</span>
+          进程跑在哪个镜像上，<strong>由它钉死的 <code>program@版本</code> 决定</strong>——join <a href="#program-versions"><code>program_versions</code></a> 取 <code>image_name@image_version</code>、解析成 <code>ImageRef</code>。
+          程序版本不可变 → 派生结果稳定，故 <strong>PCB 不存 image 列</strong>（与 commit 指针同理：可推导则不入表）。详见 <a href="sandbox.html#program-dep">程序依赖镜像</a>。
         </div>
 
         <p><strong>② 状态机 —— 由「有没有关联沙箱」驱动</strong></p>
@@ -310,21 +333,20 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <ul style="margin:6px 0 0">
             <li><strong>进程命名</strong>：要不要 <code>name</code> 让用户给进程起名（UI 显示），还是只用 <code>pid</code> + program 名？</li>
             <li><strong>多人 attach / 协作者</strong>：attach 订阅是否完全不落库（像任务栏那样纯运行时态）？</li>
-            <li><strong>版本字段</strong>：先按扁平 <code>program_version</code>（映射 <code>programs.version</code>），等 <a href="#skillversion">SkillVersion</a> 落地再升级为钉死 <code>(skill_name, version)</code> + 依赖闭包锁——可否？</li>
+            <li><strong>版本字段</strong>：已拍板拆 <a href="#program-versions"><code>program_versions</code></a>，<code>program_version</code> 与 <code>program_id</code> join 该表、据此派生镜像（见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）。</li>
           </ul>
         </div>
 
-        <h3 id="snapshot-entity">Snapshot <span class="pill">规划中</span></h3>
-        <p>沙箱镜像（capability + 引擎 + driver 烘成）。一个镜像起 N 个沙箱。Daytona 等无内置不可变 tag，故<strong>自算 content-hash 作名</strong>。</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>字段</th><th>说明</th></tr></thead>
-          <tbody>
-            <tr><td>id (= content_hash)</td><td><code>aprog-sandbox:&lt;sha12&gt;</code>，capability 集合的内容哈希</td></tr>
-            <tr><td>provider + provider_ref</td><td>厂商及其侧的 snapshot 名/id</td></tr>
-            <tr><td>resources</td><td>cpu/mem/disk（Daytona 烘进 snapshot）</td></tr>
-            <tr><td>status</td><td>building / active / failed</td></tr>
-          </tbody>
-        </table></div>
+        <h3 id="snapshot-entity">镜像：不是 DB 实体 <span class="pill">外部</span></h3>
+        <p>
+          之前规划过一张「Snapshot 沙箱镜像注册」表（content-hash 作名、记 provider_ref / status）。<strong>已取消</strong>：
+          收敛后的模型里，镜像是<strong>仓库里的目录</strong>（<code>images/&lt;名&gt;/&lt;版本&gt;/</code>，文件系统即 registry）+ 烘出来寄存在<strong>厂商侧</strong>的命名 snapshot——
+          <strong>两头都不在控制平面的 DB 里</strong>。版本是目录名（不再自算 content-hash 作名）。完整模型见 <a href="sandbox.html#image">沙箱与镜像</a>。
+        </p>
+        <div class="note">
+          <span class="note-label">那 DB 里跟镜像有关的是什么</span>
+          只有<strong>引用</strong>：<a href="#program-versions"><code>program_versions</code></a> 的 <code>image_name</code> / <code>image_version</code> 两列——记「哪版程序依赖哪版镜像」，不记镜像本身。
+        </div>
         <div class="note bad">
           <span class="note-label">不变量</span>
           引擎私有的 <code>session.jsonl</code> <strong>不进快照、不权威</strong>，resume 靠进程目录的状态文件而非对话。
@@ -338,10 +360,10 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <div class="dgm-stack tight" style="gap:6px">
             <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; Installation &gt;──</span><span class="chip">Program</span><span class="nd">桌面装了哪些程序 <span class="pill run">已实现</span></span></div>
             <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; tokens / auth_codes &gt;──</span><span class="nd">会话与验证码 <span class="pill run">已实现</span></span></div>
-            <div class="dgm-row"><span class="chip">Skill</span><span style="color:var(--fg-subtle)">──&lt; has &gt;──</span><span class="chip">SkillVersion</span><span class="nd">不可变版本 + depends_lock <span class="pill">规划</span></span></div>
-            <div class="dgm-row"><span class="chip">User×Skill</span><span style="color:var(--fg-subtle)">──&lt; CapabilityGrant &gt;──</span><span class="chip">Capability</span><span class="nd">每程序能力授权 <span class="pill">规划</span></span></div>
-            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; runs &gt;──</span><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 钉 →</span><span class="chip">SkillVersion</span><span class="nd"><span class="pill">规划</span></span></div>
-            <div class="dgm-row"><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 跑在 →</span><span class="chip">Snapshot</span><span class="nd">某镜像起的沙箱 <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">Program</span><span style="color:var(--fg-subtle)">──&lt; has &gt;──</span><span class="chip">ProgramVersion</span><span class="nd">每版本一行、不可变 <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">ProgramVersion</span><span style="color:var(--fg-subtle)">── 依赖 →</span><span class="chip">Image@版本</span><span class="nd">镜像在 <code>images/</code> 目录、非 DB <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">User×Program</span><span style="color:var(--fg-subtle)">──&lt; CapabilityGrant &gt;──</span><span class="chip">Capability</span><span class="nd">每程序能力授权 <span class="pill">规划</span></span></div>
+            <div class="dgm-row"><span class="chip">User</span><span style="color:var(--fg-subtle)">──&lt; runs &gt;──</span><span class="chip">Process</span><span style="color:var(--fg-subtle)">── 钉 →</span><span class="chip">ProgramVersion</span><span style="color:var(--fg-subtle)">── 派生 →</span><span class="chip">Image@版本</span><span class="nd"><span class="pill">规划</span></span></div>
           </div>
         </div>
 

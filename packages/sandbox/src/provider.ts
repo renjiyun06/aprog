@@ -7,7 +7,8 @@
 //  - 文件搬运、事件流、控制信号全走 B 平面 DriverChannel（见 ../driver-channel/），本接口不碰。
 //  - exec / openPty / caps（pty·memorySnapshot·egressAllowlist）等先不引入——没有当前需求
 //    驱动（YAGNI）。需要时（如快速唤醒、运维 shell、出站白名单）再按需加回。
-//  - 烘镜像差异关进 ImageBaker（baker.ts），只通过 ImageRef 喂进 create。这是厂商隔离的切法。
+//  - 烘镜像不在本层：镜像是仓库顶层 images/<名>/<版本>/bake.ts（见 docs/sandbox.html#bake），
+//    只通过不透明 ImageRef 喂进 create。这是厂商隔离的切法。
 
 import type { ProviderId, ImageRef, Resources, SandboxHandle } from './types.ts';
 

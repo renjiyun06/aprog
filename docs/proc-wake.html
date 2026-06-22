@@ -82,7 +82,7 @@
           <div class="node c-cp">
             <span class="nt">② 申请沙箱 <span class="tag"><span class="pill run">现</span> <span class="pill">待</span></span></span>
             <ul class="acts">
-              <li><code>SandboxGateway.create()</code> → provider(Daytona…)按<strong>钉死版本的镜像</strong>起容器</li>
+              <li><code>SandboxGateway.create()</code> → provider(Daytona…)按<strong>该 program 版本依赖的镜像</strong>(<code>program@版本 → image@版本</code>,见 <a href="sandbox.html#program-dep">程序依赖镜像</a>)起容器</li>
               <li><strong>慢点在此</strong>:冷启容器 = 秒级~数十秒(详见 <a href="#sync-async">同步/异步</a>)</li>
               <li>mock 现状:立即返回 <code>mock-sbx-&lt;pid&gt;-xxxx</code> / <code>provider=mock</code>,无真实算力</li>
             </ul>

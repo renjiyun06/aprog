@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>代码架构 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="code-architecture">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>代码架构</h1>
+        <p class="lead">
+          这是 monorepo 的<strong>工程视角</strong>：仓库里有哪些 package、各自是什么、源码怎么摆、谁依赖谁、怎么跑。
+          与「<a href="components.html">组件清单</a>」（运行时有哪些活物）、「<a href="architecture.html">三层抽象</a>」（概念模型）互补——
+          这一页只回答「<strong>代码在哪、怎么组织</strong>」。逐字对齐各包 <code>package.json</code> 与 <code>src/</code> 树。
+        </p>
+
+        <h2 id="overview">全景：6 个 package + images/</h2>
+        <p>仓库是一个 Bun workspace（根 <code>package.json</code> 的 <code>workspaces: ["packages/*"]</code>）。<code>images/</code> 是仓库顶层内容、<strong>不是 package</strong>：</p>
+        <pre><code>aprog/
+├ packages/
+│ ├ control-plane/   @aprog/control-plane  — 北向 API + 进程编排 + 流中枢（host service）
+│ ├ sandbox/         @aprog/sandbox        — A 平面 provider 运行时库 + aprog-bake
+│ ├ driver/          @aprog/driver         — 沙箱内常驻 driver（烘进镜像，非源码依赖）
+│ ├ protocol/        @aprog/protocol       — engine-neutral 事件 + 信封（叶子，无依赖）
+│ ├ log/             @aprog/log            — 共享结构化日志（叶子，无依赖）
+│ └ web/             @aprog/web            — Solid.js「OS 桌面」前端
+├ images/            （非 package）镜像目录：&lt;名&gt;/&lt;版本&gt;/bake.ts，由 aprog-bake 跑
+└ docs/              本文档站</code></pre>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>包</th><th>出处</th><th>跑在哪</th><th>入口 / 产物</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#control-plane"><code>@aprog/control-plane</code></a></td><td>aprog</td><td>aprog VM（长跑 service）</td><td><code>bun run src/index.ts</code> → HTTP :8099</td></tr>
+            <tr><td><a href="#sandbox"><code>@aprog/sandbox</code></a></td><td>aprog</td><td>构建期 CLI / 被 CP import</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt;</code>（bin）；库供 CP</td></tr>
+            <tr><td><a href="#driver"><code>@aprog/driver</code></a></td><td>aprog</td><td>沙箱内（烘进镜像）</td><td>entrypoint 自启，<strong>无 host 入口</strong></td></tr>
+            <tr><td><a href="#protocol"><code>@aprog/protocol</code></a></td><td>aprog</td><td>库</td><td>被 control-plane / driver import</td></tr>
+            <tr><td><a href="#log"><code>@aprog/log</code></a></td><td>aprog</td><td>库</td><td>被 sandbox import</td></tr>
+            <tr><td><a href="#web"><code>@aprog/web</code></a></td><td>aprog</td><td>用户浏览器</td><td><code>vite</code> dev :5174 / <code>vite build</code></td></tr>
+            <tr><td><a href="#images"><code>images/</code></a></td><td>aprog</td><td>构建期</td><td>经 <code>aprog-bake</code> 跑 <code>bake.ts</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="deps">依赖图：单向无环</h2>
+        <p>区分两类边：<strong>源码依赖</strong>（<code>import</code>，编译期）与<strong>镜像内容依赖</strong>（driver 跟着镜像一起烘，非 <code>import</code>）。</p>
+        <div class="dgm">
+          <div class="dgm-stack tight" style="gap:8px">
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>web</span><span style="color:var(--fg-subtle)">┄ HTTP/SSE ►</span><span class="chip"><span class="cdot" style="background:#0969da"></span>control-plane</span><span class="nd" style="font-size:11.5px">运行时,非源码依赖(走 /cp-api 契约)</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>control-plane</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span><span style="color:var(--fg-subtle)">·</span><span class="chip"><span class="cdot" style="background:#2a9d5c"></span>sandbox</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#2a9d5c"></span>sandbox</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#9a6700"></span>log</span><span style="color:var(--fg-subtle)">·</span><span class="chip">@daytonaio/sdk</span><span class="nd" style="font-size:11.5px">外部</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>driver</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span><span style="color:var(--fg-subtle)">·</span><span class="chip">engine SDK</span><span class="nd" style="font-size:11.5px">外部,在镜像里</span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>control-plane</span><span style="color:var(--fg-subtle)">┈┈►</span><span class="chip"><span class="cdot" style="background:#8250df"></span>driver</span><span class="nd" style="font-size:11.5px">镜像内容依赖,<strong>非源码</strong></span></div>
+          </div>
+          <div class="dgm-cap"><b>───►</b> 源码依赖　·　<b>┈┈►/┄►</b> 运行时 / 镜像内容依赖。<code>protocol</code> 与 <code>log</code> 是叶子（零依赖）。</div>
+        </div>
+        <div class="note ok">
+          <span class="note-label">两条「非源码」边是有意的</span>
+          ① <strong>web 不 import 任何 <code>@aprog/*</code></strong>——前后端只靠 HTTP/SSE 契约耦合（见 <a href="api.html">控制平面 API</a>），前端可独立演化。
+          ② <strong>control-plane 不源码依赖 driver</strong>——driver 跟着<a href="sandbox.html#image">沙箱镜像</a>一起烘，通过固定 <a href="protocol.html">protocol</a> + <a href="interaction.html#data-plane">DriverChannel</a> 交互，故能独立换引擎、独立发版。
+        </div>
+
+        <h2 id="control-plane">@aprog/control-plane</h2>
+        <p>平台中枢，跑在 aprog VM 上的长跑 service。源码依赖 <code>@aprog/protocol</code> + <code>@aprog/sandbox</code>（外加 <code>nodemailer</code> 发信）。<code>src/</code> 按子系统分目录：</p>
+        <pre><code>src/
+  index.ts            入口:Bun.serve(:8099) 组装并起服务
+  config.ts           配置(GitHub / SMTP / dataDir…)
+  db/index.ts         SQLite schema + applyMigrations(建表)
+  api/                北向 HTTP/SSE —— router · context(Deps 接缝) · http(组装根)
+    middleware/auth   · respond · errors · sse(流式端点)
+    routes/           auth · programs · proc · installations · shares · notifications
+  auth/               codes · email · tokens · users · validate
+  catalog/            programs(身份+版本目录,播种两表) · installs
+  process/            manager(PCB 编排) · repo-gateway(建进程 git 仓库) · sandbox-gateway(A 平面收口,当前 mock)
+  driver-channel/     B 平面流中枢(受理 driver 拨入 / 下发 input)
+  persistence/        checkpoint(检查点)
+  stream/             hub · store · resync(事件盖全局 seq + 落库 + 扇出 + 重放)</code></pre>
+        <p>实现分层（翻译膜 / 请求生命周期 / <code>Deps</code> 接缝）见 <a href="api-impl.html">控制平面 API 实现</a>；数据表见 <a href="data-model.html">数据模型</a>。</p>
+
+        <h2 id="sandbox">@aprog/sandbox</h2>
+        <p>A 平面：把沙箱当「被托管的资源」。一个<strong>精瘦运行时 provider 库</strong>（被 control-plane import）+ 一个 <code>aprog-bake</code> CLI。源码依赖 <code>@aprog/log</code>，外部 <code>@daytonaio/sdk</code>。</p>
+        <pre><code>src/
+  provider.ts         SandboxProvider (create / destroy,仅此)
+  providers/daytona.ts · e2b.ts   各厂商运行时实现
+  types.ts            ImageRef / Resources / SandboxHandle / ProviderId
+  config.ts           DaytonaConfig 等 provider 入参契约
+  errors.ts           SandboxError 体系 + mapDaytonaError
+  index.ts            单一出口(只导运行时那半)
+  cli.ts              aprog-bake:按「名+版本」跑 images/&lt;名&gt;/&lt;版本&gt;/bake.ts</code></pre>
+        <div class="note">
+          <span class="note-label">打镜像不在这个包</span>
+          早先的 <code>ImageBaker / ImageBuilder</code> 策略接缝（过度设计）已拆除。镜像 = 仓库顶层 <a href="#images"><code>images/</code></a> 目录，每版本一个 <code>bake.ts</code> 直调厂商 SDK；<code>cli.ts</code> 只是 runner。见 <a href="sandbox.html">沙箱与镜像</a>。
+          control-plane 对本包的耦合面就两处 <code>import type</code>（<code>DaytonaConfig</code> / <code>SandboxHandle</code>）。
+        </div>
+
+        <h2 id="driver">@aprog/driver</h2>
+        <p>沙箱内<strong>常驻</strong>进程，随镜像 entrypoint 自启、拨回 CP。源码依赖 <code>@aprog/protocol</code>；引擎 SDK 是运行时（在镜像里）。<strong>control-plane 不源码依赖它</strong>。</p>
+        <pre><code>src/
+  driver.ts           主:自启拨回 + 编排
+  supervisor.ts       harness 父进程 / 子进程监管
+  engine.ts + engines/   claude · codex · shell(引擎适配) + coalesce(事件合流)
+  channel.ts          DriverChannel 客户端(事件上行 + input 下行)
+  sequencer.ts        局部定序(全局 seq 由 CP 落库时盖)
+  fs.ts · bundle.ts   进程目录 / 检查点(git)
+  index.ts</code></pre>
+        <p>「SDK 私有消息 → engine-neutral aprog 事件」的翻译在沙箱内做——每款引擎一个 <code>&lt;name&gt;-driver</code>，对外协议固定。详见 <a href="components.html#driver">组件清单 · Driver</a>、<a href="harness.html">Harness 适配</a>。</p>
+
+        <h2 id="protocol">@aprog/protocol</h2>
+        <p>叶子包，零依赖。control-plane 与 driver 共用的<strong>线缆契约</strong>：<code>envelope.ts</code>（信封 / 定序）+ <code>events.ts</code>（engine-neutral 事件）+ <code>index.ts</code>。它是「平台 ↔ 引擎解耦」的支点——见 <a href="protocol.html">事件流协议</a>。</p>
+
+        <h2 id="log">@aprog/log</h2>
+        <p>叶子包，零依赖。单文件 <code>src/index.ts</code>：<code>createLogger(scope)</code> 结构化日志。当前被 <code>@aprog/sandbox</code> 使用；其它包按需接入。</p>
+
+        <h2 id="web">@aprog/web</h2>
+        <p>Solid.js + Vite 的「OS 桌面」前端。<strong>不 import 任何 <code>@aprog/*</code></strong>——只通过 <code>/cp-api</code>（HTTP/SSE，vite 代理到 :8099）与后端按契约通信。</p>
+        <pre><code>src/
+  index.tsx · App.tsx     挂载 + 桌面壳
+  components/             Desktop · Window · Taskbar · Login/Register · ProgramShell …
+  programs/               各智能程序(design / codereviewer / settings / store) + registry + shell-program
+  stores/                 响应式状态:auth · catalog · processes · windows · installed · notifications …
+  lib/                    api(fetch 封装) · highlight
+  styles/app.css</code></pre>
+        <p>窗口/桌面交互见 <a href="window.html">工作窗口</a>；前端消费的接口见 <a href="api.html">控制平面 API</a>。</p>
+
+        <h2 id="images">images/（非 package）</h2>
+        <p>
+          仓库顶层的镜像目录：<code>images/&lt;名&gt;/&lt;版本&gt;/bake.ts</code>，每个版本自包含。<strong>不是 workspace 成员、无人 import</strong>——它是构建期内容，由 <code>aprog-bake &lt;名&gt; &lt;版本&gt;</code> 跑对应 <code>bake.ts</code>（直调 <code>@daytonaio/sdk</code>，SDK 在根 devDependencies 以便解析）。当前有 <code>images/base/0.1.0/</code>。
+          目录模型、版本=目录名、工具=材料等见 <a href="sandbox.html#image">沙箱与镜像</a>；程序如何依赖镜像见 <a href="data-model.html#program-versions">data-model · program_versions</a>。
+        </p>
+
+        <h2 id="planes">A / B 平面 → 落到哪些代码</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>关注点</th><th>代码落点</th></tr></thead>
+          <tbody>
+            <tr><td><strong>A 平面</strong>·沙箱起停</td><td><code>@aprog/sandbox</code>（<code>provider.ts</code> / <code>providers/daytona.ts</code>）+ <code>control-plane/src/process/sandbox-gateway.ts</code>（当前 mock）</td></tr>
+            <tr><td><strong>B 平面</strong>·DriverChannel</td><td><code>control-plane/src/driver-channel/</code> + <code>driver/src/channel.ts</code>；契约在 <code>@aprog/protocol</code></td></tr>
+            <tr><td>事件流（seq / 扇出 / 重放）</td><td><code>control-plane/src/stream/</code>（hub · store · resync）+ <code>api/sse.ts</code></td></tr>
+            <tr><td>检查点 / git</td><td><code>control-plane/src/persistence/checkpoint.ts</code> + 进程仓库网关 <code>process/repo-gateway.ts</code>；driver 侧 <code>fs.ts</code> / <code>bundle.ts</code>（见 <a href="proc-storage.html">Git 模型</a>）</td></tr>
+            <tr><td>程序目录 / 数据模型</td><td><code>control-plane/src/catalog/</code> · <code>db/index.ts</code> · <code>process/manager.ts</code></td></tr>
+            <tr><td>镜像构建</td><td><code>images/</code> + <code>sandbox/src/cli.ts</code>（<code>aprog-bake</code>）</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 id="run">构建 / 运行入口</h2>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>包</th><th>开发</th><th>构建 / 起</th><th>校验</th></tr></thead>
+          <tbody>
+            <tr><td>control-plane</td><td><code>bun run dev</code>（--watch）</td><td><code>bun run start</code> → :8099</td><td><code>bun run typecheck</code> · <code>bun test</code></td></tr>
+            <tr><td>sandbox</td><td>—</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt;</code>（bin）</td><td><code>typecheck</code> · <code>bun test</code></td></tr>
+            <tr><td>web</td><td><code>vite</code>（:5174 HTTPS）</td><td><code>tsc -b &amp;&amp; vite build</code></td><td>（随 build）</td></tr>
+            <tr><td>driver</td><td>烘进镜像、沙箱内自启</td><td>随镜像</td><td><code>typecheck</code> · <code>bun test</code></td></tr>
+            <tr><td>protocol / log</td><td>纯库</td><td>—</td><td>（log: typecheck）</td></tr>
+          </tbody>
+        </table></div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

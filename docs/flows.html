@@ -58,7 +58,7 @@
             <span class="nt"><a href="components.html#control-plane">🧭 Control Plane</a> · 起沙箱（A 平面）</span>
             <ul class="acts">
               <li>验 token + owner</li>
-              <li><code>sandbox_id</code> 为 null → <code>provider.create</code> 起新 <a href="components.html#sandbox">沙箱</a>（钉死版本的镜像）</li>
+              <li><code>sandbox_id</code> 为 null → <code>provider.create</code> 起新 <a href="components.html#sandbox">沙箱</a>（按 program 版本派生的镜像,见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）</li>
               <li>写 <code>sandbox_id + sandbox_started_at</code>（state→running）</li>
             </ul>
           </div>

@@ -74,7 +74,7 @@
             </tbody>
           </table>
         </div>
-        <p>aprog 自己出的代码是：<strong>前端、Control Plane、Driver</strong>，外加一个共享的 <strong>protocol</strong> 包。Engine 和 Sandbox 都是外部依赖。</p>
+        <p>aprog 自己出的代码是：<strong>前端、Control Plane、Driver</strong>，外加共享库 <strong>protocol / log</strong> 与 A 平面 provider 封装层 <strong>sandbox</strong> 包。引擎（Engine）与沙箱云服务（Sandbox）是外部依赖。完整 monorepo 包结构（6 包 + <code>images/</code>、依赖图、源码树）见 <a href="code-architecture.html">代码架构</a>。</p>
 
         <h2 id="frontend">Web 前端 (@aprog/web)</h2>
         <p>
@@ -129,8 +129,8 @@
 
         <h2 id="sandbox">Sandbox</h2>
         <p>
-          per-process 的容器，外部 cloud 服务（当前 Daytona），提供文件系统、进程空间、网络和 exec API。沙箱镜像（template）里烘进了：
-          基础 OS + 常用工具、<code>claude-driver</code>（含拨回 CP 的凭证）、引擎运行时。spawn/wake 时 Control Plane 用 provider SDK 起一个新沙箱（A 平面）；
+          per-process 的容器，外部 cloud 服务（当前 Daytona），提供文件系统、进程空间、网络和 exec API。沙箱镜像里烘进了：
+          基础 OS、<code>claude-driver</code>（含拨回 CP 的凭证）、引擎运行时，外加该程序所需的工具——工具是镜像的材料，<strong>按需烘进对应镜像</strong>，而非一个镜像装下所有工具；程序依赖特定版本的镜像。spawn/wake 时 Control Plane 用 provider SDK 起一个新沙箱（A 平面）；
           沙箱本身<strong>不对外暴露入站端口</strong>——所有交互靠沙箱内 driver <strong>出站拨回</strong> CP 的 DriverChannel（B 平面）。沙箱与镜像详见 <a href="sandbox.html">沙箱与镜像</a>、交互界面详见 <a href="interaction.html">沙箱交互界面</a>。
         </p>
 

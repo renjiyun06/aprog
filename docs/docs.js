@@ -27,6 +27,7 @@
       items: [
         { page: 'architecture', label: '三层抽象' },
         { page: 'components',    label: '组件清单' },
+        { page: 'code-architecture', label: '代码架构' },
         { page: 'sandbox',       label: '沙箱与镜像' },
         { page: 'interaction',   label: '沙箱交互界面' },
         { page: 'api',           label: '控制平面 API' },

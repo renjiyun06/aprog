@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "aprog 沙箱层（A 平面）：provider（运行时 create/destroy，厂商隔离）+ baker（烘镜像，按构建模型分策略），中间只用不透明 ImageRef 衔接。打镜像是构建期/CLI 的事，control-plane 运行时只消费 ImageRef。",
+  "description": "aprog 沙箱层（A 平面）：精瘦运行时 provider 库（create/destroy，厂商隔离，只认不透明 ImageRef）。打镜像不在此包——镜像是仓库顶层 images/<名>/<版本>/bake.ts，由 aprog-bake 跑；control-plane 运行时只消费 ImageRef。",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
