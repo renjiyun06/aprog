@@ -97,7 +97,7 @@ a:hover { text-decoration: underline; }
 .sb-sublink.active { color: var(--accent); font-weight: 500; }
 
 /* ───────────── content ───────────── */
-.content { display: block; padding: 44px 56px 120px; }
+.content { display: block; min-width: 0; padding: 44px 56px 120px; }
 article { max-width: var(--content-max); min-width: 0; }
 .eyebrow { font-family: var(--mono); font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 12px; }
 article h1 { font-size: 2.35rem; line-height: 1.14; font-weight: 600; margin: 0 0 16px; letter-spacing: -0.028em; }
@@ -296,7 +296,7 @@ a.node:hover::after { opacity: 1; }
   .toc { display: none; }
 }
 @media (max-width: 860px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
     position: fixed; top: var(--brandbar-h); left: 0; bottom: 0; width: 82%; max-width: 320px; z-index: 25;
     transform: translateX(-100%); transition: transform 0.2s ease; box-shadow: 0 0 40px rgba(0,0,0,0.12);
@@ -307,4 +307,9 @@ a.node:hover::after { opacity: 1; }
   .search { width: 140px; }
   .cta { display: none; }
   .content { padding: 28px 20px 90px; }
+  /* 宽图（mermaid 时序图）：手机上别缩成糊成一团，保持可读宽度 + 横向滚动 */
+  .mermaid-wrap, pre.mermaid { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .mermaid-wrap svg, pre.mermaid svg {
+    width: 720px !important; max-width: none !important; height: auto !important;
+  }
 }
