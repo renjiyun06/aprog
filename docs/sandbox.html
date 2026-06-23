@@ -150,8 +150,8 @@
         <p>镜像内容按<strong>变化频率</strong>分层,per-process 的东西绝不烘进去:</p>
         <div class="dgm">
           <div class="dgm-stack tight">
-            <div class="node c-muted"><span class="nt">① 基础 + 工具(烘进去)</span><span class="nd">OS + Bun + <strong>引擎运行时</strong>(Claude Agent SDK / Codex)+ 这个镜像要带的<a href="#tools">工具</a>。慢变,随镜像版本走。</span></div>
-            <div class="node c-driver"><span class="nt">② driver(烘进去)</span><span class="nd"><code>@aprog/driver</code> 编成单文件可执行,落 <code>/opt/aprog/bin/</code>。prod 钉版本烘入,dev 用 bind-mount 盖掉免重烘。</span></div>
+            <div class="node c-muted"><span class="nt">① 基础 + 引擎 + 工具(烘进去)</span><span class="nd">OS + <strong>引擎本体</strong>(Claude:SDK 自带的 <strong>Claude Code 原生二进制</strong> / Codex)+ 这个镜像要带的<a href="#tools">工具</a>;skill 工具按需带 Bun。慢变,随镜像版本走。driver 通过 SDK spawn 引擎,拓扑见 <a href="harness.html#topology">Harness · 运行时拓扑</a>。</span></div>
+            <div class="node c-driver"><span class="nt">② driver(烘进去)</span><span class="nd"><code>@aprog/driver</code> 经 <code>bun build --compile</code> 编成<strong>单个原生二进制</strong>(内嵌 Bun),落 <code>/opt/aprog/bin/</code>,作沙箱 entrypoint。prod 钉版本烘入,dev 用 bind-mount 盖掉免重烘。它和 ① 的引擎<strong>版本成对</strong>(见 <a href="harness.html#topology">拓扑</a>)。</span></div>
             <div class="node c-state"><span class="nt">③ 每进程注入(spawn / wake 时,<strong>不</strong>烘)</span><span class="nd">进程目录、auth 凭据、program(skill) 文件。每进程不同,经 <a href="interaction.html">DriverChannel</a> / <code>git clone</code> 进来。</span></div>
           </div>
         </div>
@@ -186,6 +186,9 @@
           </div>
           <div class="dgm-cap">多语言工具的<strong>编译在镜像外</strong>先做完(这把 Go/Rust/Python 的 toolchain 挡在镜像之外,更干净);<code>bake.ts</code> 只注入编好的 amd64 产物。</div>
         </div>
+        <div class="note">
+          <span class="note-label">两种工具物种:镜像材料 vs 程序包命令</span>
+          这里说的是<strong>重的 / 共享的底座工具</strong>——烘进镜像。还有一类是<strong>程序专属的命令</strong>,它们随<a href="program-package.html#lifecycle">程序包</a>走、spawn 时瘦装(跟程序一起 rev,改它不动镜像)。两者同源纪律:<strong>编译在外做完、只注入预编 amd64 产物</strong>,区别只在"装进镜像"还是"装进沙箱"。</div>
 
         <h2 id="program-dep">程序依赖镜像</h2>
         <p>
@@ -210,6 +213,7 @@
           镜像在共享的 <code>images/</code> 目录里(一个 base 镜像可被多个程序复用);程序在自己的 meta 里声明 <code>image: 名@版本</code> 指过去。
           依赖落库在 <a href="data-model.html#program-versions"><code>program_versions</code></a>(<code>image_name</code> + <code>image_version</code> 两列)。
           「程序跟镜像一起发布」是<strong>工作流</strong>(加新镜像版本 → 把程序依赖指过去,常在一次改动里),不是结构绑定。
+          注:程序本身也是个<strong>版本化的<a href="program-package.html">包(OCI artifact)</a></strong>,这条 <code>image: 名@版本</code> 是它 manifest 里的<strong>纵向依赖</strong>;<code>program_versions</code> 是 OCI/git 的<a href="program-package.html#db">投影</a>,非真相。
         </div>
         <div class="note warn">
           <span class="note-label">两个独立版本化的东西,靠校验保持一致</span>
@@ -222,7 +226,8 @@
 
         <h2 id="constraints">约束与版本</h2>
         <ul>
-          <li><strong>amd64 only</strong>——所有工具 / driver 必须编成 <code>linux/amd64</code>,写进构建约定。</li>
+          <li><strong>amd64 / glibc only</strong>——所有工具 / driver / 引擎二进制必须是 <code>linux/amd64</code> 且 glibc(对上 Daytona 的 <code>ubuntu:24.04</code>;SDK 自带引擎区分 musl/glibc),写进构建约定。</li>
+          <li><strong>引擎与 driver 内嵌的 SDK 版本成对</strong>——Claude Code 引擎二进制必须匹配 driver 里的 Claude Agent SDK 版本(两者严格对齐),一起升,由 <code>image@版本</code> 钉成一对(见 <a href="harness.html#topology">Harness · 拓扑</a>)。</li>
           <li><strong>版本 = 目录名</strong>(人定、不可变)。<code>content-hash</code> 当初是为补「没有可读版本」而自算的;现在目录名即版本即身份,content-hash <strong>退化为可选的完整性校验</strong>,不再是镜像的名字。</li>
           <li><strong>资源(cpu/mem/disk)随 <code>snapshot.create</code> 烘进 snapshot</strong>——属镜像定义的一部分,起 sandbox 时不再逐个改。</li>
           <li><strong>镜像大小上限 Daytona 未公布</strong>——工具多了镜像会变大,得早测。</li>

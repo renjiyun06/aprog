@@ -38,7 +38,7 @@
             <tr><td><a href="#tokens"><code>tokens</code></a></td><td>会话 token（不透明串）</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
             <tr><td><a href="#programs"><code>programs</code></a></td><td>程序身份（目录项；拟拆出版本）</td><td>SQLite（镜像，权威在磁盘）</td><td><span class="pill run">已实现</span></td></tr>
             <tr><td><a href="#installations"><code>installations</code></a></td><td>用户 × 程序的安装边</td><td>SQLite（DB 权威）</td><td><span class="pill run">已实现</span></td></tr>
-            <tr><td><a href="#program-versions"><code>program_versions</code></a></td><td>程序版本 + 镜像依赖（每版本一行）</td><td>SQLite（DB 权威）</td><td><span class="pill">规划中 · 本轮拍板</span></td></tr>
+            <tr><td><a href="#program-versions"><code>program_versions</code></a></td><td>程序版本索引（digest + 镜像依赖，每版本一行）</td><td>SQLite（<a href="program-package.html#db">OCI/git 的投影</a>）</td><td><span class="pill">规划中 · 本轮拍板</span></td></tr>
             <tr><td><a href="#capability">Capability / CapabilityGrant</a></td><td>能力授权（CLI / MCP + scope）</td><td>DB（密钥在 Vault）</td><td><span class="pill">规划中</span></td></tr>
             <tr><td><a href="#process">Process</a></td><td>程序的一次运行实例（PCB + 进程目录）</td><td>DB（PCB）+ 进程目录</td><td><span class="pill run">已实现·沙箱mock</span></td></tr>
             <tr><td><a href="#snapshot-entity">镜像</a></td><td>不是 DB 实体（仓库目录 + 厂商侧 snapshot）</td><td>文件系统 + 厂商侧</td><td><span class="pill">外部</span></td></tr>
@@ -200,15 +200,23 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
           <tbody>
             <tr><td>program_id + version</td><td>TEXT + TEXT</td><td>主键，如 <code>design@0.4.0</code>；发布后不可变</td></tr>
-            <tr><td>image_name</td><td>TEXT</td><td>依赖的镜像 = <code>images/&lt;image_name&gt;/&lt;image_version&gt;</code></td></tr>
+            <tr><td>digest</td><td>TEXT</td><td><strong>程序包的 OCI digest</strong>（不可变锁）→ driver spawn 时按它拉包闭包（见 <a href="program-package.html#pull">拉取</a>）</td></tr>
+            <tr><td>image_name</td><td>TEXT</td><td>依赖的镜像 = <code>images/&lt;image_name&gt;/&lt;image_version&gt;</code>（manifest 声明的<strong>缓存</strong>，换 GC 纯 SQL）</td></tr>
             <tr><td>image_version</td><td>TEXT</td><td>两列分开存（不是合成串）→ GC 直接可查「谁还指着某镜像版本」</td></tr>
             <tr><td>published_at</td><td>TEXT?</td><td>发布时间（ISO）</td></tr>
           </tbody>
         </table></div>
         <div class="note">
           <span class="note-label">刻意精简</span>
-          <code>program_versions</code> 现在<strong>只</strong>承载镜像依赖 + 主键 + 发布时间。<strong>故意不加</strong> changelog / 下架（yanked）/ 发布渠道 / 依赖闭包锁——YAGNI，要时再加。
+          <code>program_versions</code> 现在<strong>只</strong>承载 digest + 镜像依赖 + 主键 + 发布时间。<strong>故意不加</strong> changelog / 下架（yanked）/ 发布渠道 / 依赖闭包锁——YAGNI，要时再加。
           <code>summary</code> 留身份表（商店展示用），将来要每版本 changelog 再下沉。
+        </div>
+        <div class="note warn">
+          <span class="note-label">它是投影，不是真相</span>
+          程序内容发版在 <strong>OCI</strong>、源在 <strong>git（<code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/</code>）</strong>——那才是权威。
+          <code>program_versions</code> 降级为<strong>可查询的投影/缓存</strong>:存 <code>digest</code>（OCI 不可变锁）+ 镜像依赖（manifest 声明的缓存，换 GC 纯 SQL）+ 发布时间。
+          由 <code>aprog-publish</code> 从 git 源 + OCI digest <strong>回填</strong>，<strong>取代现在写死的 const <code>CATALOG</code> seed</strong>。
+          为什么不直接查 registry 顶替本表（current_version 指针 / 快查商店 / 关系 join / GC / 可用性）见 <a href="program-package.html#db">程序与发版 · 库表降级为投影</a>。
         </div>
         <div class="note ok">
           <span class="note-label">这就是原「SkillVersion」的落地形态</span>
@@ -250,9 +258,9 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             <tr><td>user_id</td><td>TEXT</td><td>owner，<code>users.id</code></td></tr>
             <tr><td>program_id</td><td>TEXT</td><td><strong>钉死</strong>的程序 slug（= skill id）</td></tr>
             <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。与 <code>program_id</code> 一起 join <a href="#program-versions"><code>program_versions</code></a>，据此<strong>派生</strong>该用哪个镜像（<code>process → program@版本 → image@版本</code>，见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）</td></tr>
-            <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>running</code> / <code>hibernating</code>（见状态机）</td></tr>
+            <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>waking</code> / <code>running</code> / <code>hibernating</code>（见状态机；<code>waking</code> = 异步唤醒过渡态）</td></tr>
             <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
-            <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / hibernating）时为 null</td></tr>
+            <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / waking / hibernating）时为 null（waking 期间后台正在起）</td></tr>
             <tr><td>repo_url</td><td>TEXT</td><td>进程 git 仓库的<strong>实际 clone URL</strong>（不含凭证），如 <code>https://&lt;cp&gt;/aprog-proc-&lt;pid&gt;.git</code>；spawn 建库时写入（见 <a href="proc-storage.html#provisioning">寻址</a>）</td></tr>
             <tr><td>created_at</td><td>TEXT</td><td>spawn 时间（ISO）</td></tr>
             <tr><td>last_active_at</td><td>TEXT?</td><td>末次活跃（驱动 UI uptime/最近、休眠回收策略）</td></tr>
@@ -290,10 +298,14 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
               <span class="nt">hibernating <span class="tag"><span class="pill hib">休眠</span></span></span>
               <span class="nd">休眠（含跑完 / 被杀）。<code>sandbox_id=null</code>，仓库 HEAD 即最新检查点。<code>wake</code> 即在新沙箱 <code>git clone</code> 取回（默认 HEAD）续跑。</span>
             </div>
+            <div class="node c-sandbox" style="flex:1">
+              <span class="nt">waking <span class="tag"><span class="pill hib">唤醒中</span></span></span>
+              <span class="nd"><strong>过渡态</strong>：<code>wake</code> 已受理、后台正在起沙箱 / 拉程序包 / clone / 起引擎。<code>sandbox_id</code> 暂空。就绪 → <code>running</code>；失败 → 回滚来路（spawned/hibernating）。详见 <a href="proc-wake.html#sync-async">wake · 异步</a>。</span>
+            </div>
           </div>
           <div class="dgm-cap">
-            状态只由<strong>「有没有关联沙箱」</strong>决定：有沙箱 = <code>running</code>；无沙箱 = <code>spawned</code>（刚创建、还没检查点）或 <code>hibernating</code>（跑过、留检查点）。
-            稳态在 <code>running</code> ⇄ <code>hibernating</code> 间往复。<strong>没有终止态</strong>——跑完 / 被杀都只是回到 <code>hibernating</code>，状态永不删除（见 <a href="state.html">进程目录与状态</a>）。
+            <strong>稳态</strong>由「有没有关联沙箱」决定：有沙箱 = <code>running</code>；无沙箱 = <code>spawned</code>（刚创建、还没检查点）或 <code>hibernating</code>（跑过、留检查点）。
+            <code>waking</code> 是 <code>running</code> 的<strong>前奏过渡态</strong>（异步 <code>wake</code> 期间，见 <a href="proc-wake.html">wake 流程</a>），<strong>不是终止态</strong>。稳态在 <code>running</code> ⇄ <code>hibernating</code> 间往复；跑完 / 被杀都只回到 <code>hibernating</code>，状态永不删除（见 <a href="state.html">进程目录与状态</a>）。
           </div>
         </div>
 
@@ -302,7 +314,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
           <thead><tr><th>操作</th><th>前置 state</th><th>后置 state</th><th>对 PCB / 沙箱的副作用</th></tr></thead>
           <tbody>
             <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 program@version、eager 存初始 input；<strong>建空仓库 <code>aprog-proc-&lt;pid&gt;</code> 并写 <code>repo_url</code></strong>（见 <a href="proc-storage.html#provisioning">寻址</a>）；<code>sandbox_id=null</code>，<strong>不起沙箱</strong></td></tr>
-            <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>running</code></td><td>provider.create 起新沙箱 → 回填 <code>sandbox_id</code> + <code>provider</code>；<code>git clone --depth=1</code> + <code>checkout</code>（hibernating 取回该 commit；spawned 为空 / 初始 input）；拉起 harness</td></tr>
+            <tr><td><code>attach</code> / <code>wake</code></td><td>spawned / hibernating</td><td><code>waking</code> → <code>running</code></td><td><strong>异步</strong>：立即置 <code>waking</code> 返回；后台 provider.create 起沙箱 + 下发种子 + <a href="program-package.html#pull">拉程序包</a> + <code>git clone --depth=1</code>（hibernating 取回 HEAD；spawned 为空 / 初始 input）+ 起引擎 → 就绪翻 <code>running</code> 经 stream 推；失败回滚来路。详见 <a href="proc-wake.html">wake 流程</a></td></tr>
             <tr><td><code>detach</code></td><td>running</td><td><code>running</code>（不变）</td><td><strong>仅前端退订</strong>；沙箱与 harness 照常跑。属运行时 UI 态，<strong>不落库</strong></td></tr>
             <tr><td><code>hibernate</code></td><td>running</td><td><code>hibernating</code></td><td>末次 commit + <code>git push</code> → provider.destroy；<code>sandbox_id=null</code>（仓库 HEAD 即最新检查点）</td></tr>
             <tr><td>完成 / <code>kill</code></td><td>running</td><td><code>hibernating</code></td><td>同 hibernate（尽力末次检查点 → provider.destroy、<code>sandbox_id=null</code>、记 <code>last_active_at</code>）；只是触发方不同（程序自身完成 / 用户强制），<strong>不产生新状态</strong></td></tr>
@@ -326,7 +338,8 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
 
         <div class="note ok">
           <span class="note-label">已定（本轮评审）</span>
-          <strong>无 <code>exited</code> 终止态</strong>：状态只由「有没有关联沙箱」决定——有沙箱 = <code>running</code>，无沙箱 = <code>spawned</code>（刚创建）/ <code>hibernating</code>（休眠）；跑完 / <code>kill</code> 都只是回到 <code>hibernating</code>，状态永不删除。
+          <strong>无 <code>exited</code> 终止态</strong>：稳态只由「有没有关联沙箱」决定——有沙箱 = <code>running</code>，无沙箱 = <code>spawned</code>（刚创建）/ <code>hibernating</code>（休眠）；跑完 / <code>kill</code> 都只是回到 <code>hibernating</code>，状态永不删除。
+          唯一的非稳态是 <code>waking</code>（异步唤醒的<strong>前奏过渡</strong>，就绪即转 <code>running</code>、失败回滚）——它<strong>不是</strong>被否决的 <code>exited</code>（终点），而是 <code>running</code> 的入口。
         </div>
         <div class="note">
           <span class="note-label">待你拍板</span>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>程序与发版（包模型） · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="program-package">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>程序与发版（包模型）</h1>
+        <p class="lead">
+          程序（program）= 一个 skill。对底层 <a href="harness.html">harness</a> 而言它<strong>就是一个目录</strong>；
+          但对平台而言,它要能<strong>版本化发布、表达依赖、带自己的命令</strong>——所以我们把它做成一个<strong>包</strong>:
+          一个<strong>版本化、内容寻址、自包含、带瘦安装层</strong>的产物。这页讲:本地怎么管版本(沿用镜像的目录模型)、
+          包用什么形式承载(OCI artifact)、依赖怎么解析、driver 怎么拉、以及为什么控制平面的库表降级成<strong>投影</strong>。
+        </p>
+
+        <h2 id="overview">程序的两副面孔</h2>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
+            <div class="node c-program" style="min-width:240px">
+              <span class="nt">harness 眼里 <span class="tag">就是个目录</span></span>
+              <span class="nd">SKILL.md + 它的 resources/scripts/references。harness 加载这个目录、按 <a href="harness.html">prose</a> 解析引用,跑起来。包的外壳<strong>对它不可见</strong>。</span>
+            </div>
+            <div class="ar"><span class="albl">同一份内容的两端</span><span class="gly">↔</span></div>
+            <div class="node c-data" style="min-width:240px">
+              <span class="nt">平台眼里 <span class="tag">是一个包</span></span>
+              <span class="nd">内容寻址 + 版本 + 依赖闭包 + 安装清单 + 预编命令。能发布、能去重、能被 driver 按版本拉下来装好。</span>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            一句话:<strong>包 = 一个版本化、去重、自带完整性校验和安装清单的目录</strong>。解开落到沙箱里,就是 harness 看到的那个普通目录。
+          </div>
+        </div>
+
+        <h2 id="local">本地管理 = 目录模型(沿用镜像那套)</h2>
+        <p>
+          版本管理和<a href="sandbox.html#image">镜像</a>逐字相同:<strong>git 跟踪的源目录是管理面,发版产物在外部</strong>。
+        </p>
+        <pre><code>programs/
+  &lt;类&gt;/                  ← libraries / applications（程序比镜像多的一级分组）
+    &lt;程序名&gt;/             ← 一个程序 = 一个目录;名即目录名
+      &lt;版本&gt;/             ← 一个版本 = 一个自包含子目录(人定、不可变)
+        SKILL.md         ← 入口 + frontmatter(声明 image 依赖、depends_on)
+        …这个程序需要的材料(resources / 预编命令 / 安装清单源)</code></pre>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-state"><span class="nt">文件系统即管理面</span><span class="nd">加一个版本 = 新建 <code>&lt;版本&gt;/</code> 目录;查 = <code>ls</code>;退役 = 删目录;演化 = <code>git log</code>。<strong>不要 registry.ts / 枚举 / 单独 DB 管版本</strong>。</span></div>
+            <div class="node c-data"><span class="nt">OCI 是产物,不是管理面</span><span class="nd">就像 Daytona snapshot 之于镜像:<code>aprog-publish</code> 把源目录烘成 OCI artifact 推到 registry。<strong>git 是真相,registry 只存产物。</strong></span></div>
+          </div>
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th></th><th>镜像</th><th>程序</th></tr></thead>
+          <tbody>
+            <tr><td><strong>源 / 管理面</strong>(git)</td><td><code>images/&lt;名&gt;/&lt;版本&gt;/</code> + bake.ts</td><td><code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/</code> + SKILL.md</td></tr>
+            <tr><td><strong>发版动作</strong></td><td><code>aprog-bake</code></td><td><code>aprog-publish</code></td></tr>
+            <tr><td><strong>产物</strong>(外部)</td><td>Daytona snapshot → <code>ImageRef</code></td><td>OCI artifact(GHCR)→ digest</td></tr>
+            <tr><td><strong>版本</strong></td><td>目录名(人定、不可变)</td><td>同左</td></tr>
+            <tr><td><strong>发现/增/退役/历史</strong></td><td><code>ls</code> / 新建目录 / <code>rm</code> / git</td><td>同左</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note warn">
+          <span class="note-label">现状要补一处</span>
+          <code>programs/</code> 现在是 <code>&lt;类&gt;/&lt;名&gt;/</code>,<strong>缺 <code>/&lt;版本&gt;/</code> 这层</strong>。采用本模型即把它补成 <code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/</code>。
+        </div>
+
+        <h2 id="form">包形式 = OCI artifact</h2>
+        <p>
+          <a href="#" onclick="return false">OCI</a>(Open Container Initiative)是容器镜像那套打包 + registry 标准,而且通用到能装<strong>任意内容</strong>(OCI artifact,经 <code>oras</code> 推拉)。
+          拿它当程序包,等于白嫖一套成熟机制,且不用自造格式:
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>我们要的</th><th>OCI 现成给的</th></tr></thead>
+          <tbody>
+            <tr><td>不可变 + 完整性</td><td><strong>sha256 digest 内容寻址</strong></td></tr>
+            <tr><td>版本</td><td><strong>tag</strong>(<code>名@版本</code>)</td></tr>
+            <tr><td>共享库只存一份</td><td><strong>layer 内容寻址 → 自动 dedup</strong>(<code>state</code> 那层全网一份,被多个程序引用)</td></tr>
+            <tr><td>安装/依赖声明</td><td><strong>manifest + config blob</strong>(塞 install 指令、依赖闭包)</td></tr>
+            <tr><td>别自造格式</td><td>标准 spec + <code>oras</code></td></tr>
+            <tr><td>和镜像同一套分发</td><td>同一种 registry —— program 与 image 在分发层成兄弟</td></tr>
+          </tbody>
+        </table></div>
+        <p>一个程序包(OCI artifact)的结构:</p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-data"><span class="nt">config blob = manifest</span><span class="nd"><code>名@版本</code> · 依赖的 <code>image@版本</code> · 声明式 install 指令(<code>files→dest / bins→PATH / env / config</code>) · <strong>解析并钉死的依赖闭包</strong>(各依赖 digest)。</span></div>
+            <div class="node c-program"><span class="nt">layer · skill 闭包</span><span class="nd">SKILL.md + resources/scripts/references —— harness 看到的那个目录。</span></div>
+            <div class="node c-muted"><span class="nt">layer · 预编 bins</span><span class="nd">这个程序专属的命令(预编 amd64 二进制)。跨版本/跨程序复用就 dedup。</span></div>
+          </div>
+        </div>
+        <div class="note">
+          <span class="note-label">起步退路:胖 tarball</span>
+          没有 registry 时可先用<strong>内容寻址 tarball + 对象存储 + presigned URL</strong> 顶着,把链路跑通。
+          但胖 tarball 把依赖 vendor 进单包 → <code>state</code> 在每个下游各存一份(重复、无共享、底层库变动要重打所有下游)。
+          所以目标是 OCI(layer dedup 对共享库几乎是刚需),两者都是 <code>名@版本</code> + digest,平迁面很小。
+        </div>
+
+        <h2 id="lifecycle">publish 干重活,spawn 只瘦装</h2>
+        <p>
+          "安装时可以装命令"这句话里藏着<strong>两个不同的 install 时机</strong>,必须分开,否则把烘镜像省下的冷启延迟又赔回去:
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>时机</th><th>谁跑 / 几次</th><th>能干啥</th></tr></thead>
+          <tbody>
+            <tr><td><strong>publish(构建)</strong></td><td>CI,一次、可重跑</td><td><strong>任意重活</strong>:编命令、拉二进制、解析依赖、组装。产出 = 自包含的包(skill 闭包 + 预编 bins + manifest)。</td></tr>
+            <tr><td><strong>spawn-time install</strong></td><td>driver,每次唤醒</td><td><strong>只 apply manifest</strong>:摆文件、symlink bins 上 PATH、写 env/config。<strong>幂等、离线、毫秒级</strong>。</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note ok">
+          <span class="note-label">和 #tools 同源的纪律</span>
+          这跟 <a href="sandbox.html#tools">沙箱 · 工具</a> 的"编译在镜像外做完、只注入预编 amd64 产物"是同一条原则,只是从 bake-time 装进镜像,搬到 spawn-time 装进沙箱。
+          <strong>绝不在 spawn-time <code>apt install</code> / 编译</strong>——否则每次冷启都背一遍那延迟。
+        </div>
+        <p>由此理清 <strong>program / image 的工具边界(两种工具物种)</strong>:</p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:stretch">
+            <div class="node c-sandbox" style="min-width:230px"><span class="nt">重的 / 共享的底座 → 烘进<strong>镜像</strong></span><span class="nd">语言运行时、大编译器、引擎。慢变、跨进程共享、贵。随 <code>image@版本</code> 走。</span></div>
+            <div class="node c-program" style="min-width:230px"><span class="nt">程序专属命令 → 随<strong>程序包</strong></span><span class="nd">spawn 时瘦装。轻、专属、<strong>跟程序一起 rev</strong>(改它不动镜像)。</span></div>
+          </div>
+          <div class="dgm-cap">这恰好同时满足:程序能<strong>独立于镜像发版</strong>,又能<strong>自带命令</strong>。capability/plugin(三层模型第三层)将来挂在 install 钩子上、经 MCP 接,先留位、实现压后。</div>
+        </div>
+        <div class="note warn">
+          <span class="note-label">install 跑命令 = 安全 + 确定性面</span>
+          <strong>能声明就别写脚本</strong>;非跑脚本不可时,以沙箱用户、离线、幂等跑。这层正是隔离要兜底的地方。
+        </div>
+
+        <h2 id="deps">依赖:声明 → publish 解析钉死 → spawn 取闭包</h2>
+        <p>
+          智能程序之间有依赖:一个库 <code>state</code> 可能被几乎所有程序依赖。包形式必须<strong>表达这个依赖</strong>,这样 driver 拉下包、依赖也就齐了。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>阶段</th><th>干啥</th></tr></thead>
+          <tbody>
+            <tr><td><strong>声明</strong></td><td>SKILL.md frontmatter <code>depends_on: [state@…, …]</code>(库本身也是 library 类 aprog,也是一个包)。</td></tr>
+            <tr><td><strong>publish(一次,CI)</strong></td><td>走<strong>传递闭包</strong>、把每个依赖<strong>按 digest 钉死</strong>、把拍平的闭包写进 manifest(= 一份 lockfile)。<strong>版本约束求解只在这里</strong>,可审、确定。</td></tr>
+            <tr><td><strong>spawn(driver)</strong></td><td><strong>只拉那份已钉死的显式集合</strong>——无求解器。内容寻址 → <code>state</code> 每台机器只拉一次(命中 CAS 缓存)。逐个摆成 skill 目录 + apply 瘦装 + 按 state 协议<strong>合并 schema</strong>。</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">两层解析,别混</span>
+          <strong>prose is link</strong>(运行时,给 agent):skill 正文提到 <code>state</code> 即引入——agent 自己会加载。
+          <strong><code>depends_on</code> frontmatter</strong>(打包时,给 packager):机器可读,让 publish 的 resolver 知道该收哪些包。正文提及不够机器可靠,所以 frontmatter 是依赖的<strong>权威声明源</strong>(也正是 state 协议做 schema 合并时读的那个字段)。
+        </div>
+        <p>两条<strong>依赖轴</strong>分清,兑现路径不同:</p>
+        <div class="dgm">
+          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
+            <div class="node c-program" style="min-width:210px"><span class="nt">横向 · 库/程序依赖</span><span class="nd"><code>depends_on</code> → 解析进<strong>包闭包</strong>,落地为并排的 skill 目录。driver 拉包闭包兑现。</span></div>
+            <div class="node c-sandbox" style="min-width:210px"><span class="nt">纵向 · 镜像依赖</span><span class="nd"><code>image: 名@版本</code> → <strong>运行底座</strong>,由起沙箱拉 snapshot 兑现(provider.create),<strong>不是</strong>一个子包。</span></div>
+          </div>
+          <div class="dgm-cap">state 协议的 schema 合并发生在<strong>创建时</strong>:execution 的 state_schema = 程序自身 schema + 各 <code>depends_on</code> 库 schema,同名 key 冲突为<strong>硬错误</strong>(见 state 技能)。</div>
+        </div>
+
+        <h2 id="pull">driver 怎么把包拉到本地</h2>
+        <p>拉一个 OCI artifact 本质就是<strong>几个 HTTP GET</strong>(registry 的 Distribution spec)。没有魔法:</p>
+        <pre><code>1. GET /v2/&lt;repo&gt;/manifests/&lt;digest&gt;     ← 拿 manifest(JSON):列出 config + 各 layer(digest/size/mediaType)
+2. 对每个还没缓存的 blob:
+   GET /v2/&lt;repo&gt;/blobs/&lt;sha256:…&gt;        ← 拿真实字节;校验 sha256 == digest
+3. 解 tar 到目标路径(skill → cwd/skills/&lt;名&gt;;bins → /opt/aprog/bin;…)
+4. apply manifest 的 install 指令(symlink bins 上 PATH、写 env/config)</code></pre>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-cp"><span class="nt">短期 token 来自 CP</span><span class="nd">registry 是 token 流(<code>scope=repository:&lt;repo&gt;:pull</code>)。CP 在 welcome/种子里塞一个<strong>只能 pull 这个包仓、短期</strong>的 token,真凭证不出 CP(见 <a href="interaction.html#trust">信任与启动序</a>)。</span></div>
+            <div class="node c-state"><span class="nt">CAS 去重</span><span class="nd">内容寻址 → 本地按 digest 建 CAS。共享层(如 <code>state</code>)全机器只下一次,后续命中缓存跳过。<strong>依赖闭包随之落全。</strong></span></div>
+            <div class="node c-driver"><span class="nt">driver 自拉(推荐)</span><span class="nd">就是 fetch + sha256 + 解 tar,driver 本就是 HTTP 客户端,多几个 GET 即可,不必为此烘 <code>oras</code>。和 git clone 进程态一样<strong>直连存储</strong>,不挤 control-stream。</span></div>
+          </div>
+        </div>
+
+        <h2 id="db">控制平面的库表:降级为投影,不是真相</h2>
+        <p>
+          既然程序内容发版在 OCI、源在 git,那 <code>program_versions</code> 还要吗?<strong>要,但定位变了</strong>:
+          <strong>OCI/git = 内容真相;DB = 可查询的投影 + 平台独有的关系态。</strong>——和"文件系统是源、DB 是投影"是同一个模式。
+        </p>
+        <div class="note">
+          <span class="note-label">为什么不能直接查 registry 顶替 DB</span>
+          registry 是 blob 存储,不是可查询目录库。这些它干不了:
+          ① <strong><code>current_version</code> 指针</strong>是平台决策,registry 只有 tag(用 <code>latest</code> 是反模式);
+          ② 服务应用商店要<strong>快</strong>,不能每次列仓库 + 逐个拉 manifest;
+          ③ <strong>关系态</strong>(installations 用户×程序、processes 钉 program_version)registry 压根不知道;
+          ④ <strong>GC join</strong>(<code>processes → program_versions → image</code>)是 SQL 活;
+          ⑤ registry 抖一下,商店列表不该跟着挂。
+        </div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>表</th><th>留不留</th><th>新定位</th></tr></thead>
+          <tbody>
+            <tr><td><code>programs</code>(身份)</td><td><strong>留</strong></td><td>装 registry 没有的:<strong>current_version 指针</strong> + 展示元数据(供快查)+ installations/processes 的 FK 落点</td></tr>
+            <tr><td><code>installations</code></td><td><strong>留</strong></td><td>平台独有关系态,registry 里没有</td></tr>
+            <tr><td><code>processes</code></td><td><strong>留</strong></td><td>PCB,同上</td></tr>
+            <tr><td><code>program_versions</code></td><td><strong>留,瘦身</strong></td><td>从"内容存储"降成<strong>薄索引/缓存</strong>:<code>(program_id, version, digest, published_at)</code>——digest 就是 OCI 不可变锁</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note warn">
+          <span class="note-label">子决策:image 依赖存还是派生</span>
+          image 依赖其实写在包 manifest 里了。两条路:<strong>存</strong>(<code>program_versions</code> 留 <code>image_name+image_version</code>,denormalize 缓存 → GC 保持纯 SQL join,毫秒级)vs <strong>派生</strong>(不存,spawn/GC 时 CP 从 registry 拉 manifest 读)。
+          倾向<strong>存</strong>——它只是 manifest 声明的一份投影(由 <code>aprog-publish</code> 写入,源同一份不会漂),换来 GC/spawn 不依赖 registry round-trip。这是<strong>缓存换查询性</strong>,不是真相分叉。
+        </div>
+        <div class="note ok">
+          <span class="note-label">取代 const CATALOG</span>
+          现状 <code>catalog/programs.ts</code> 用一个写死的 const seed 这些表,且自注"权威态本应是磁盘 skill 注册表(SKILL.md frontmatter),当前还没有"。
+          正解:<strong><code>aprog-publish</code> 从 git 源 + OCI digest 投影出这些表</strong>,取代 const。
+        </div>
+
+        <h2 id="chain">真相链与唤醒集成</h2>
+        <pre><code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/   ← 权威源(git;你管理版本的地方)
+        │  aprog-publish 读它
+        ▼
+ ① 解析 depends_on 闭包、digest 钉死 → 构建 OCI artifact(skill 层 + bins 层 + manifest)→ 推 GHCR
+ ② 回填 (program, 版本, digest, [image 依赖]) 进 program_versions(DB 投影)
+        ▼
+唤醒(spawn/wake)时:
+  CP: resolveImage(process→program@版本)→ provider.create(派生镜像)
+  driver: 拨入握手 → CP 下发种子(模型 auth + registry/git 短期 token)
+          → 并行:OCI pull 程序包闭包(横向)‖ git clone 进程态
+          → 起引擎(SDK spawn)→ 报 ready</code></pre>
+        <div class="dgm-cap" style="margin-top:8px">
+          "下载程序"这一步 = <strong>driver 按 digest 拉程序包的 OCI 闭包</strong>;依赖随之落全、共享库只拉一次。完整唤醒序见 <a href="proc-wake.html">wake 唤醒流程</a> / <a href="interaction.html#s-wake">交互 · 拨入绑定注入</a>。
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

@@ -29,6 +29,7 @@
         { page: 'components',    label: '组件清单' },
         { page: 'code-architecture', label: '代码架构' },
         { page: 'sandbox',       label: '沙箱与镜像' },
+        { page: 'program-package', label: '程序与发版' },
         { page: 'interaction',   label: '沙箱交互界面' },
         { page: 'api',           label: '控制平面 API' },
         { page: 'api-impl',      label: '控制平面 API 实现' },
