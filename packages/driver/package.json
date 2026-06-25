@@ -6,7 +6,7 @@
   "description": "engine driver —— 常驻沙箱，把底层 harness(Claude Agent SDK / Codex) 翻译成 @aprog/protocol 事件流。",
   "main": "./src/index.ts",
   "scripts": {
-    "build": "bun build --compile ./src/main.ts --outfile dist/aprog-driver",
+    "build": "bun build --target=node ./src/main.ts --outfile dist/driver.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -27,28 +27,33 @@
           这一页只回答「<strong>代码在哪、怎么组织</strong>」。逐字对齐各包 <code>package.json</code> 与 <code>src/</code> 树。
         </p>
 
-        <h2 id="overview">全景：6 个 package + images/</h2>
-        <p>仓库是一个 Bun workspace（根 <code>package.json</code> 的 <code>workspaces: ["packages/*"]</code>）。<code>images/</code> 是仓库顶层内容、<strong>不是 package</strong>：</p>
+        <h2 id="overview">全景：6 运行时 package · tools/ · images/ · programs/</h2>
+        <p>仓库是一个 Bun workspace（根 <code>package.json</code> 的 <code>workspaces: ["packages/*", "tools/*"]</code>）。<code>packages/*</code> 是<strong>运行时库</strong>（被 <code>import</code>）；<code>tools/*</code> 是<strong>构建期 / 操作员 CLI</strong>（<code>bun link</code> 上系统 PATH、不被 <code>import</code>）。<code>images/</code> 与 <code>programs/</code> 是仓库顶层<strong>内容目录</strong>、都<strong>不是 package</strong>（无人 <code>import</code>）——它们是 git 跟踪的源/管理面，各有一条「源目录 → 发版工具 → 外部产物」的对称管线：</p>
         <pre><code>aprog/
-├ packages/
+├ packages/                                  运行时库（被 import）
 │ ├ control-plane/   @aprog/control-plane  — 北向 API + 进程编排 + 流中枢（host service）
-│ ├ sandbox/         @aprog/sandbox        — A 平面 provider 运行时库 + aprog-bake
+│ ├ sandbox/         @aprog/sandbox        — A 平面 provider 运行时库（create/destroy，被 CP import）
 │ ├ driver/          @aprog/driver         — 沙箱内常驻 driver（烘进镜像，非源码依赖）
 │ ├ protocol/        @aprog/protocol       — engine-neutral 事件 + 信封（叶子，无依赖）
 │ ├ log/             @aprog/log            — 共享结构化日志（叶子，无依赖）
 │ └ web/             @aprog/web            — Solid.js「OS 桌面」前端
-├ images/            （非 package）镜像目录：&lt;名&gt;/&lt;版本&gt;/bake.ts，由 aprog-bake 跑
+├ tools/                                     构建期 / 操作员 CLI（bun link 上 PATH，一工具一包）
+│ └ bake/            @aprog/bake           — aprog-bake：锚仓库根跑 images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts
+├ images/            （非 package）镜像源：&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts —— aprog-bake → 厂商 snapshot
+├ programs/          （非 package）程序源：&lt;类&gt;/&lt;名&gt;/[&lt;版本&gt;/]SKILL.md —— aprog-publish → OCI 包
 └ docs/              本文档站</code></pre>
         <div class="tbl-wrap"><table>
           <thead><tr><th>包</th><th>出处</th><th>跑在哪</th><th>入口 / 产物</th></tr></thead>
           <tbody>
             <tr><td><a href="#control-plane"><code>@aprog/control-plane</code></a></td><td>aprog</td><td>aprog VM（长跑 service）</td><td><code>bun run src/index.ts</code> → HTTP :8099</td></tr>
-            <tr><td><a href="#sandbox"><code>@aprog/sandbox</code></a></td><td>aprog</td><td>构建期 CLI / 被 CP import</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt;</code>（bin）；库供 CP</td></tr>
+            <tr><td><a href="#sandbox"><code>@aprog/sandbox</code></a></td><td>aprog</td><td>被 CP import 的运行时库</td><td>库供 CP（create/destroy）；<strong>无 bin</strong></td></tr>
             <tr><td><a href="#driver"><code>@aprog/driver</code></a></td><td>aprog</td><td>沙箱内（烘进镜像）</td><td>entrypoint 自启，<strong>无 host 入口</strong></td></tr>
             <tr><td><a href="#protocol"><code>@aprog/protocol</code></a></td><td>aprog</td><td>库</td><td>被 control-plane / driver import</td></tr>
             <tr><td><a href="#log"><code>@aprog/log</code></a></td><td>aprog</td><td>库</td><td>被 sandbox import</td></tr>
             <tr><td><a href="#web"><code>@aprog/web</code></a></td><td>aprog</td><td>用户浏览器</td><td><code>vite</code> dev :5174 / <code>vite build</code></td></tr>
-            <tr><td><a href="#images"><code>images/</code></a></td><td>aprog</td><td>构建期</td><td>经 <code>aprog-bake</code> 跑 <code>bake.ts</code></td></tr>
+            <tr><td><a href="#tools"><code>@aprog/bake</code>（tools/）</a></td><td>aprog</td><td>构建期 CLI（上 PATH）</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt; &lt;供应商&gt;</code>（bin）</td></tr>
+            <tr><td><a href="#images"><code>images/</code></a></td><td>aprog</td><td>构建期</td><td>经 <code>aprog-bake</code> 跑 <code>bake.ts</code> → Daytona snapshot</td></tr>
+            <tr><td><a href="#programs"><code>programs/</code></a></td><td>aprog</td><td>沙箱内（进程的 skill）</td><td>经 <code>aprog-publish</code> 发 OCI 包（GHCR）→ spawn 时拉取</td></tr>
           </tbody>
         </table></div>
 
@@ -61,8 +66,9 @@
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#2a9d5c"></span>sandbox</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#9a6700"></span>log</span><span style="color:var(--fg-subtle)">·</span><span class="chip">@daytonaio/sdk</span><span class="nd" style="font-size:11.5px">外部</span></div>
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>driver</span><span style="color:var(--fg-subtle)">───►</span><span class="chip"><span class="cdot" style="background:#6e7781"></span>protocol</span><span style="color:var(--fg-subtle)">·</span><span class="chip">engine SDK</span><span class="nd" style="font-size:11.5px">外部,在镜像里</span></div>
             <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#0969da"></span>control-plane</span><span style="color:var(--fg-subtle)">┈┈►</span><span class="chip"><span class="cdot" style="background:#8250df"></span>driver</span><span class="nd" style="font-size:11.5px">镜像内容依赖,<strong>非源码</strong></span></div>
+            <div class="dgm-row"><span class="chip"><span class="cdot" style="background:#8250df"></span>driver</span><span style="color:var(--fg-subtle)">┄ OCI pull ►</span><span class="chip"><span class="cdot" style="background:#6e40c9"></span>程序包(OCI)</span><span class="nd" style="font-size:11.5px">spawn 时拉 <code>programs/</code> 发布的包,<strong>非源码 import</strong></span></div>
           </div>
-          <div class="dgm-cap"><b>───►</b> 源码依赖　·　<b>┈┈►/┄►</b> 运行时 / 镜像内容依赖。<code>protocol</code> 与 <code>log</code> 是叶子（零依赖）。</div>
+          <div class="dgm-cap"><b>───►</b> 源码依赖　·　<b>┈┈►/┄►</b> 运行时 / 镜像内容 / OCI 内容依赖。<code>protocol</code> 与 <code>log</code> 是叶子（零依赖）；<code>images/</code> 与 <code>programs/</code> 是<strong>内容</strong>——被消费/拉取，不被 <code>import</code>。</div>
         </div>
         <div class="note ok">
           <span class="note-label">两条「非源码」边是有意的</span>
@@ -88,19 +94,29 @@
         <p>实现分层（翻译膜 / 请求生命周期 / <code>Deps</code> 接缝）见 <a href="api-impl.html">控制平面 API 实现</a>；数据表见 <a href="data-model.html">数据模型</a>。</p>
 
         <h2 id="sandbox">@aprog/sandbox</h2>
-        <p>A 平面：把沙箱当「被托管的资源」。一个<strong>精瘦运行时 provider 库</strong>（被 control-plane import）+ 一个 <code>aprog-bake</code> CLI。源码依赖 <code>@aprog/log</code>，外部 <code>@daytonaio/sdk</code>。</p>
+        <p>A 平面：把沙箱当「被托管的资源」。<strong>纯运行时 provider 库</strong>（被 control-plane import），<strong>不含任何 bin</strong>。源码依赖 <code>@aprog/log</code>，外部 <code>@daytonaio/sdk</code>。</p>
         <pre><code>src/
   provider.ts         SandboxProvider (create / destroy,仅此)
   providers/daytona.ts · e2b.ts   各厂商运行时实现
   types.ts            ImageRef / Resources / SandboxHandle / ProviderId
   config.ts           DaytonaConfig 等 provider 入参契约
   errors.ts           SandboxError 体系 + mapDaytonaError
-  index.ts            单一出口(只导运行时那半)
-  cli.ts              aprog-bake:按「名+版本」跑 images/&lt;名&gt;/&lt;版本&gt;/bake.ts</code></pre>
+  index.ts            单一出口(只导运行时那半)</code></pre>
         <div class="note">
           <span class="note-label">打镜像不在这个包</span>
-          早先的 <code>ImageBaker / ImageBuilder</code> 策略接缝（过度设计）已拆除。镜像 = 仓库顶层 <a href="#images"><code>images/</code></a> 目录，每版本一个 <code>bake.ts</code> 直调厂商 SDK；<code>cli.ts</code> 只是 runner。见 <a href="sandbox.html">沙箱与镜像</a>。
+          早先的 <code>ImageBaker / ImageBuilder</code> 策略接缝（过度设计）已拆除。镜像 = 仓库顶层 <a href="#images"><code>images/</code></a> 目录，每版本下<strong>每供应商</strong>一个 <code>bake.ts</code> 直调该厂商 SDK；跑 <code>bake.ts</code> 的 runner 是 <a href="#tools"><code>tools/bake</code></a>（<code>aprog-bake</code>），<strong>已搬出本包</strong>——它与 sandbox 运行时代码零耦合，只认 <code>images/</code> 约定。见 <a href="sandbox.html">沙箱与镜像</a>。
           control-plane 对本包的耦合面就两处 <code>import type</code>（<code>DaytonaConfig</code> / <code>SandboxHandle</code>）。
+        </div>
+
+        <h2 id="tools">tools/ —— 构建期 / 操作员 CLI</h2>
+        <p>第三个物种：既不是被 <code>import</code> 的运行时库（<code>packages/*</code>），也不是被跑的内容（<code>images/*</code>），而是<strong>命令行工具</strong>。<code>tools/*</code> 是 workspace 包，<strong>一工具一包</strong>（与 <code>images/&lt;名&gt;/&lt;版本&gt;/</code> 同构：自包含目录、自带依赖、<code>ls</code> 即枚举），靠 <code>bun link</code> 软链进 <code>~/.bun/bin</code> 上系统 PATH。</p>
+        <pre><code>tools/
+  bake/   @aprog/bake   bin: aprog-bake   deps: citty(help/arg)
+    src/bake.ts   findRepoRoot(import.meta.dir 已解析软链) → images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code></pre>
+        <div class="note">
+          <span class="note-label">路径靠两层约定，与 cwd 无关</span>
+          <strong>L1 工具→仓库根</strong>：锚定 <code>import.meta.dir</code>（Bun 把 <code>~/.bun/bin</code> 的软链解析成<strong>真实仓库内位置</strong>）向上找标记 = <code>name==="aprog"</code> 的工作区根 <code>package.json</code>，再经 <code>APROG_REPO_ROOT</code> 传给 <code>bake.ts</code>（免得 bake.ts 自己数上溯层数）。<strong>L2 参数→目标</strong>：<code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code>（文件系统即 registry）。由此 <code>aprog-bake</code> 永远操作「它被 <code>bun link</code> 的那个仓库」的 <code>images/</code>，在任何目录敲都对。
+          依赖三层：共享基建（citty）各包自 dep、Bun 跨包去重；工具专属重依赖归各自包；被 <code>images/</code> 下 <code>bake.ts</code>（内容、非包）import 的依赖（<code>@daytonaio/sdk</code>）归仓库根。
         </div>
 
         <h2 id="driver">@aprog/driver</h2>
@@ -134,9 +150,30 @@
 
         <h2 id="images">images/（非 package）</h2>
         <p>
-          仓库顶层的镜像目录：<code>images/&lt;名&gt;/&lt;版本&gt;/bake.ts</code>，每个版本自包含。<strong>不是 workspace 成员、无人 import</strong>——它是构建期内容，由 <code>aprog-bake &lt;名&gt; &lt;版本&gt;</code> 跑对应 <code>bake.ts</code>（直调 <code>@daytonaio/sdk</code>，SDK 在根 devDependencies 以便解析）。当前有 <code>images/base/0.1.0/</code>。
+          仓库顶层的镜像目录：<code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code>。版本目录 = 逻辑镜像（中立），其下按<strong>供应商</strong>分子目录各自打包。<strong>不是 workspace 成员、无人 import</strong>——它是构建期内容，由 <code>aprog-bake &lt;名&gt; &lt;版本&gt; &lt;供应商&gt;</code> 跑对应 <code>bake.ts</code>（直调 <code>@daytonaio/sdk</code>，SDK 在根 devDependencies 以便解析）。当前有 <code>images/base/0.1.0/daytona/</code>。
           目录模型、版本=目录名、工具=材料等见 <a href="sandbox.html#image">沙箱与镜像</a>；程序如何依赖镜像见 <a href="data-model.html#program-versions">data-model · program_versions</a>。
         </p>
+
+        <h2 id="programs">programs/（非 package）</h2>
+        <p>
+          仓库顶层的<strong>程序源目录</strong>——平台<strong>内置</strong>、随平台一起暴露给用户的那批智能程序。和 <a href="#images">images/</a> 一样<strong>不是 workspace 成员、无人 <code>import</code></strong>：它是 git 跟踪的<strong>源 / 管理面</strong>，发版产物在外部 registry。按 <code>SKILL.md</code> frontmatter 的 <code>kind</code> 两分：
+        </p>
+        <pre><code>programs/
+├ applications/   kind: application — 有执行模型(FSM/阶段/产物)，被运行     design · shape · skin · grasp
+│ └ &lt;名&gt;/[&lt;版本&gt;/]SKILL.md
+└ libraries/      kind: library     — 封装协议/机制，被引用而非被执行       state · live-annotate
+  └ &lt;名&gt;/[&lt;版本&gt;/]SKILL.md</code></pre>
+        <p>
+          依赖单向：<code>application → library</code>（如 <code>design</code> 依赖 <code>state</code> 状态协议 + <code>live-annotate</code> 预览/批注）。这是「三公民」（Library / Program / Capability）里的 <strong>Program + Library</strong> 两层；Capability（给底层 harness 调的 CLI / MCP 工具）另有其家。
+        </p>
+        <p>发版管线与<a href="sandbox.html#image">镜像</a><strong>逐字对称</strong>——源目录在 git、产物在外部 registry：</p>
+        <pre><code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/SKILL.md   ──aprog-publish──►  OCI artifact (GHCR)  → digest
+images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts   ──aprog-bake────►  厂商 snapshot        → ImageRef</code></pre>
+        <p>「<strong>git 是真相，registry 只存产物</strong>」。OCI 包形态、依赖闭包解析、spawn 拉取、库表降为投影等见 <a href="program-package.html">程序与发版</a>。</p>
+        <div class="note warn">
+          <span class="note-label">现状要补一层</span>
+          磁盘上现在是 <code>programs/&lt;类&gt;/&lt;名&gt;/SKILL.md</code>，<strong>还缺 <code>/&lt;版本&gt;/</code> 这层</strong>；catalog 也还是 <code>control-plane/src/catalog/programs.ts</code> 里一个写死的 const。目标：补成 <code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/</code>，并由 <code>aprog-publish</code> 从 git 源 + OCI digest 投影出库表、取代 const（见 <a href="program-package.html#local">program-package · 本地管理</a> 与 <a href="data-model.html#program-versions">data-model · program_versions</a>）。
+        </div>
 
         <h2 id="planes">A / B 平面 → 落到哪些代码</h2>
         <div class="tbl-wrap"><table>
@@ -147,7 +184,8 @@
             <tr><td>事件流（seq / 扇出 / 重放）</td><td><code>control-plane/src/stream/</code>（hub · store · resync）+ <code>api/sse.ts</code></td></tr>
             <tr><td>检查点 / git</td><td><code>control-plane/src/persistence/checkpoint.ts</code> + 进程仓库网关 <code>process/repo-gateway.ts</code>；driver 侧 <code>fs.ts</code> / <code>bundle.ts</code>（见 <a href="proc-storage.html">Git 模型</a>）</td></tr>
             <tr><td>程序目录 / 数据模型</td><td><code>control-plane/src/catalog/</code> · <code>db/index.ts</code> · <code>process/manager.ts</code></td></tr>
-            <tr><td>镜像构建</td><td><code>images/</code> + <code>sandbox/src/cli.ts</code>（<code>aprog-bake</code>）</td></tr>
+            <tr><td>镜像构建</td><td><code>images/</code> + <code>tools/bake/src/bake.ts</code>（<code>aprog-bake</code>）→ Daytona snapshot</td></tr>
+            <tr><td>程序发版</td><td><code>programs/</code> + <code>aprog-publish</code>（规划，对称 <code>aprog-bake</code>）→ OCI 包；见 <a href="program-package.html">程序与发版</a></td></tr>
           </tbody>
         </table></div>
 
@@ -156,7 +194,8 @@
           <thead><tr><th>包</th><th>开发</th><th>构建 / 起</th><th>校验</th></tr></thead>
           <tbody>
             <tr><td>control-plane</td><td><code>bun run dev</code>（--watch）</td><td><code>bun run start</code> → :8099</td><td><code>bun run typecheck</code> · <code>bun test</code></td></tr>
-            <tr><td>sandbox</td><td>—</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt;</code>（bin）</td><td><code>typecheck</code> · <code>bun test</code></td></tr>
+            <tr><td>sandbox</td><td>—</td><td>纯库（无 bin）</td><td><code>typecheck</code> · <code>bun test</code></td></tr>
+            <tr><td>tools/bake</td><td>—</td><td><code>aprog-bake &lt;名&gt; &lt;版&gt; &lt;供应商&gt;</code>（bin，<code>bun link</code> 上 PATH）</td><td><code>typecheck</code></td></tr>
             <tr><td>web</td><td><code>vite</code>（:5174 HTTPS）</td><td><code>tsc -b &amp;&amp; vite build</code></td><td>（随 build）</td></tr>
             <tr><td>driver</td><td>烘进镜像、沙箱内自启</td><td>随镜像</td><td><code>typecheck</code> · <code>bun test</code></td></tr>
             <tr><td>protocol / log</td><td>纯库</td><td>—</td><td>（log: typecheck）</td></tr>

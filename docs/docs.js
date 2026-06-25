@@ -25,6 +25,7 @@
     {
       group: '架构',
       items: [
+        { page: 'modules',      label: '系统模块鸟瞰' },
         { page: 'architecture', label: '三层抽象' },
         { page: 'components',    label: '组件清单' },
         { page: 'code-architecture', label: '代码架构' },

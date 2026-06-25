@@ -1,11 +1,13 @@
 // control-plane 运行配置。从环境变量读（占位默认值便于本地起）。
-// provider 各自的配置形状（如 DaytonaConfig）住在 @aprog/sandbox——它是 provider 入参契约，
-// 这里只 import 再组合进总 Config。
+// provider 各自的细配置（imageId / driver bundle 路径 / apiKey）由 buildSandboxGateway 直接读环境变量，
+// 这里只保留「选哪个 provider」这一选择器——多供应商的形态体现在这个可扩展的选择上。
 
-import type { DaytonaConfig } from '@aprog/sandbox';
 import type { GitHubRepoConfig } from './process/repo-gateway.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+/** 沙箱 provider 选择。多供应商是设计形态；当前现实只接得了 AgentBay（出站开放），故仅此一家 + mock 兜底。 */
+export type SandboxProviderKind = 'agentbay' | 'mock';
 
 export interface Config {
   /** API 监听端口。 */
@@ -15,14 +17,17 @@ export interface Config {
   dataDir: string;
   /** driver 拨回的控制平面地址（注入沙箱环境，driver 据此回连）。 */
   controlPlaneUrl: string;
+  /** 注入沙箱、供引擎(Claude Code→GLM)鉴权的密钥（= 沙箱内 ANTHROPIC_AUTH_TOKEN）。
+   *  非密钥路由配置（base_url/模型映射）已烘进镜像 settings.json，唯独这把 token 运行时注入、不烘入快照。
+   *  未设则不注入（沙箱里的 claude 会缺鉴权）。 */
+  engineAuthToken?: string;
   /** 前端基址：邮件里的验证链接指向它（<url>/?token=…）。 */
   webUrl: string;
   /** SMTP 发信配置；未设则回退到 console 打印（开发态）。 */
   smtp?: SmtpConfig;
-  /** 沙箱提供方配置。 */
+  /** 沙箱提供方选择。未显式设 APROG_SANDBOX_PROVIDER 时：有 AGENTBAY_API_KEY 走 agentbay，否则 mock。 */
   sandbox: {
-    provider: 'daytona';
-    daytona: DaytonaConfig;
+    provider: SandboxProviderKind;
   };
   /** 进程仓库提供方（GitHub）。未配 GITHUB_TOKEN 则为 undefined（→ MockRepoGateway，造假 URL）。 */
   github?: GitHubRepoConfig;
@@ -44,22 +49,21 @@ export function loadConfig(): Config {
     port: Number(process.env.APROG_PORT ?? 8099),
     dataDir: process.env.APROG_DATA_DIR ?? join(homedir(), '.aprog'),
     controlPlaneUrl: process.env.APROG_CONTROL_PLANE_URL ?? 'https://localhost:8099',
+    engineAuthToken: process.env.APROG_ENGINE_AUTH_TOKEN || undefined,
     webUrl: process.env.APROG_WEB_URL ?? 'https://localhost:5174',
     smtp: loadSmtp(),
     github: loadGithub(),
     sandbox: {
-      provider: 'daytona',
-      daytona: {
-        apiKey: process.env.DAYTONA_API_KEY,
-        apiUrl: process.env.DAYTONA_API_URL,
-        target: process.env.DAYTONA_TARGET,
-        createTimeoutSec: Number(process.env.APROG_DAYTONA_CREATE_TIMEOUT_SEC ?? 120),
-        destroyTimeoutSec: Number(process.env.APROG_DAYTONA_DESTROY_TIMEOUT_SEC ?? 60),
-        maxRetries: Number(process.env.APROG_DAYTONA_MAX_RETRIES ?? 2),
-        autoStopIntervalMin: Number(process.env.APROG_DAYTONA_AUTOSTOP_MIN ?? 30),
-      },
+      provider: resolveSandboxProvider(),
     },
   };
+}
+
+/** 选 provider：显式 APROG_SANDBOX_PROVIDER 优先；未设时有 AGENTBAY_API_KEY 走 agentbay，否则 mock。 */
+function resolveSandboxProvider(): SandboxProviderKind {
+  const want = process.env.APROG_SANDBOX_PROVIDER;
+  if (want === 'agentbay' || want === 'mock') return want;
+  return process.env.AGENTBAY_API_KEY ? 'agentbay' : 'mock';
 }
 
 /** 从环境变量读 GitHub 仓库配置；未设 GITHUB_TOKEN 则返回 undefined（回退 MockRepoGateway）。

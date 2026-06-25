@@ -40,7 +40,7 @@
         <div class="tbl-wrap"><table>
           <thead><tr><th>git 概念</th><th>aprog 对应</th></tr></thead>
           <tbody>
-            <tr><td>仓库（bare，权威副本）</td><td>一个进程的耐久状态,托管在 CP 侧 <code>/srv/aprog-repos/&lt;pid&gt;.git</code></td></tr>
+            <tr><td>仓库（私有，权威副本）</td><td>一个进程的耐久状态,托管在 <strong>GitHub 私有仓库</strong> <code>aprog-proc-&lt;pid&gt;</code></td></tr>
             <tr><td>工作树</td><td>运行中沙箱里的进程目录(沙箱<strong>临时盘</strong>,不挂持久卷)</td></tr>
             <tr><td>一次 commit</td><td>一个检查点 / 保存点(不可变快照)</td></tr>
             <tr><td>commit SHA(HEAD)</td><td>最新检查点 = 仓库自身的 HEAD(<strong>不入 PCB</strong>,<code>git ls-remote</code> 可查)</td></tr>
@@ -60,8 +60,8 @@
 
         <p><strong>① spawn 的附加动作:建一个空仓库</strong></p>
         <p>
-          <a href="flows.html#spawn">spawn</a> 除了插 <a href="data-model.html#process">PCB 行</a>,还建一个 bare 仓库:CP 托管时是 <code>git init --bare /srv/aprog-repos/aprog-proc-&lt;pid&gt;.git</code>(外部 host 则调对方 API 建库)。
-          CP 托管路径是<strong>纯控制平面文件操作</strong>(毫秒级、不碰沙箱),与「spawn 只在控制平面记一笔、瞬时返回」一致——不像 <a href="proc-wake.html">wake</a> 那样要等几秒起沙箱。
+          <a href="flows.html#spawn">spawn</a> 除了插 <a href="data-model.html#process">PCB 行</a>,还<strong>调 GitHub API 建一个私有空库</strong> <code>aprog-proc-&lt;pid&gt;</code>(<code>auto_init=false</code>,见 <code>control-plane/src/process/repo-gateway.ts</code>)。
+          这是<strong>一次纯控制平面的 API 调用</strong>(亚秒级、不碰沙箱),与「spawn 只在控制平面记一笔、瞬时返回」一致——不像 <a href="proc-wake.html">wake</a> 那样要等几秒起沙箱。建库用的是 CP 的签发方密钥(见 <a href="#credentials">凭证与令牌</a>)。
         </p>
         <div class="note">
           <span class="note-label">建空 repo,不提交 commit-0</span>
@@ -84,8 +84,47 @@
         </p>
         <div class="note">
           <span class="note-label">repo_url 里不放凭证</span>
-          <code>repo_url</code> 只是位置(如 <code>https://&lt;cp&gt;/aprog-proc-&lt;pid&gt;.git</code>);push / clone 用的<strong>每进程 deploy 凭证</strong>另走(见 <a href="#transport">耐久传输</a>),不进这列、也不进 git。
+          <code>repo_url</code> 只是位置(GitHub clone URL,如 <code>https://github.com/&lt;owner&gt;/aprog-proc-&lt;pid&gt;.git</code>);push / clone 用的<strong>短期 App 令牌</strong>由 CP 现签、另走(见 <a href="#credentials">凭证与令牌</a>),不进这列、也不进 git。
           要不要再拆成 <code>repo_host</code> + <code>repo_name</code>?除非要让 host 随意搬而不改名,否则一个 <code>repo_url</code> 最贴合「实际地址」,先这样。
+        </div>
+
+        <h2 id="credentials">凭证与令牌</h2>
+        <p>
+          仓库在 GitHub 上,三方都要碰它,但权限和寿命各不相同。原则一句话:<strong>只有一把长寿密钥留在 CP,其余全是 CP 现签的、钉死到单个库、最小权限、自动过期的能力令牌</strong>——和 <a href="program-package.html#pull">OCI 拉取的短期票</a>同一套模型(种子里两张短票:拉 registry + 读写 git)。
+        </p>
+
+        <p><strong>① 签发方:GitHub App,不是 classic PAT</strong></p>
+        <p>
+          classic PAT 是全有或全无、没法派生子令牌、最短寿命也太长。换成 <strong>GitHub App</strong>:CP 只持有 <strong>App 私钥</strong>(这才是「真凭证」,永不出 CP),App 拥有 <code>Administration</code>(建/删库)+ <code>Contents</code>(读写)两项权限。
+          CP 用 <code>POST /app/installations/{id}/access_tokens</code> 现签 <strong>installation token</strong>,body 里 <code>repositories:[aprog-proc-&lt;pid&gt;]</code> + <code>permissions:{contents: write|read}</code> → 令牌<strong>只能碰这一个库、只能读或读写内容、≤1 小时自动过期、可主动吊销</strong>。
+        </p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>角色</th><th>操作</th><th>权限范围</th><th>寿命</th><th>来源</th></tr></thead>
+          <tbody>
+            <tr><td><strong>CP</strong></td><td>建库 / 删库</td><td>App 私钥（<code>Administration</code>）</td><td>长寿,仅在 CP,永不外发</td><td>自己</td></tr>
+            <tr><td><strong>driver</strong></td><td>pull + push</td><td>单库 <code>Contents:write</code></td><td>≤1h,绑唤醒会话,休眠即终</td><td>CP 现签</td></tr>
+            <tr><td><strong>web</strong></td><td>pull（只读）</td><td>—（不发令牌）</td><td>—</td><td>走 <a href="#frontend">CP 代理</a></td></tr>
+          </tbody>
+        </table></div>
+        <p><code>Contents:write</code> 天然<strong>不含建/删库</strong>(那是 <code>Administration</code>)——正好是「能拉能推、不能新建删除」。</p>
+
+        <p><strong>② driver 令牌的寿命 = 会话寿命</strong></p>
+        <div class="dgm">
+          <div class="dgm-stack tight">
+            <div class="node c-cp"><span class="nt">唤醒签发</span><span class="nd">CP 现签一张 write 票,放进 <a href="proc-wake.html#flow">wake 第 ⑤ 步</a>的种子里下发(和 OCI 票一起)。</span></div>
+            <div class="node c-driver"><span class="nt">运行中续签</span><span class="nd">会话常 &gt; 1h,CP 在到期前经 <a href="#driverchannel">DriverChannel</a> 主动推新票,driver 换掉 git 凭证助手里的旧票。driver 不持长令牌、不管定时。</span></div>
+            <div class="node c-bad"><span class="nt">休眠即终</span><span class="nd">休眠流程 = 通知 driver 推完最后检查点 → CP <strong>停续签 + 吊销当前票</strong>。令牌当场死;就算信令丢,≤1h 自动过期兜底。</span></div>
+          </div>
+          <div class="dgm-cap">钉死到单库 + 只读写内容 → 即使泄露,爆炸半径 = 这一个进程的状态库、≤1h、删不掉库也碰不到别的库。</div>
+        </div>
+
+        <p><strong>③ web:浏览器里不存 git 令牌</strong></p>
+        <p>
+          浏览器里的令牌在 devtools / network 里明文可见,比沙箱更不可信。而前端本就<strong>只跟 CP 说话</strong>。所以「拉最新状态」走 <strong>web → CP → GitHub</strong>:CP 用自己的 App 令牌读库、按 <a href="api.html">authorize(user,pid,role)</a> 鉴权后把 tree/blob 喂前端(见 <a href="#frontend">前端</a>)。<strong>浏览器里一张 git 令牌都没有,唯一对端仍是 CP。</strong>
+        </p>
+        <div class="note">
+          <span class="note-label">为什么 driver 直连、web 代理</span>
+          不对称是有意的:<strong>driver 的 git 流量大</strong>(push 检查点 / clone),直连 GitHub 才不挤占 control-stream(和 <a href="program-package.html#pull">OCI 直连拉取</a>同理),沙箱里那张短票满足「只有临时窄权令牌」;<strong>web 只读、且在浏览器里</strong>,代理掉才不漏令牌。两边都拿不到「真凭证」(App 私钥)。
         </div>
 
         <h2 id="checkpoint">检查点 = 一次 commit（语义不变）</h2>
@@ -98,7 +137,7 @@
           <tbody>
             <tr><td>此刻一致吗(commit mark)</td><td><strong>程序</strong></td><td>在语义干净点调检查点工具喊一声(mark / 意向)</td></tr>
             <tr><td>何时真捕获</td><td>平台 / driver</td><td><code>turn.end</code> 时若 mark 仍干净 → <code>git add -A &amp;&amp; git commit</code></td></tr>
-            <tr><td>怎么耐久</td><td>平台 / driver</td><td><code>git push</code> 到 CP bare remote(去抖,见 <a href="#transport">耐久传输</a>)</td></tr>
+            <tr><td>怎么耐久</td><td>平台 / driver</td><td><code>git push</code> 到 GitHub remote(去抖,见 <a href="#transport">耐久传输</a>)</td></tr>
             <tr><td>装什么</td><td>协议</td><td>进程目录的 <strong>state 子集</strong>(<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code> / <code>artifacts/</code>);<strong>不含</strong> <code>session.jsonl</code>(引擎私有缓存,<a href="#open">artifacts 见开放点</a>)</td></tr>
           </tbody>
         </table></div>
@@ -111,18 +150,18 @@
 
         <h2 id="transport">耐久传输:git push,不再走 B 平面</h2>
         <p>
-          沙箱本地盘随时可能没(回收 / OOM / 崩溃)。耐久靠把 commit <strong>推到 CP 托管的 bare 仓库</strong>——
-          这就是「同步到控制平面」的全部,<strong>不再有经 DriverChannel 的自定义检查点传输</strong>。
+          沙箱本地盘随时可能没(回收 / OOM / 崩溃)。耐久靠把 commit <strong>直接 push 到 GitHub 私有仓库</strong>——
+          driver 持 CP 现签的短期令牌直连 GitHub(大块 git 流量不挤占 control-stream,和 <a href="program-package.html#pull">OCI 直连拉取</a>同理),<strong>不再有经 DriverChannel 的自定义检查点传输</strong>。
         </p>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
             <div class="node c-sandbox" style="flex:1">
               <span class="nt">沙箱(工作树)</span>
-              <span class="nd"><code>turn.end</code> → <code>commit</code> → <code>git push</code> 到 CP remote。持<strong>每进程一把、仅授权该 repo</strong> 的 deploy 凭证(短时、可轮换)。</span>
+              <span class="nd"><code>turn.end</code> → <code>commit</code> → <code>git push</code> 直连 GitHub。持 CP 现签的<strong>单库 <code>Contents:write</code> 短票</strong>(≤1h、休眠即终,见 <a href="#credentials">凭证</a>)。</span>
             </div>
-            <div class="node c-cp" style="flex:1">
-              <span class="nt">CP 托管 bare repo</span>
-              <span class="nd"><code>/srv/aprog-repos/&lt;pid&gt;.git</code>。耐久真相在此,跨厂商。CP 退化成<strong>一个哑 git 端点 + 鉴权门</strong>,不再是自定义 relay。</span>
+            <div class="node c-program" style="flex:1">
+              <span class="nt">GitHub 私有仓库</span>
+              <span class="nd"><code>aprog-proc-&lt;pid&gt;</code>。耐久真相在此,跨厂商。CP <strong>不托管 git</strong>,只当建库方 + 令牌签发方 + 前端读代理。</span>
             </div>
             <div class="node c-muted" style="flex:1">
               <span class="nt">wake = clone</span>
@@ -145,7 +184,7 @@
         <div class="tbl-wrap"><table>
           <thead><tr><th>前端要的</th><th>来源</th><th>机制</th></tr></thead>
           <tbody>
-            <tr><td>进程状态 / 文件 / 产物 / 保存点历史 / diff</td><td><strong>git</strong>(CP 托管 bare repo)</td><td>smart-HTTP 按 <code>ref</code> 读 tree/blob;<strong>只读已提交</strong></td></tr>
+            <tr><td>进程状态 / 文件 / 产物 / 保存点历史 / diff</td><td><strong>git</strong>(GitHub 私有仓库),<strong>经 CP 代理读</strong></td><td>CP 用 App 令牌按 <code>ref</code> 读 tree/blob 转发;<strong>只读已提交</strong></td></tr>
             <tr><td>对话 / 事件(live + 回放)</td><td><strong>CP 事件流</strong></td><td>SSE <code>subscribe({from:seq})</code>(见 <a href="protocol.html">事件流协议</a>)</td></tr>
             <tr><td>新保存点通知</td><td><strong>CP 事件流</strong>(一种事件)</td><td>收到 <code>checkpoint-committed{ref}</code> → 按新 ref 重拉 git</td></tr>
             <tr><td>spawn / wake / hibernate / kill · input / 打断</td><td><strong>CP</strong> REST</td><td>不变</td></tr>
@@ -158,9 +197,9 @@
         </div>
         <div class="note">
           <span class="note-label">鉴权 + 单对端</span>
-          浏览器不能拿裸 repo 访问——「谁能看这个进程」的授权仍在 CP(<a href="api.html">authorize(user,pid,role)</a>)。
-          做法:<strong>CP 给 git smart-HTTP 加一道薄鉴权门</strong>,前端用<strong>同一个会话</strong>请求 <code>…/&lt;pid&gt;.git/</code>,同源、同 token。
-          于是<strong>前端唯一网络对端仍是 CP</strong>,只是对它说三种话:REST + SSE + git-http。CP 退出数据搬运,仍是<strong>策略权威</strong>。
+          浏览器里不放任何 git 令牌——「谁能看这个进程」的授权仍在 CP(<a href="api.html">authorize(user,pid,role)</a>)。
+          做法:<strong>CP 用自己的 App 令牌去 GitHub 读</strong>,鉴权通过后把 tree/blob 转发给前端;前端用<strong>同一个会话</strong>请求 CP 的读代理端点,同源、同 token(见 <a href="#credentials">凭证与令牌 · web</a>)。
+          于是<strong>前端唯一网络对端仍是 CP</strong>,只是对它说三种话:REST + SSE + git 读代理。CP 退出耐久搬运(driver 直连 GitHub),但仍是<strong>读代理 + 策略权威</strong>。
         </div>
 
         <h2 id="driverchannel">DriverChannel 瘦身</h2>
@@ -185,8 +224,8 @@
         <h2 id="open">开放点</h2>
         <ul>
           <li><strong>artifacts/ 大二进制</strong>:权威产物但可能大。进同一 git(靠 LFS),还是单列 blob 路径?倾向 LFS 起步,实测再调。</li>
-          <li><strong>remote 托管位置</strong>:默认 <strong>CP 托管 bare repo</strong>(保住单对端 + 单鉴权);是否允许指向外部 host(Gitea/Forgejo)做卸载?那会让前端多一个对端,暂不开。</li>
-          <li><strong>shallow / 历史保留</strong>:沙箱 <code>--depth=1</code>;CP 侧全历史保留(去重后很便宜);是否需要 GC / 老 commit 归档,留待规模上来再定。</li>
+          <li><strong>remote 托管位置</strong>:<strong>已定 = GitHub 私有仓库</strong>。前端单对端由 <a href="#frontend">CP 读代理</a>保住(浏览器不直连 GitHub),driver 则 <a href="#credentials">直连推送</a>卸载大流量;换别的 host(Gitea/Forgejo)只需换 <code>RepoGateway</code> 签发方实现,编排不动。</li>
+          <li><strong>shallow / 历史保留</strong>:沙箱 <code>--depth=1</code>;GitHub 侧全历史保留(去重后很便宜);是否需要 GC / 老 commit 归档,留待规模上来再定。</li>
           <li><strong>checkpoint-committed 事件</strong>:作为 <a href="protocol.html">协议</a> 的一种事件类型落地,让前端据此重拉 git。</li>
         </ul>
 

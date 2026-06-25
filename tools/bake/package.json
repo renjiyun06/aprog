@@ -1,0 +1,17 @@
+{
+  "name": "@aprog/bake",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aprog-bake CLI —— 构建期工具：把 images/<名>/<版本>/bake.ts 烘成厂商 snapshot。锚定自身真实文件位置找仓库根（import.meta.dir 已解析软链），只与顶层 images/ 目录约定耦合，与运行时库零关系。",
+  "bin": {
+    "aprog-bake": "./src/bake.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "citty": "^0.1.6",
+    "consola": "^3.4.2"
+  }
+}

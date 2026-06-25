@@ -14,12 +14,15 @@ import { ConsoleEmailSender, SmtpEmailSender } from '../auth/email.ts';
 import { ProgramCatalog } from '../catalog/programs.ts';
 import { InstallStore } from '../catalog/installs.ts';
 import { ProcessManager } from '../process/manager.ts';
-import { MockSandboxGateway } from '../process/sandbox-gateway.ts';
+import { ProviderSandboxGateway, MockSandboxGateway, type SandboxGateway } from '../process/sandbox-gateway.ts';
+import { DriverRegistry } from '../driver-channel/registry.ts';
+import { AgentBayProvider, type ImageRef, type Resources, type SandboxProvider } from '@aprog/sandbox';
 import { GitHubRepoGateway, MockRepoGateway } from '../process/repo-gateway.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
 import * as installations from './routes/installations.ts';
 import * as proc from './routes/proc.ts';
+import * as driver from './routes/driver.ts';
 import * as shares from './routes/shares.ts';
 import * as notifications from './routes/notifications.ts';
 import { mountSse } from './sse.ts';
@@ -35,11 +38,14 @@ export function startApi(config: Config): void {
   console.log(`[control-plane] 邮件发送：${config.smtp ? `SMTP ${config.smtp.host}` : 'console（开发态）'}`);
   const catalog = new ProgramCatalog(db); // 启动时把程序目录 upsert 进表
   const installs = new InstallStore(db);
-  // 进程编排：PCB 走 DB；沙箱动作当前用 mock（未对接真实 provider）。
+  // 进程编排：PCB 走 DB；沙箱动作经网关收口。
   // 进程仓库：配了 GITHUB_TOKEN 就真在 GitHub 建私有库，否则 mock（造假 clone URL）。
   const repos = config.github ? new GitHubRepoGateway(config.github) : new MockRepoGateway();
-  const procs = new ProcessManager(db, new MockSandboxGateway(), repos);
-  console.log('[control-plane] 沙箱：mock（未对接真实 provider）');
+  // driver 握手登记簿：网关 create 时登记 bindToken，driver 拨入时认领（routes/driver.ts）。
+  const drivers = new DriverRegistry();
+  // 沙箱网关：按 config.sandbox.provider 选——agentbay 接真实 AgentBay（注入 bindToken + 控制平面地址 + 引擎鉴权），否则 mock。
+  const sandbox = buildSandboxGateway(config, drivers);
+  const procs = new ProcessManager(db, sandbox, repos);
   console.log(
     `[control-plane] 进程仓库：${config.github ? `GitHub（owner=${config.github.owner}）` : 'mock（未配 GITHUB_TOKEN）'}`,
   );
@@ -53,6 +59,7 @@ export function startApi(config: Config): void {
     catalog,
     installs,
     procs,
+    drivers,
     // 以下子系统尚未实现（stream/* 仍是接口）。先用 pending 占位：一旦被处理器触达即抛清晰错误。
     store: pending('StreamStore'),
     hub: pending('StreamHub'),
@@ -64,6 +71,7 @@ export function startApi(config: Config): void {
   programs.mount(router);
   installations.mount(router);
   proc.mount(router);
+  driver.mount(router);
   shares.mount(router);
   notifications.mount(router);
   mountSse(router);
@@ -78,6 +86,40 @@ export function startApi(config: Config): void {
     },
   });
   console.log(`[control-plane] api listening on :${config.port}`);
+}
+
+/**
+ * 装配沙箱网关。按 config.sandbox.provider 选：'agentbay' → 真实 AgentBay；'mock' → mock 兜底。
+ * 多供应商是设计形态（网关本体 ProviderSandboxGateway provider-中立）；当前唯一真实 provider 是 AgentBay。
+ *  · AgentBay：出站开放，driver 不烘镜像、运行时经 fileSystem 推入 + node18 启动；注入 controlPlaneUrl
+ *    （driver 回连地址）+ engineAuthToken（沙箱内 ANTHROPIC_AUTH_TOKEN，路由配置由镜像 settings.json 带）。
+ *  · 换/加厂商：实现一个 SandboxProvider，在此加一个分支注入它 + 对应 resolveImageRef，网关不动。
+ */
+function buildSandboxGateway(config: Config, drivers: DriverRegistry): SandboxGateway {
+  if (config.sandbox.provider !== 'agentbay') {
+    console.log('[control-plane] 沙箱：mock（未配 AGENTBAY_API_KEY，也未指定 APROG_SANDBOX_PROVIDER=agentbay）');
+    return new MockSandboxGateway();
+  }
+
+  const bundlePath = process.env.APROG_DRIVER_BUNDLE;
+  if (!bundlePath) {
+    throw new Error('沙箱 provider=agentbay 需设 APROG_DRIVER_BUNDLE（node-target driver.mjs 路径）');
+  }
+  const engineEnv = config.engineAuthToken ? { ANTHROPIC_AUTH_TOKEN: config.engineAuthToken } : undefined;
+  const resources: Resources = { cpu: 2, memory: 4, disk: 10 };
+  const imageId = process.env.APROG_AGENTBAY_IMAGE ?? 'code_latest';
+  const provider: SandboxProvider = new AgentBayProvider({
+    controlPlaneUrl: config.controlPlaneUrl,
+    injectedEnv: engineEnv,
+    driverBundlePath: bundlePath,
+    defaultImageId: imageId,
+  });
+  // AgentBay 用自家镜像注册表：暂把所有程序映射到一个公共/自定义镜像（catalog 的 snapshot 命名不适用）。
+  const resolveImageRef = (): ImageRef => ({ provider: 'agentbay', id: imageId });
+  console.log(
+    `[control-plane] 沙箱：AgentBay（image=${imageId}，controlPlaneUrl=${config.controlPlaneUrl}，引擎鉴权注入=${engineEnv ? '是' : '否'}）`,
+  );
+  return new ProviderSandboxGateway(provider, drivers, resolveImageRef, resources);
 }
 
 /** 去掉 /v1 版本前缀（端点表省略它，见 docs/api.html#shape）。 */

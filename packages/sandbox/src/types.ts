@@ -2,17 +2,18 @@
 // 所以这些类型是 provider-neutral 的；运行时只认一个不透明的 ImageRef——镜像怎么烘出来的
 // （仓库顶层 images/<名>/<版本>/bake.ts，见 docs/sandbox.html#bake）对运行时不可见。
 
-/** 厂商标识。 */
-export type ProviderId = 'daytona' | 'e2b' | 'northflank' | 'morph';
+/** 厂商标识。多供应商是设计形态——这个联合类型就是扩展点；当前现实只接得了 AgentBay（出站开放），
+ *  故只有一个成员。新增供应商时在此追加（如 'e2b' | 'northflank'）并补对应 SandboxProvider 实现。 */
+export type ProviderId = 'agentbay';
 
 /** 一个已烘好的镜像/快照的不透明引用。怎么烘出来的（声明式/Dockerfile/跑后存）对运行时不可见。 */
 export interface ImageRef {
   provider: ProviderId;
-  /** 厂商侧的句柄：Daytona 的 snapshot 名、E2B 的 template id… */
+  /** 厂商侧的句柄：AgentBay 的 imageId（公共镜像如 code_latest，或自定义镜像 id）… */
   id: string;
 }
 
-/** 资源规格。注意 Daytona 把它烘进 snapshot；别的厂商在 create 时给。 */
+/** 资源规格。注意各厂商口径不同：AgentBay 由 imageId/镜像设置决定，create 不传——这里仅作日志/契约。 */
 export interface Resources {
   cpu: number;     // vCPU
   memory: number;  // GiB

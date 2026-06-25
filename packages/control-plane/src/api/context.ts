@@ -8,6 +8,7 @@ import type { ProcessManager } from '../process/manager.ts';
 import type { StreamStore } from '../stream/store.ts';
 import type { StreamHub } from '../stream/hub.ts';
 import type { DriverChannel } from '../driver-channel/driver-channel.ts';
+import type { DriverRegistry } from '../driver-channel/registry.ts';
 import type { UserStore } from '../auth/users.ts';
 import type { TokenStore } from '../auth/tokens.ts';
 import type { CodeStore } from '../auth/codes.ts';
@@ -50,6 +51,8 @@ export interface Deps {
   hub: StreamHub;
   /** 取某进程当前的 driver 通道（running 时有；input/interrupt/fs 实时穿透用）。 */
   channelFor(pid: number): DriverChannel | undefined;
+  /** driver 握手登记簿：create 沙箱时登记 bindToken，driver 拨入时认领绑定（见 routes/driver.ts）。 */
+  drivers: DriverRegistry;
 }
 
 /** 基础请求上下文（鉴权前）。 */

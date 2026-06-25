@@ -41,7 +41,7 @@
             <div class="ar"><span class="albl">吃一个 ImageRef</span><span class="gly">←</span></div>
             <div class="node c-state" style="min-width:240px">
               <span class="nt">镜像 <span class="tag">不是抽象,是目录</span></span>
-              <span class="nd">仓库里 <code>images/&lt;名&gt;/&lt;版本&gt;/</code> 一个目录,自带 <code>bake.ts</code>。烘出来在厂商侧注册成 snapshot,运行时拿它的 <code>ImageRef</code> 起沙箱(见 <a href="#image">下文</a>)。</span>
+              <span class="nd">仓库里 <code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/</code> 一个目录,自带 <code>bake.ts</code>。烘出来在厂商侧注册成 snapshot,运行时拿它的 <code>ImageRef</code> 起沙箱(见 <a href="#image">下文</a>)。</span>
             </div>
           </div>
           <div class="dgm-cap">
@@ -131,13 +131,15 @@
 
         <h2 id="image">镜像 = 仓库里一个目录</h2>
         <p>
-          在我们这里,「镜像」就是<strong>一个目录</strong>;它下面是各个版本,每个版本也是一个目录,装着<strong>这个镜像需要的一切 + 打镜像脚本</strong>:
+          在我们这里,「镜像」是<strong>抽象的、与平台无关</strong>:一个目录是一个镜像,下面是各版本,<strong>版本目录 = 逻辑镜像(中立)</strong>;
+          再下一层按<strong>供应商</strong>分子目录,各家各自一份打镜像脚本(各家打包方式不同,逻辑镜像一致):
         </p>
         <pre><code>images/
   &lt;镜像名&gt;/              ← 一个镜像 = 一个目录;名字就是目录名
-    &lt;版本&gt;/              ← 一个版本 = 一个自包含子目录
-      bake.ts            ← 这个版本怎么烘(直接调 @daytonaio/sdk)
-      …这个镜像需要的材料
+    &lt;版本&gt;/              ← 一个版本 = 逻辑镜像(中立);跨供应商共享的材料放这层
+      &lt;供应商&gt;/          ← daytona / e2b …(当前只有 daytona)
+        bake.ts          ← 这个版本在该供应商上怎么烘(直接调该厂商 SDK)
+      …跨供应商共享的材料
     &lt;另一个版本&gt;/
       …</code></pre>
         <div class="dgm">
@@ -156,12 +158,19 @@
           </div>
         </div>
 
-        <h2 id="bake">烘焙:跑那个版本目录里的 bake.ts</h2>
+        <h2 id="bake">烘焙:跑那个供应商目录里的 bake.ts</h2>
         <p>
           打镜像就是<strong>跑某版本目录里的 <code>bake.ts</code></strong>——它直接调 <code>@daytonaio/sdk</code> 把 base + 引擎 + 工具拼成 <code>Image</code>、
           <code>snapshot.create</code> 注册成命名 snapshot,返回 <code>ImageRef</code>。一个薄 CLI 把它包成命令:
         </p>
-        <pre><code>aprog-bake &lt;镜像名&gt; &lt;版本&gt;     # = 进 images/&lt;镜像名&gt;/&lt;版本&gt;/ 跑 bake.ts</code></pre>
+        <pre><code>aprog-bake &lt;镜像名&gt; &lt;版本&gt; &lt;供应商&gt;   # = 进 images/&lt;镜像名&gt;/&lt;版本&gt;/&lt;供应商&gt;/ 跑 bake.ts
+aprog-bake base 0.1.0 daytona
+aprog-bake base 0.1.0 daytona --cpu 4 --memory 8 --disk 20   # 覆盖资源</code></pre>
+        <div class="note">
+          <span class="note-label">资源(cpu / 内存 / 磁盘)是烘焙期参数</span>
+          对 Daytona,沙箱的 <code>cpu / memory / disk</code> 是<strong>烘进 snapshot</strong> 的(运行期 <code>create</code> 不再给),所以它们在<strong>烘焙时</strong>定。
+          默认值写在各 <code>bake.ts</code> 里(镜像自包含);<code>aprog-bake</code> 的 <code>--cpu/--memory/--disk</code> 经 env <strong>透传覆盖</strong>——本命令只转发、不解释,给了才传,否则用 bake.ts 自带默认。
+        </div>
         <div class="note ok">
           <span class="note-label">打镜像是构建期 / CLI 的事,不归运行时服务器</span>
           运行中的 control-plane 在 spawn/wake 热路径上<strong>只消费</strong>一个已烘好的命名 <code>ImageRef</code>,<strong>从不现场烘镜像</strong>。
@@ -169,9 +178,9 @@
         </div>
         <div class="note">
           <span class="note-label">为什么没有「策略 / 厂商方言」那一层</span>
-          每个 <code>bake.ts</code> 都<strong>写死 Daytona</strong>,不绕任何 <code>ImageBaker</code> / <code>ImageBuilder</code> 接缝。
-          代价是「一份定义烘到任意厂商」这个<strong>投机选项</strong>没了——但镜像产物本来就<a href="#program-dep">不跨厂商</a>、换厂商得重烘,且我们只用 Daytona,所以没真损失。
-          真要支持第二家厂商时,会从<strong>两个具体 <code>bake.ts</code></strong> 里抽公共骨架(从 2 个真实案例提炼),而不是现在从 0 个猜。
+          多供应商是<strong>目录维度,不是代码抽象</strong>:<code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/</code> 每家一个并列子目录,各自一份<strong>写死该厂商 SDK</strong> 的 <code>bake.ts</code>,不绕任何 <code>ImageBaker</code> / <code>pickBaker</code> 接缝。
+          代价是「一份定义烘到任意厂商」这个<strong>投机选项</strong>没了——但镜像产物本来就<a href="#program-dep">不跨厂商</a>、换厂商得重烘,所以没真损失。
+          真要抽公共骨架,等有<strong>两个真实供应商案例</strong>再从两份 <code>bake.ts</code> 提炼,而不是现在从 0 个猜。
         </div>
 
         <h2 id="tools">工具 = 镜像的材料,各自独立</h2>
@@ -182,7 +191,7 @@
           <div class="dgm-stack tight">
             <div class="node c-program"><span class="nt">工具可能本身就是一个项目</span><span class="nd">复杂到有自己的 repo / 构建 / 生命周期。把它矮化成「共享目录下一个版本子目录」是低估了它,所以不做工具中心目录。</span></div>
             <div class="node c-data"><span class="nt">由 bake.ts 自己弄进来</span><span class="nd">工具活在自己的 repo,<code>bake.ts</code> 负责<strong>引用 / 构建</strong>它进镜像(落 <code>/opt/aprog/bin</code>)。怎么编、怎么拉,是工具自己的事。</span></div>
-            <div class="node c-muted"><span class="nt">我们这层只管镜像</span><span class="nd"><strong>不认识、不编目、不命名工具</strong>——「镜像管理」对我们就是 <code>images/</code> 这个目录 + 各版本的 <code>bake.ts</code>,没有第二套管理系统。</span></div>
+            <div class="node c-muted"><span class="nt">我们这层只管镜像</span><span class="nd"><strong>不认识、不编目、不命名工具</strong>——「镜像管理」对我们就是 <code>images/</code> 这个目录 + 各版本各供应商的 <code>bake.ts</code>,没有第二套管理系统。</span></div>
           </div>
           <div class="dgm-cap">多语言工具的<strong>编译在镜像外</strong>先做完(这把 Go/Rust/Python 的 toolchain 挡在镜像之外,更干净);<code>bake.ts</code> 只注入编好的 amd64 产物。</div>
         </div>
@@ -239,24 +248,25 @@
         </div>
 
         <h2 id="layout">代码组织</h2>
-        <pre><code>packages/sandbox/          @aprog/sandbox —— 精瘦运行时库(被 control-plane import)
+        <pre><code>packages/sandbox/          @aprog/sandbox —— 精瘦运行时库(被 control-plane import,无 bin)
   src/
     provider.ts            SandboxProvider (create/destroy)
     providers/daytona.ts   DaytonaProvider
     types.ts               ImageRef / Resources / SandboxHandle / ProviderId
     errors.ts              SandboxError 体系 + mapDaytonaError
     config.ts              DaytonaConfig 等 provider 入参契约
-    cli.ts                 aprog-bake:按「名+版本」找到目录跑 bake.ts
     index.ts               单一公共出口(只导出运行时那半)
 
+tools/bake/                ← 构建期 CLI(workspace 包,bun link 上 PATH)
+  src/bake.ts              aprog-bake:锚仓库根、按「名+版本+供应商」跑 images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts(citty help)
+
 images/                    ← 仓库顶层:镜像目录(不是 package,无人 import)
-  &lt;镜像名&gt;/&lt;版本&gt;/bake.ts  + 材料
+  &lt;镜像名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts  （版本目录放跨供应商共享材料）
 
 (工具各自活在自己的 repo,由 bake.ts 引用 / 构建进来)</code></pre>
         <div class="note">
-          <span class="note-label">为什么这样切</span>
-          <code>packages/sandbox</code> 是 <strong>host 侧、被 import 的库</strong>;<code>images/</code> 是<strong>沙箱侧材料</strong>、构建期才跑、无人 import——物种不同故分家(见 <a href="#package">包边界</a>)。
-          <code>aprog-bake</code> 留在 <code>packages/sandbox</code> 是因为它和 <code>@daytonaio/sdk</code> 依赖同包,<code>bake.ts</code> 直接 import 零接线。
+          <span class="note-label">三个物种,各归各位</span>
+          <code>packages/sandbox</code> 是 <strong>host 侧、被 import 的运行时库</strong>;<code>images/</code> 是<strong>沙箱侧材料</strong>、构建期才跑、无人 import;<code>aprog-bake</code> 又是第三个物种——<strong>命令行工具</strong>,既不被 import 也不是材料——故独立成 <code>tools/bake</code>(<code>@aprog/bake</code>),与 sandbox 运行时代码<strong>零耦合</strong>,只认 <code>images/</code> 约定(见 <a href="#package">包边界</a>)。<code>bake.ts</code>(在 <code>images/</code> 里)直调 <code>@daytonaio/sdk</code>,从仓库根 devDeps 解析。
         </div>
 
         <div class="pager" data-pager></div>

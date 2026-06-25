@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>系统模块鸟瞰 · aprog 文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="modules">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content">
+      <article>
+        <div class="eyebrow">架构</div>
+        <h1>系统模块鸟瞰</h1>
+        <p class="lead">
+          系统在长大，模块越来越多。这一页是<strong>一张地图</strong>：先用一张分层图看清各模块在系统里的<strong>位置与数据流</strong>，
+          再用一张表逐个交代<strong>职责</strong>。它按「<strong>干什么活</strong>」组织（职责域），与 <a href="code-architecture.html">代码架构</a>（按 package / 目录组织「代码在哪、谁依赖谁」）互补——
+          想知道某块功能归谁，看这页；想知道某个包怎么摆、怎么跑，看那页。
+        </p>
+
+        <h2 id="map">分层系统图</h2>
+        <div class="dgm">
+          <div class="dgm-stack">
+            <div class="node c-muted"><span class="nt">用户浏览器</span><span class="nd">唯一网络对端 = 控制平面（同源同 token）</span></div>
+            <div class="ar down"><span class="gly">↓</span><span class="albl">REST · SSE · git 读代理</span></div>
+
+            <div class="node c-frontend"><span class="nt">web · Solid.js「OS 桌面」</span><span class="nd">窗口 / tab / 进程列表 / chat 流；不 import 任何 <code>@aprog/*</code>，只走 <code>/cp-api</code></span></div>
+            <div class="ar down"><span class="gly">↕</span></div>
+
+            <div class="dgm-group g-vm">
+              <span class="glabel">控制平面 · aprog VM（长跑 service）</span>
+              <div class="dgm-grid" style="grid-template-columns:repeat(auto-fill,minmax(148px,1fr))">
+                <div class="node c-cp"><span class="nt">api</span><span class="nd">北向 HTTP/SSE</span></div>
+                <div class="node c-cp"><span class="nt">auth</span><span class="nd">用户鉴权</span></div>
+                <div class="node c-cp"><span class="nt">process/manager</span><span class="nd">PCB 生命周期编排</span></div>
+                <div class="node c-cp"><span class="nt">credentials <span class="tag">规划</span></span><span class="nd">凭证签发</span></div>
+                <div class="node c-cp"><span class="nt">stream</span><span class="nd">事件 seq / 落库 / 扇出</span></div>
+                <div class="node c-cp"><span class="nt">driver-channel</span><span class="nd">B 平面流中枢</span></div>
+                <div class="node c-cp"><span class="nt">persistence</span><span class="nd">检查点</span></div>
+                <div class="node c-cp"><span class="nt">catalog · db</span><span class="nd">目录 / SQLite</span></div>
+              </div>
+            </div>
+            <div class="dgm-cols" style="justify-content:center;gap:34px;flex-wrap:wrap">
+              <div class="ar down accent"><span class="gly">↓</span><span class="albl">A 平面 · provider.create/destroy</span></div>
+              <div class="ar down accent"><span class="gly">↕</span><span class="albl">B 平面 · DriverChannel（事件↑ input↓ 续票）</span></div>
+            </div>
+
+            <div class="node c-sandbox"><span class="nt">sandbox provider（A 平面）</span><span class="nd">把沙箱当被托管资源：create / destroy；Daytona / E2B 多厂商</span></div>
+            <div class="ar down"><span class="gly">↓</span><span class="albl">起沙箱（镜像 = program@版 派生）</span></div>
+
+            <div class="dgm-group g-sandbox">
+              <span class="glabel">沙箱 · per-process 临时算力</span>
+              <div class="dgm-stack tight">
+                <div class="node c-driver"><span class="nt">driver（entrypoint）</span><span class="nd">拨回 CP · 起引擎 · 翻译事件 · 生命线</span></div>
+                <div class="node c-engine"><span class="nt">└ import SDK → spawn 原生引擎</span><span class="nd">agent 循环真正在此</span></div>
+              </div>
+            </div>
+            <div class="ar down"><span class="gly">↓</span><span class="albl">直连（CP 现签短票，绕开 control-stream）</span></div>
+
+            <div class="dgm-cols" style="justify-content:center;flex-wrap:wrap">
+              <div class="node c-data"><span class="nt">GitHub</span><span class="nd">进程状态仓</span></div>
+              <div class="node c-data"><span class="nt">GHCR</span><span class="nd">程序 OCI 包</span></div>
+              <div class="node c-data"><span class="nt">Daytona</span><span class="nd">沙箱算力</span></div>
+              <div class="node c-data"><span class="nt">模型 API</span><span class="nd">引擎直连</span></div>
+            </div>
+          </div>
+          <div class="dgm-cap">
+            三条主数据流：<b>北向</b>（web ↔ CP，REST / SSE / 读代理） · <b>B 平面</b>（沙箱 ↔ CP，DriverChannel 实时） · <b>直连</b>（沙箱 ↔ 外部，git push / OCI pull / 模型，持短票绕开 CP）。
+          </div>
+          <div class="legend">
+            <span class="li"><span class="sw" style="border-color:#1f99a8"></span>前端</span>
+            <span class="li"><span class="sw" style="border-color:#0969da"></span>控制平面</span>
+            <span class="li"><span class="sw" style="border-color:#2da44e"></span>沙箱 / provider</span>
+            <span class="li"><span class="sw" style="border-color:#a475f9"></span>driver</span>
+            <span class="li"><span class="sw" style="border-color:#e38733"></span>引擎</span>
+            <span class="li"><span class="sw" style="border-color:#d29922"></span>外部依赖</span>
+          </div>
+        </div>
+
+        <h2 id="table">模块职责表</h2>
+        <p>每行一个模块：<strong>它干什么</strong> + 代码落点 + 主要协作方。按职责域分组；<code>规划</code> = 已拍板未落地。</p>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>模块</th><th>代码位置</th><th>一句话职责</th><th>主要协作方</th></tr></thead>
+          <tbody>
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">① 用户接入 / 北向</th></tr>
+            <tr><td><strong>web</strong></td><td><code>packages/web/</code></td><td>「OS 桌面」前端：窗口 / tab / 进程列表 / chat 流；只经 <code>/cp-api</code> 与后端说话</td><td>CP（REST/SSE/读代理）</td></tr>
+            <tr><td><strong>api</strong></td><td><code>control-plane/src/api/</code><br>router·http·sse·respond·errors·middleware</td><td>北向命令（REST）+ 实时事件流（SSE）端点；鉴权中间件；<code>Deps</code> 接缝</td><td>auth·stream·process·catalog</td></tr>
+            <tr><td>routes</td><td><code>api/routes/</code></td><td>各资源端点：<code>auth·proc·programs·installations·shares·notifications</code></td><td>对应子系统</td></tr>
+            <tr><td><strong>auth</strong></td><td><code>control-plane/src/auth/</code><br>codes·email·tokens·users·validate</td><td>注册 / 邮箱验证 / 会话 token / 用户——<strong>面向终端用户</strong>（≠ git 凭证）</td><td>api/middleware</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">② 进程编排与生命周期</th></tr>
+            <tr><td><strong>process/manager</strong></td><td><code>control-plane/src/process/manager.ts</code></td><td>PCB 状态机：<code>spawn / wake / hibernate / kill</code>；编排建库·签票·起沙箱·种子下发</td><td>repo-gateway·sandbox-gateway·credentials·driver-channel·db</td></tr>
+            <tr><td>sandbox-gateway</td><td><code>process/sandbox-gateway.ts</code></td><td>A 平面收口：把「起/停沙箱」翻成 provider 调用（当前 mock）</td><td>sandbox provider</td></tr>
+            <tr><td>db</td><td><code>control-plane/src/db/index.ts</code></td><td>SQLite schema + migrations（users·programs·installations·processes…）</td><td>全 CP</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">③ 沙箱与镜像</th></tr>
+            <tr><td><strong>sandbox provider</strong></td><td><code>packages/sandbox/src/provider.ts</code> + <code>providers/</code>（daytona·e2b）</td><td>把沙箱当被托管资源：<code>create / destroy</code>；多厂商运行时实现</td><td>sandbox-gateway·@daytonaio/sdk</td></tr>
+            <tr><td>aprog-bake</td><td><code>tools/bake/src/bake.ts</code> + <code>images/</code></td><td>构建期 CLI（<code>bun link</code> 上 PATH）：锚仓库根、按「名+版本+供应商」跑 <code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code> 烘镜像 → 厂商 snapshot</td><td>images/·Daytona</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">④ 引擎适配 / 协议</th></tr>
+            <tr><td><strong>driver</strong></td><td><code>packages/driver/src/</code> driver·main</td><td>沙箱 entrypoint：拨回 CP · 起引擎 · 翻译事件 · 生命线（烘进镜像，CP 不源码依赖）</td><td>channel·supervisor·engine·SDK</td></tr>
+            <tr><td>supervisor</td><td><code>driver/src/supervisor.ts</code></td><td>harness 父/子进程监管：spawn / kill 引擎</td><td>engine</td></tr>
+            <tr><td>engine 适配</td><td><code>driver/src/engine.ts</code> + <code>engines/</code>（claude·codex·shell）</td><td>引擎私有消息 → engine-neutral aprog 事件（+ coalesce 合流）</td><td>protocol</td></tr>
+            <tr><td><strong>protocol</strong></td><td><code>packages/protocol/</code>（envelope·events）</td><td>平台 ↔ 引擎线缆契约：信封 + 定序 + 事件；叶子零依赖</td><td>CP·driver 共用</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑤ 凭证与安全</th></tr>
+            <tr><td><strong>credentials</strong> <span class="pill">规划</span></td><td><code>control-plane/src/credentials/</code></td><td>唯一密钥保管处：持 App 私钥 / registry / 模型鉴权；现签短票（git write/read · OCI pull）、攒种子、续签 / 吊销</td><td>manager·repo-gateway·driver-channel</td></tr>
+            <tr><td>repo-gateway</td><td><code>process/repo-gateway.ts</code></td><td>在 host 上建 / 寻址进程仓（GitHub <code>aprog-proc-&lt;pid&gt;</code>）；admin 票找 credentials 要</td><td>credentials·GitHub API</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑥ 状态与持久化</th></tr>
+            <tr><td><strong>进程状态仓</strong></td><td>GitHub <code>aprog-proc-&lt;pid&gt;</code>（外部）</td><td>进程目录的耐久权威副本；commit = 检查点，HEAD = 最新态</td><td>driver（push）·CP（读代理）</td></tr>
+            <tr><td>persistence/checkpoint</td><td><code>control-plane/src/persistence/checkpoint.ts</code></td><td>检查点语义落地：mark 武装 → <code>turn.end</code> 捕获</td><td>stream·driver</td></tr>
+            <tr><td>sequencer</td><td><code>driver/src/sequencer.ts</code></td><td>一次运行内局部定序（全局 <code>seq</code> 由 CP 落库时盖）</td><td>channel·stream</td></tr>
+            <tr><td>state（库程序）</td><td><code>programs/libraries/state/</code></td><td>进程目录 / 状态协议（meta.yml·input.md·execution-state…）；被应用程序引用</td><td>design 等应用</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑦ 事件流</th></tr>
+            <tr><td><strong>stream</strong></td><td><code>control-plane/src/stream/</code>（hub·store·resync）</td><td>事件盖全局 <code>seq</code> + 落库 + 扇出 + 重放</td><td>api/sse·driver-channel</td></tr>
+            <tr><td>driver-channel（CP）</td><td><code>control-plane/src/driver-channel/</code></td><td>B 平面流中枢：受理 driver 拨入、收事件、下发 input / 续票</td><td>manager·stream</td></tr>
+            <tr><td>channel（driver）</td><td><code>driver/src/channel.ts</code></td><td>沙箱侧 DriverChannel 客户端：事件 ↑ / input ↓</td><td>driver-channel</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑧ 内容与发版</th></tr>
+            <tr><td><strong>programs/</strong></td><td><code>programs/</code>（applications·libraries）</td><td>内置程序源（git 管理面）；<code>aprog-publish</code> → OCI 包</td><td>catalog·OCI</td></tr>
+            <tr><td>images/</td><td><code>images/</code></td><td>镜像源（git 管理面）；<code>aprog-bake</code> → snapshot</td><td>aprog-bake</td></tr>
+            <tr><td>catalog</td><td><code>control-plane/src/catalog/</code>（programs·installs）</td><td>程序身份 + 版本目录、安装关系（库表 = OCI/git 的<strong>投影</strong>）</td><td>db·routes/programs</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑨ 前端壳与程序</th></tr>
+            <tr><td>web/components</td><td><code>web/src/components/</code></td><td>Desktop·Window·Taskbar·Login·ProgramShell 等桌面壳</td><td>stores</td></tr>
+            <tr><td>web/programs</td><td><code>web/src/programs/</code>（design·codereviewer·settings）</td><td>各智能程序的前端面板 + registry</td><td>stores·lib</td></tr>
+            <tr><td>web/stores</td><td><code>web/src/stores/</code></td><td>响应式状态：auth·catalog·processes·windows·installed·notifications</td><td>lib/api</td></tr>
+            <tr><td>web/lib</td><td><code>web/src/lib/</code></td><td>api（fetch 封装）· highlight</td><td>—</td></tr>
+
+            <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑩ 横切</th></tr>
+            <tr><td>log</td><td><code>packages/log/</code></td><td><code>createLogger(scope)</code> 结构化日志；叶子零依赖</td><td>各包</td></tr>
+            <tr><td>config</td><td><code>control-plane/src/config.ts</code> · <code>sandbox/src/config.ts</code></td><td>环境配置（GitHub·SMTP·dataDir·Daytona…）</td><td>—</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note">
+          <span class="note-label">深入看哪页</span>
+          代码摆放 / 依赖图见 <a href="code-architecture.html">代码架构</a>；运行时活物见 <a href="components.html">组件清单</a>；概念模型见 <a href="architecture.html">三层抽象</a>；
+          凭证细节见 <a href="proc-storage.html#credentials">进程状态存储 · 凭证与令牌</a>；发版见 <a href="program-package.html">程序与发版</a>。
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

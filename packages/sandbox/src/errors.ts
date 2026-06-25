@@ -5,19 +5,8 @@
 //   - retryable：是否值得退避重试（瞬态网络 / 限流 / 超时 = true；鉴权 / 校验 / 冲突 = false）
 //   - provider：哪家厂商
 //   - cause：原始错误（厂商 SDK 抛的），保留链路
-// mapDaytonaError 把 @daytonaio/sdk 的 DaytonaError 子类映射到这里。
+// 各 provider 实现自行把厂商 SDK 的错误归一成这里的 SandboxError（见 providers/agentbay.ts 的 wrap）。
 
-import {
-  DaytonaError,
-  DaytonaAuthenticationError,
-  DaytonaAuthorizationError,
-  DaytonaConflictError,
-  DaytonaConnectionError,
-  DaytonaNotFoundError,
-  DaytonaRateLimitError,
-  DaytonaTimeoutError,
-  DaytonaValidationError,
-} from '@daytonaio/sdk';
 import type { ProviderId } from './types.ts';
 
 export type SandboxErrorCode =
@@ -94,37 +83,4 @@ export class SandboxConflictError extends SandboxError {
   constructor(message: string, provider: ProviderId, cause?: unknown) {
     super(message, { code: 'conflict', provider, retryable: false, cause });
   }
-}
-
-/** 把 Daytona SDK 的错误映射成沙箱层错误。已是 SandboxError 的原样返回。 */
-export function mapDaytonaError(e: unknown): SandboxError {
-  if (e instanceof SandboxError) return e;
-  const p: ProviderId = 'daytona';
-  const msg = e instanceof Error ? e.message : String(e);
-
-  if (e instanceof DaytonaAuthenticationError || e instanceof DaytonaAuthorizationError) {
-    return new SandboxAuthError(`daytona auth failed: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaNotFoundError) {
-    return new SandboxNotFoundError(`daytona sandbox not found: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaTimeoutError) {
-    return new SandboxTimeoutError(`daytona operation timed out: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaRateLimitError) {
-    return new SandboxRateLimitError(`daytona rate limited: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaConnectionError) {
-    return new SandboxUnavailableError(`daytona unreachable: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaValidationError) {
-    return new SandboxValidationError(`daytona validation error: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaConflictError) {
-    return new SandboxConflictError(`daytona conflict: ${msg}`, p, e);
-  }
-  if (e instanceof DaytonaError) {
-    return new SandboxError(`daytona error: ${msg}`, { code: 'unknown', provider: p, retryable: false, cause: e });
-  }
-  return new SandboxError(`unexpected error: ${msg}`, { code: 'unknown', provider: p, retryable: false, cause: e });
 }
