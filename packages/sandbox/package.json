@@ -15,6 +15,6 @@
   },
   "dependencies": {
     "@aprog/log": "workspace:*",
-    "wuying-agentbay-sdk": "^0.22.0"
+    "ppio-sandbox": "^1.0.3"
   }
 }

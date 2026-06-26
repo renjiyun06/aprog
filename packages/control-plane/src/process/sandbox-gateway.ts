@@ -1,5 +1,5 @@
 // 沙箱网关：进程生命周期里所有「碰沙箱」的动作都经此接口收口。
-// 真实实现 ProviderSandboxGateway 经任一 SandboxProvider（当前只 AgentBay 落地）起停沙箱、灌/取检查点；
+// 真实实现 ProviderSandboxGateway 经任一 SandboxProvider（当前只 PPIO 落地）起停沙箱、灌/取检查点；
 // 未接真实沙箱时用 MockSandboxGateway 顶上。ProcessManager 的编排逻辑只认 SandboxGateway 接口，不随厂商变。
 
 import type { ImageRef, Resources, SandboxProvider } from '@aprog/sandbox';
@@ -33,10 +33,11 @@ export class MockSandboxGateway implements SandboxGateway {
 }
 
 /**
- * 真实网关：经任一 SandboxProvider（Daytona / AgentBay 等）起停沙箱。provider-中立——靠注入的
+ * 真实网关：经任一 SandboxProvider（当前 PPIO；AgentBay 暂时下线）起停沙箱。provider-中立——靠注入的
  * provider 决定厂商，本类不绑定具体厂商。
- *  · create：程序版本 →（resolveImageRef）→ ImageRef → provider.create（注入 bindToken + 控制平面地址
- *    + 引擎鉴权）→ 按 bindToken 登记到 DriverRegistry，供 driver 拨入时认领绑定。
+ *  · create：程序版本 →（resolveImageRef）→ ImageRef；**本层生成 bindToken（信任凭证归控制平面所有）**，
+ *    经 opts 交给 provider 注入。provider 在「沙箱已起、driver 未启」时回调 onProvisioned，本层据 sandboxId
+ *    把 bindToken 登记进 DriverRegistry——**登记早于 driver 拨号，竞态根除**。provider 只是机械执行者。
  *  · destroy：provider.destroy 释放沙箱；检查点走 git（沙箱侧），这里先回占位 ref。
  * ProcessManager 不变——它只认 SandboxGateway 接口。
  */
@@ -46,15 +47,25 @@ export class ProviderSandboxGateway implements SandboxGateway {
     private readonly registry: DriverRegistry,
     /** 程序 (id, version) → 已烘镜像的不透明引用（来自 ProgramCatalog.resolveImage + 命名约定）。 */
     private readonly resolveImageRef: (programId: string, programVersion: string | null) => ImageRef,
-    /** create 名义资源（Daytona 把资源烘进 snapshot；AgentBay 由镜像设置定——这里仅作日志/契约）。 */
+    /** create 名义资源（PPIO 经 SandboxOpts 决定，这里仅作日志/契约）。 */
     private readonly resources: Resources,
   ) {}
 
   async create(p: { pid: number; programId: string; programVersion: string | null }): Promise<SandboxCreated> {
     const image = this.resolveImageRef(p.programId, p.programVersion);
-    const handle = await this.provider.create(image, this.resources);
+    // 信任凭证由本层（控制平面）生成并持有；provider 只负责注入。
+    const bindToken = crypto.randomUUID();
+    const handle = await this.provider.create(image, this.resources, {
+      bindToken,
+      // 沙箱已起、driver 未启时回调：此刻登记，确保 driver 拨号时一定查得到（竞态根除）。
+      onProvisioned: ({ sandboxId }) => {
+        this.registry.register(bindToken, { pid: p.pid, sandboxId });
+        console.log(`[${this.provider.id}-sandbox] 登记 bindToken（driver 未启）pid=${p.pid} sandbox=${sandboxId}`);
+      },
+    });
+    // 兜底：provider 若未回调 onProvisioned（理论不该），这里幂等补登一次（同键同值，无副作用）。
     this.registry.register(handle.bindToken, { pid: p.pid, sandboxId: handle.id });
-    console.log(`[${this.provider.id}-sandbox] create pid=${p.pid} image=${image.id} → ${handle.id}（已登记 bindToken）`);
+    console.log(`[${this.provider.id}-sandbox] create pid=${p.pid} image=${image.id} → ${handle.id}`);
     return { sandboxId: handle.id, provider: handle.provider };
   }
 

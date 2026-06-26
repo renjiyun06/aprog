@@ -2,18 +2,19 @@
 // 所以这些类型是 provider-neutral 的；运行时只认一个不透明的 ImageRef——镜像怎么烘出来的
 // （仓库顶层 images/<名>/<版本>/bake.ts，见 docs/sandbox.html#bake）对运行时不可见。
 
-/** 厂商标识。多供应商是设计形态——这个联合类型就是扩展点；当前现实只接得了 AgentBay（出站开放），
- *  故只有一个成员。新增供应商时在此追加（如 'e2b' | 'northflank'）并补对应 SandboxProvider 实现。 */
-export type ProviderId = 'agentbay';
+/** 厂商标识。多供应商是设计形态——这个联合类型就是扩展点。新增供应商时在此追加并补对应 SandboxProvider 实现。
+ *  当前唯一落地实现是 PPIO（派欧云，E2B 同构托管，国内可回拨、自定义镜像可用）。
+ *  AgentBay（阿里云无影）暂时下线（自定义镜像云构建/激活在平台侧不可用），需要时把 'agentbay' 加回此处并补实现。 */
+export type ProviderId = 'ppio';
 
 /** 一个已烘好的镜像/快照的不透明引用。怎么烘出来的（声明式/Dockerfile/跑后存）对运行时不可见。 */
 export interface ImageRef {
   provider: ProviderId;
-  /** 厂商侧的句柄：AgentBay 的 imageId（公共镜像如 code_latest，或自定义镜像 id）… */
+  /** 厂商侧的句柄：PPIO 的 template（缺省 base 镜像 code-interpreter，或 template build 出的自定义模板 id）。 */
   id: string;
 }
 
-/** 资源规格。注意各厂商口径不同：AgentBay 由 imageId/镜像设置决定，create 不传——这里仅作日志/契约。 */
+/** 资源规格。注意各厂商口径不同：PPIO 由 template/SandboxOpts 决定，create 经 opts 传——这里仍作日志/契约。 */
 export interface Resources {
   cpu: number;     // vCPU
   memory: number;  // GiB

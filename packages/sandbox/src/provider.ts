@@ -12,13 +12,29 @@
 
 import type { ProviderId, ImageRef, Resources, SandboxHandle } from './types.ts';
 
+/**
+ * create 的运行时参数——由上层（控制平面网关）提供，承载「信任凭证归属」与「消除竞态」两件事：
+ *
+ *  - bindToken：本次沙箱的信任 nonce，**由控制平面侧生成并持有**（不是 provider 自造）。provider 只把它
+ *    机械注入到 driver 的进程环境里。这样信任凭证的归属落在控制平面，provider 退成纯执行者。
+ *
+ *  - onProvisioned：沙箱「已起、driver 尚未启动」之间的回调（带回 sandboxId）。上层在此把
+ *    bindToken→沙箱 登记进 DriverRegistry——**保证登记早于 driver 拨号**，根除「登记/拨号竞态」
+ *    （否则 driver 自启即拨，可能早于上层登记，首拨落空）。provider 必须 await 它完成后才启动 driver。
+ */
+export interface CreateOptions {
+  bindToken: string;
+  onProvisioned?: (info: { sandboxId: string }) => void | Promise<void>;
+}
+
 export interface SandboxProvider {
   readonly id: ProviderId;
   /**
-   * 用一个已烘好的镜像起沙箱。driver 已烘在镜像里，随 entrypoint 自启并持烘入凭证
-   * 拨回控制平面（见 docs/interaction.html#trust）；不需要本接口去启动它。
+   * 起一个沙箱并在其内启动 driver。driver 不烘在镜像里——它随 create 运行时推入，并持
+   * opts.bindToken（控制平面注入的信任凭证）拨回控制平面认领绑定（见 docs/interaction.html#trust）。
+   * 实现必须在「沙箱已起、driver 未启」之间 await opts.onProvisioned，确保上层先完成登记再放 driver 拨号。
    */
-  create(image: ImageRef, res: Resources): Promise<SandboxHandle>;
+  create(image: ImageRef, res: Resources, opts: CreateOptions): Promise<SandboxHandle>;
   /** 销毁沙箱、释放全部资源（即进程 hibernate 的落地）。状态早已经检查点落到控制平面。 */
   destroy(h: SandboxHandle): Promise<void>;
 }

@@ -23,3 +23,4 @@ export type { BundleIO, CheckpointBundle } from './bundle.ts';
 export type { EngineAdapter, EngineContext } from './engine.ts';
 export { ClaudeAdapter } from './engines/claude.ts';
 export { CodexAdapter } from './engines/codex.ts';
+export { scrubEngineEnv } from './engine-env.ts';

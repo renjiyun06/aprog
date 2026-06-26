@@ -7,6 +7,11 @@ export interface SpawnSpec {
   cwd: string;
   /** 引擎特定命令行（由 EngineAdapter 给：claude --include-partial… / codex exec --json…）。 */
   argv: string[];
+  /**
+   * 引擎子进程环境。**必须**经 scrubEngineEnv（见 engine-env.ts）清洗后再放进来——
+   * driver 私有的 bindToken / 控制平面地址 / git 凭证绝不可落到引擎或用户程序手里。
+   * 该交给引擎的 GLM 路由（ANTHROPIC_*）会被清洗器保留。
+   */
   env?: Record<string, string>;
 }
 

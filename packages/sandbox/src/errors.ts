@@ -5,7 +5,7 @@
 //   - retryable：是否值得退避重试（瞬态网络 / 限流 / 超时 = true；鉴权 / 校验 / 冲突 = false）
 //   - provider：哪家厂商
 //   - cause：原始错误（厂商 SDK 抛的），保留链路
-// 各 provider 实现自行把厂商 SDK 的错误归一成这里的 SandboxError（见 providers/agentbay.ts 的 wrap）。
+// 各 provider 实现自行把厂商 SDK 的错误归一成这里的 SandboxError（见 providers/ppio.ts 的 wrap）。
 
 import type { ProviderId } from './types.ts';
 
