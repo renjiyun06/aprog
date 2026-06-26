@@ -52,7 +52,7 @@
           </div>
           <div class="dgm-cap">
             点任一组件跳到下方说明。<b>前端只跟 Control Plane 通信</b>，永不直连沙箱。CP↔沙箱分两平面：
-            <b>A</b> 经 <a href="interaction.html#resource-plane">provider SDK</a> 起停沙箱，<b>B</b> 由沙箱内 driver 持烘入凭证<a href="interaction.html#trust">拨回 CP</a> 建一条常驻 <a href="interaction.html#data-plane">DriverChannel</a>。
+            <b>A</b> 经 <a href="interaction.html#resource-plane">provider SDK</a> 起停沙箱，<b>B</b> 由沙箱内 driver 持<strong>运行时注入的 bindToken</strong><a href="interaction.html#trust">拨回 CP</a> 建一条常驻 <a href="interaction.html#data-plane">DriverChannel</a>。
           </div>
         </div>
         <p>
@@ -106,7 +106,7 @@
 
         <h2 id="driver">Engine Driver</h2>
         <p>
-          沙箱内<strong>常驻</strong>的进程，随镜像 entrypoint 自启、持烘入凭证拨回 Control Plane，跨 attach/detach 持续活着。它做四件事：
+          沙箱内<strong>常驻</strong>的进程，由 provider 在 create 时运行时推入并后台启动、持<strong>注入的 bindToken</strong> 拨回 Control Plane，跨 attach/detach 持续活着。它做四件事：
         </p>
         <ol>
           <li>当 <strong>harness 父进程</strong>：拉起 Engine（<code>import { query } from '@anthropic-ai/claude-agent-sdk'</code>，streaming-input 模式），掌控其生命周期。</li>
@@ -129,8 +129,8 @@
 
         <h2 id="sandbox">Sandbox</h2>
         <p>
-          per-process 的容器，外部 cloud 服务（当前 Daytona），提供文件系统、进程空间、网络和 exec API。沙箱镜像里烘进了：
-          基础 OS、<code>claude-driver</code>（含拨回 CP 的凭证）、引擎运行时，外加该程序所需的工具——工具是镜像的材料，<strong>按需烘进对应镜像</strong>，而非一个镜像装下所有工具；程序依赖特定版本的镜像。spawn/wake 时 Control Plane 用 provider SDK 起一个新沙箱（A 平面）；
+          per-process 的容器，外部 cloud 服务（当前 PPIO），提供文件系统、进程空间、网络和 exec API。沙箱镜像里烘进的全是<strong>非密底座</strong>：
+          基础 OS、引擎运行时 + <strong>非密路由配置</strong>（如 GLM 的 base_url/模型映射），外加该程序所需的工具——工具是镜像的材料，<strong>按需烘进对应镜像</strong>，而非一个镜像装下所有工具；程序依赖特定版本的镜像。<strong>driver 不烘</strong>（create 时运行时推入），<strong>一切密钥/凭证（bindToken、GLM key、git creds）也不烘</strong>（运行时注入）。spawn/wake 时 Control Plane 用 provider SDK 起一个新沙箱（A 平面）；
           沙箱本身<strong>不对外暴露入站端口</strong>——所有交互靠沙箱内 driver <strong>出站拨回</strong> CP 的 DriverChannel（B 平面）。沙箱与镜像详见 <a href="sandbox.html">沙箱与镜像</a>、交互界面详见 <a href="interaction.html">沙箱交互界面</a>。
         </p>
 

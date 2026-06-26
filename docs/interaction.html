@@ -24,7 +24,7 @@
         <p class="lead">
           <a href="sandbox.html">沙箱与镜像</a>讲了沙箱怎么烘、怎么起；这页讲沙箱<strong>起来之后</strong>，
           控制平面跟它之间到底发生哪些交互、这些交互该抽象成什么接口。结论一句话：交互分属<strong>两个正交的平面</strong>——
-          一个把沙箱当<strong>托管资源</strong>管（厂商相关），一个跟<strong>烘在沙箱里的 driver</strong> 对话（厂商无关）。
+          一个把沙箱当<strong>托管资源</strong>管（厂商相关），一个跟<strong>沙箱里的 driver</strong> 对话（厂商无关）。
           后者<strong>只承载实时的事件上行 + input 下行</strong>，前者瘦成纯生命周期；
           至于<strong>状态怎么存怎么传</strong>（检查点 = <code>git push</code>、前端读 = 按 ref 拉 git），已收敛到 <a href="proc-storage.html">进程状态存储（Git 模型）</a>，不再是这两个平面的事。
         </p>
@@ -50,7 +50,7 @@
               <span class="glabel">沙箱（临时、可销毁）</span>
               <div class="dgm-cols" style="flex-wrap:nowrap">
                 <div class="node c-muted"><span class="nt">厂商 daemon</span><span class="nd">A 平面的对端：响应厂商 API。</span></div>
-                <div class="node c-driver"><span class="nt">driver</span><span class="nd">B 平面的对端：自启、持凭证拨出、桥接 harness ↔ 协议。</span></div>
+                <div class="node c-driver"><span class="nt">driver</span><span class="nd">B 平面的对端：自启、持<strong>运行时注入的 bindToken</strong> 拨出、桥接 harness ↔ 协议。</span></div>
                 <div class="node c-program"><span class="nt">harness + engine</span><span class="nd">driver 拉起的子进程，cwd 在<a href="state.html">进程目录</a>。</span></div>
               </div>
             </div>
@@ -65,7 +65,7 @@
         <div class="note ok">
           <span class="note-label">为什么 A 一个文件接口都不留</span>
           曾经的直觉是「整目录注入/导出该走厂商原生 fs（A 平面）」，理由是 ① 信任种子没法用还没建立的 B 通道送；② 耐久备份要扛住坏掉的 driver。
-          这两条在收敛后的模型里都<strong>不成立</strong>：① 信任种子<strong>烘进镜像</strong>即可（镜像本身就是带外通道，见<a href="#trust">信任与启动序</a>）；
+          这两条在收敛后的模型里都<strong>不成立</strong>：① 信任种子<strong>由控制平面每沙箱临时签发、create 时经 env 注入</strong>即可（不必走还没建立的 B 通道，见<a href="#trust">信任与启动序</a>）；
           ② 我们<strong>从不</strong>从坏掉的 driver 里抢救——driver 死 = 沙箱死 = 进程<strong>恢复到上一个检查点</strong>（见 <a href="state.html#checkpoint">检查点</a>），不需要事后导出。
           于是 <code>injectDir/extractDir</code> 被<strong>彻底删除</strong>，<code>SandboxProvider</code> 的厂商面更小，也更 provider-neutral。
           至于进程目录的耐久与铺设，<strong>既不走 A、也不走 B，而是 driver 直接 <code>git push</code> / <code>clone</code> CP 托管的 bare repo</strong>（见 <a href="proc-storage.html">Git 模型</a>）——文件搬运彻底从这两个平面里拿掉了。
@@ -79,7 +79,7 @@
           <table>
             <thead><tr><th>方法</th><th>方向</th><th>干什么</th></tr></thead>
             <tbody>
-              <tr><td><code>create(image, res)</code></td><td>→</td><td>用烘好的 <a href="sandbox.html#image">ImageRef</a> 起沙箱。driver 随镜像 entrypoint <strong>自启并拨出</strong>（见 <a href="#trust">下文</a>）。</td></tr>
+              <tr><td><code>create(image, res, opts)</code></td><td>→</td><td>用烘好的 <a href="sandbox.html#image">ImageRef</a> 起沙箱。driver 由 provider <strong>运行时推入并后台启动</strong>，自启即拨出；<code>opts</code> 携 <strong>bindToken</strong>（信任 nonce）+ <code>onProvisioned</code> 回调（让上层在 driver 拨号前先登记，见 <a href="#trust">下文</a>）。</td></tr>
               <tr><td><code>destroy(h)</code></td><td>→</td><td>销毁、释放全部资源（即进程 <a href="#hibernate">hibernate</a> 的落地）。状态早已 <code>git push</code> 到 CP 托管的 bare repo。</td></tr>
             </tbody>
           </table>
@@ -116,26 +116,40 @@
 
         <h2 id="trust">信任与启动序</h2>
         <p>
-          driver 必须能<strong>自己起来、自己拨出、且一拨上来就被信任</strong>——既为建 B 通道，也为拿到能 <code>git clone</code> 进程仓库的资格。信任种子<strong>烘进镜像</strong>解决——镜像本身就是一条带外通道：
+          driver 必须能<strong>自己起来、自己拨出、且一拨上来就被信任</strong>——既为建 B 通道，也为拿到能 <code>git clone</code> 进程仓库的资格。
+          关键是这份「被信任」的凭证<strong>从哪来</strong>：它<strong>不烘进镜像</strong>，而是<strong>控制平面为每个沙箱临时签发、在启动 driver 时经环境变量注入</strong>。
+          于是启动序里多出一个铁律——<strong>登记必须早于拨号</strong>：
         </p>
         <div class="dgm">
           <div class="dgm-stack tight">
-            <div class="node c-muted"><span class="nt">① create</span><span class="nd">沙箱起来。镜像 entrypoint <strong>自启 driver</strong>；driver 知道控制平面地址（烘入 / create 时给 env）。</span></div>
-            <div class="node c-driver"><span class="nt">② driver 拨出 + 握手</span><span class="nd">driver 持<strong>烘入镜像的凭证</strong>拨向控制平面 → B 通道建立 + <a href="sandbox.html#constraints">protocol 版本握手</a>。</span></div>
-            <div class="node c-cp"><span class="nt">③ create-time 绑定</span><span class="nd">控制平面把这条拨入连接<strong>钉死</strong>到它刚 create 的那个沙箱/待命进程上。</span></div>
-            <div class="node c-state"><span class="nt">④ 下发种子 + clone</span><span class="nd">CP 经 B 下发敏感种子：<strong>per-process auth</strong>（用户 OAuth，不能烘也不进 git）+ 每进程 git deploy 凭证。driver 据此 <code>git clone</code> CP 托管的 bare repo 铺好进程目录（含 skill 闭包 + 最新检查点；<strong>首次</strong>是空仓）。</span></div>
-            <div class="node c-program"><span class="nt">⑤ driver 拉起 harness</span><span class="nd">cwd = 进程目录。<strong>首次</strong>由 harness 按 <a href="state.html">state 技能</a>自己写出骨架（平台不代笔）；产出经 driver 翻成信封流回来。</span></div>
+            <div class="node c-cp"><span class="nt">① 网关签发 + 登记（driver 未启）</span><span class="nd">控制平面的<a href="code-architecture.html">网关</a>为这次沙箱生成一次性 <code>bindToken</code>（<code>crypto.randomUUID</code>），并<strong>先</strong>把 <code>bindToken → {进程, 沙箱}</code> 登记进登记簿——<strong>登记早于 driver 启动</strong>，这样 driver 一拨就查得到。</span></div>
+            <div class="node c-muted"><span class="nt">② provider 起沙箱 + 注入 + 启 driver</span><span class="nd"><code>provider.create</code> 起沙箱；把 driver（<strong>运行时推入、非烘镜像</strong>）以后台 <code>node</code> 启动，经进程 env 注入 <code>bindToken</code> + 控制平面地址（+ 回拨 CA、引擎鉴权）。</span></div>
+            <div class="node c-driver"><span class="nt">③ driver 拨出 + 握手</span><span class="nd">driver 自启即持注入的 <code>bindToken</code>，经 <strong>HTTPS</strong> 拨向控制平面 <code>POST /v1/driver/hello</code> → B 通道建立 + <a href="sandbox.html#constraints">protocol 版本握手</a>。回拨走 TLS，自签证书靠注入的 CA 信任（见下「回拨上 TLS」）。</span></div>
+            <div class="node c-cp"><span class="nt">④ CP 认领 = 钉死身份</span><span class="nd">控制平面据 <code>bindToken</code> 在登记簿里<strong>认领</strong>，把这条拨入连接钉死到对应沙箱/进程。<code>bindToken</code> 每沙箱唯一，故一张就同时证明「我是正版沙箱」+「我是进程 X」——不必再单独补一步身份绑定。</span></div>
+            <div class="node c-state"><span class="nt">⑤ 下发种子 + clone + 拉起 harness</span><span class="nd">CP 经 B 下发敏感种子：<strong>per-process auth</strong>（用户 OAuth）+ 每进程 git deploy 凭证（不烘也不进 git）。driver <code>git clone</code> CP 托管的 bare repo 铺好进程目录（<strong>首次</strong>空仓），再拉起 harness。<strong>拉起前先抹 env</strong>（见下「env 抹除」）。</span></div>
           </div>
           <div class="dgm-cap">
-            <strong>凭证为何能烘进去</strong>：bake 发生在 driver 说第一句话<strong>之前</strong>，等于把 B 通道的引导凭证安全地预置好了——鸡生蛋解除。
-            它是<strong>整张镜像所有沙箱共享的静态秘密</strong>，只够证明「我是正版 aprog 沙箱」；要证明「我是进程 X」靠第 ③ 步的 create-time 绑定补齐。
-            <strong>per-process auth 与 git deploy 凭证</strong>敏感且因人而异、不能烘——但第 ④ 步通道已是 TLS + 凭证鉴权过的，经 B 送跟走任何厂商 API 一样安全。
+            <strong>凭证为何不烘进镜像</strong>：<code>bindToken</code> 若烘进去，就是整张镜像<strong>所有沙箱共享的同一个静态秘密</strong>——泄漏一次即可仿冒任意沙箱，且无法区分「是哪个沙箱」。
+            改成<strong>控制平面每沙箱临时签发、运行时注入</strong>后，它既是<strong>能力证明</strong>又是<strong>身份标识</strong>（每沙箱唯一），一张顶两件事，连旧设计里那步「create-time 绑定补『我是谁』」都省了。
+            代价是多出「登记 vs 拨号」的<strong>时序约束</strong>：必须<strong>登记早于启动</strong>（第 ① 步）——否则 driver 可能比登记更早拨到而落空（详见下「登记早于拨号」）。
+            <strong>per-process auth 与 git deploy 凭证</strong>同样敏感、因人而异、不能烘——但第 ③ 步通道已是 TLS + <code>bindToken</code> 鉴权过的，经 B 送跟走任何厂商 API 一样安全。
           </div>
         </div>
         <div class="note">
-          <span class="note-label">driver 是 harness 的父进程</span>
-          注意第 ⑤ 步：<strong>driver 先起、harness 后起，且是被 driver 作为子进程拉起来的</strong>。driver 当父进程才能掌控 harness 的生命周期
-          （启动、喂输入、中断、kill、探退出、休眠前确保落盘）——这也是 driver「harness-specific」的由来：它的全部职责就是包住一个 harness、把它的 IO 双向翻译成协议。
+          <span class="note-label">登记早于拨号（竞态根治）</span>
+          driver 自启后<strong>第一件事就是拨号</strong>，这跟「控制平面把 <code>bindToken</code> 写进登记簿」天然是两条并发的线。若先启动 driver、再登记，driver 的首拨可能<strong>早于</strong>登记完成 → <code>resolve(bindToken)</code> 落空被拒。
+          根治办法不是让 driver 重试去<strong>掩盖</strong>，而是把<strong>登记挪到 driver 启动之前</strong>：<code>provider.create</code> 在「沙箱已起、driver 未启」之间回调 <code>onProvisioned(sandboxId)</code>，网关在回调里完成登记，<code>await</code> 它返回后 provider 才启动 driver。
+          于是 driver <strong>首拨即命中</strong>，retry 退化为只兜网络抖动。沙箱层对控制平面仍<strong>零依赖</strong>（它只认一个回调钩子，不知道「登记」为何物）。
+        </div>
+        <div class="note">
+          <span class="note-label">回拨上 TLS（bindToken 不明文过线）</span>
+          第 ③ 步 driver→控制平面这一跳<strong>跨公网</strong>，<code>bindToken</code> 在其上往返，必须加密。回拨入口用 <strong>HTTPS</strong>，TLS 在边缘终结。
+          证书可自签（边缘只有 IP、无域名时）：把<strong>公开非密的 CA 证书</strong>随 create 经环境变量注入沙箱，driver 经 <code>NODE_EXTRA_CA_CERTS</code> 信任它即可校验自签证书。CA 是公开的、烘不烘都行；<code>bindToken</code> 才是秘密，永远运行时注入。
+        </div>
+        <div class="note">
+          <span class="note-label">driver 是 harness 的父进程 · 拉起前先抹 env</span>
+          第 ⑤ 步：<strong>driver 先起、harness 后起，且是被 driver 作为子进程拉起来的</strong>。driver 当父进程才能掌控 harness 的生命周期（启动、喂输入、中断、kill、探退出、休眠前确保落盘）。
+          但 driver 自己的进程 env 里有一堆<strong>引擎/用户程序绝不可见</strong>的东西（<code>bindToken</code>、控制平面地址、git 凭证）。所以 driver 在 <code>spawn</code> 引擎前用 <code>scrubEngineEnv</code> 把这些<strong>driver 私有项剔除</strong>，只把该交给引擎的（GLM 路由 <code>ANTHROPIC_*</code>）传下去——用户程序读不到 token，自然无从仿冒沙箱或盗用凭证。
         </div>
 
         <h2 id="seq">seq 归属：driver 定序，control-plane 盖章</h2>
@@ -207,8 +221,8 @@
           <table>
             <thead><tr><th>步</th><th>方向</th><th>帧</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td>1</td><td>←</td><td><code>Request{op:hello, body:{driverVersion, protocol, bindCredential}}</code></td><td>持烘入镜像的静态凭证拨入 + <a href="sandbox.html#constraints">版本握手</a>。</td></tr>
-              <tr><td>2</td><td>→</td><td><code>Reply{ok, result:{pid, mode, resendFromLocalSeq?}}</code></td><td>CP 据 <a href="#trust">create-time 绑定</a>认出这是哪个待命进程，钉死身份。<code>mode</code> ∈ <code>resume</code>/<code>restore</code>。版本不兼容 → <code>Reply{ok:false, error}</code>，拒连。</td></tr>
+              <tr><td>1</td><td>←</td><td><code>Request{op:hello, body:{driverVersion, protocol, bindToken}}</code></td><td>持 create 时<strong>注入的 bindToken</strong>（每沙箱一次性）经 HTTPS 拨入 + <a href="sandbox.html#constraints">版本握手</a>。</td></tr>
+              <tr><td>2</td><td>→</td><td><code>Reply{ok, result:{pid, mode, resendFromLocalSeq?}}</code></td><td>CP 据 <a href="#trust">bindToken 登记簿</a>认领出这是哪个待命进程（<strong>登记早于拨号</strong>，首拨即命中），钉死身份。<code>mode</code> ∈ <code>resume</code>/<code>restore</code>。版本不兼容 → <code>Reply{ok:false, error}</code>，拒连。</td></tr>
               <tr><td>3a</td><td>←</td><td><code>Event</code> 重放（仅 <code>mode:resume</code>）</td><td><strong>同一 driver 还活着</strong>的网络抖动重连：driver 从 <code>resendFromLocalSeq</code> 重放自己缓冲区里的事件，CP 据已存 seq 去重。</td></tr>
               <tr><td>3b</td><td>—</td><td>driver <code>git clone</code>（仅 <code>mode:restore</code>）</td><td><strong>冷唤醒</strong>（新沙箱/新 driver，localSeq 从 0）：driver 持每进程 deploy 凭证 <code>git clone --depth=1</code> CP 托管的 bare repo（默认检出 HEAD = 最新检查点）把进程目录铺好（取代旧的 bundle 灌回）。per-process auth 等敏感种子仍随握手从 CP 下发。详见 <a href="proc-storage.html#transport">Git 模型 · 耐久传输</a>。</td></tr>
               <tr><td>4</td><td>—</td><td>driver 拉起 harness</td><td>cwd = 进程目录；之后进入场景 ②。</td></tr>
@@ -308,7 +322,7 @@
           <table>
             <thead><tr><th>抽象</th><th>时机</th><th>厂商相关性</th><th>管什么</th></tr></thead>
             <tbody>
-              <tr><td><code>bake.ts</code><span class="tag" style="margin-left:6px">每版本一份</span></td><td>构建期</td><td><strong>高</strong>（直调厂商 SDK）</td><td>跑某镜像版本目录的 <code>bake.ts</code>，把 base+引擎+工具烘进镜像 → <code>ImageRef</code></td></tr>
+              <tr><td><code>bake.ts</code><span class="tag" style="margin-left:6px">每版本一份</span></td><td>构建期</td><td><strong>高</strong>（直调厂商 SDK）</td><td>跑某镜像版本目录的 <code>bake.ts</code>，把 base+引擎+<strong>非密路由配置</strong>烘进镜像（<strong>零密钥</strong>；driver 与 bindToken 运行时注入）→ <code>ImageRef</code></td></tr>
               <tr><td><code>SandboxProvider</code><span class="tag" style="margin-left:6px">A 平面</span></td><td>生命周期拐点</td><td>中</td><td>沙箱作为资源：<strong>create / destroy</strong>（hibernate=destroy、wake=create）。<strong>不碰文件</strong></td></tr>
               <tr><td><code>DriverChannel</code><span class="tag" style="margin-left:6px">B 平面</span></td><td>运行期持续</td><td><strong>无</strong></td><td>跟 driver 的协议对话：<strong>只剩事件上行 + input 下行</strong>（含控制信号）。检查点 / 文件读已交给 git，不在此</td></tr>
             </tbody>

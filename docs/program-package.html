@@ -59,7 +59,7 @@
         <div class="dgm">
           <div class="dgm-stack tight">
             <div class="node c-state"><span class="nt">文件系统即管理面</span><span class="nd">加一个版本 = 新建 <code>&lt;版本&gt;/</code> 目录;查 = <code>ls</code>;退役 = 删目录;演化 = <code>git log</code>。<strong>不要 registry.ts / 枚举 / 单独 DB 管版本</strong>。</span></div>
-            <div class="node c-data"><span class="nt">OCI 是产物,不是管理面</span><span class="nd">就像 Daytona snapshot 之于镜像:<code>aprog-publish</code> 把源目录烘成 OCI artifact 推到 registry。<strong>git 是真相,registry 只存产物。</strong></span></div>
+            <div class="node c-data"><span class="nt">OCI 是产物,不是管理面</span><span class="nd">就像 PPIO template 之于镜像:<code>aprog-publish</code> 把源目录烘成 OCI artifact 推到 registry。<strong>git 是真相,registry 只存产物。</strong></span></div>
           </div>
         </div>
         <div class="tbl-wrap"><table>
@@ -67,7 +67,7 @@
           <tbody>
             <tr><td><strong>源 / 管理面</strong>(git)</td><td><code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code></td><td><code>programs/&lt;类&gt;/&lt;名&gt;/&lt;版本&gt;/</code> + SKILL.md</td></tr>
             <tr><td><strong>发版动作</strong></td><td><code>aprog-bake</code></td><td><code>aprog-publish</code></td></tr>
-            <tr><td><strong>产物</strong>(外部)</td><td>Daytona snapshot → <code>ImageRef</code></td><td>OCI artifact(GHCR)→ digest</td></tr>
+            <tr><td><strong>产物</strong>(外部)</td><td>PPIO template → <code>ImageRef</code></td><td>OCI artifact(GHCR)→ digest</td></tr>
             <tr><td><strong>版本</strong></td><td>目录名(人定、不可变)</td><td>同左</td></tr>
             <tr><td><strong>发现/增/退役/历史</strong></td><td><code>ls</code> / 新建目录 / <code>rm</code> / git</td><td>同左</td></tr>
           </tbody>

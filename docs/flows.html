@@ -62,11 +62,11 @@
               <li>写 <code>sandbox_id + sandbox_started_at</code>（state→running）</li>
             </ul>
           </div>
-          <div class="ar down"><span class="albl">driver 自启 · 持烘入凭证拨出 ▼</span><span class="gly">↓</span></div>
+          <div class="ar down"><span class="albl">driver 运行时推入 · 持注入 bindToken 拨出 ▼</span><span class="gly">↓</span></div>
           <div class="node c-driver">
             <span class="nt">🔌 <a href="components.html#driver">driver</a> 拨入 · 建 <a href="interaction.html#data-plane">DriverChannel</a></span>
             <ul class="acts">
-              <li>driver 拨向 CP + <a href="interaction.html#trust">create-time 绑定</a> + 版本握手</li>
+              <li>driver 经 HTTPS 拨向 CP + <a href="interaction.html#trust">据 bindToken 登记簿认领</a>（登记早于拨号）+ 版本握手</li>
               <li>CP 经握手下发 skill 闭包 + per-process auth + git deploy 凭证；driver 持凭证 <code>git clone --depth=1</code> + <code>checkout</code> 铺进程目录（首跑则空 / 初始 input）。<strong>fs 与检查点不经 DriverChannel</strong></li>
               <li>工作树由 <code>git clone --depth=1</code> 拉回最新检查点（默认检出 HEAD；首跑则是空 / 初始 input，见 <a href="proc-storage.html#transport">耐久传输</a>）</li>
               <li>driver 拉起 harness；<strong>首次</strong>由 harness 按 state 技能写出骨架</li>

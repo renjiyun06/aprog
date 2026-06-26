@@ -90,8 +90,8 @@ sequenceDiagram
   Note over Web: 立即渲染「唤醒中…」
   Note over CP,Eng: ↓ 后台 bring-up(③–⑧)异步 ↓
   CP->>Sbx: ③ create(派生镜像 program@版本→image@版本)
-  Sbx->>Drv: 沙箱起 · entrypoint 自启 driver
-  Drv->>CP: ④ 拨入 + create-time 绑定 + 版本握手
+  Sbx->>Drv: 沙箱起 · provider 推入并后台启动 driver
+  Drv->>CP: ④ 持注入 bindToken 经 HTTPS 拨入(登记早于拨号→命中) + 版本握手
   CP-->>Drv: ⑤ 下发种子(模型 auth + registry/git 短期 token)
   par ⑥ 并行铺进程目录(driver 直连存储)
     Drv->>Reg: OCI pull 程序包 + depends_on 闭包(digest)
@@ -138,7 +138,7 @@ sequenceDiagram
           <div class="node c-cp">
             <span class="nt">③ 申请沙箱(派生镜像) <span class="tag"><span class="pill run">现</span> <span class="pill">待</span></span></span>
             <ul class="acts">
-              <li><code>SandboxGateway.create()</code> → provider(Daytona…)按<strong>该 program 版本依赖的镜像</strong>(<code>program@版本 → image@版本</code>,见 <a href="sandbox.html#program-dep">程序依赖镜像</a>)起容器;镜像 entrypoint <strong>自启 driver</strong></li>
+              <li><code>SandboxGateway.create()</code> → provider(PPIO…)按<strong>该 program 版本依赖的镜像</strong>(<code>program@版本 → image@版本</code>,见 <a href="sandbox.html#program-dep">程序依赖镜像</a>)起沙箱;网关<strong>先签发 bindToken 并登记</strong>(driver 未启),provider 再把 driver 运行时推入、后台启动</li>
               <li><strong>慢点在此</strong>:冷启容器 = 秒级~数十秒(正是放后台、走异步的原因)</li>
               <li>mock 现状:立即返回 <code>mock-sbx-&lt;pid&gt;-xxxx</code> / <code>provider=mock</code>,无真实算力</li>
             </ul>
@@ -147,7 +147,7 @@ sequenceDiagram
           <div class="node c-driver">
             <span class="nt">④ driver 拨入 + 绑定 + 握手 <span class="tag"><span class="pill">待</span></span></span>
             <ul class="acts">
-              <li>driver 自启,持<strong>烘入镜像的凭证</strong>拨向 CP → <a href="interaction.html#trust">create-time 绑定</a> + protocol 版本握手 → 建 <a href="interaction.html#data-plane">DriverChannel</a></li>
+              <li>driver 自启,持<strong>运行时注入的 bindToken</strong> 经 HTTPS 拨向 CP → <a href="interaction.html#trust">CP 据登记簿认领</a>(登记早于拨号,首拨即命中) + protocol 版本握手 → 建 <a href="interaction.html#data-plane">DriverChannel</a></li>
             </ul>
           </div>
           <div class="ar down"><span class="gly">↓</span></div>

@@ -54,13 +54,13 @@
               <div class="ar down accent"><span class="gly">↕</span><span class="albl">B 平面 · DriverChannel（事件↑ input↓ 续票）</span></div>
             </div>
 
-            <div class="node c-sandbox"><span class="nt">sandbox provider（A 平面）</span><span class="nd">把沙箱当被托管资源：create / destroy；Daytona / E2B 多厂商</span></div>
+            <div class="node c-sandbox"><span class="nt">sandbox provider（A 平面）</span><span class="nd">把沙箱当被托管资源：create / destroy；当前 PPIO（AgentBay 暂下线），多厂商扩展点</span></div>
             <div class="ar down"><span class="gly">↓</span><span class="albl">起沙箱（镜像 = program@版 派生）</span></div>
 
             <div class="dgm-group g-sandbox">
               <span class="glabel">沙箱 · per-process 临时算力</span>
               <div class="dgm-stack tight">
-                <div class="node c-driver"><span class="nt">driver（entrypoint）</span><span class="nd">拨回 CP · 起引擎 · 翻译事件 · 生命线</span></div>
+                <div class="node c-driver"><span class="nt">driver（运行时推入）</span><span class="nd">持注入 bindToken 拨回 CP · 起引擎 · 翻译事件 · 生命线</span></div>
                 <div class="node c-engine"><span class="nt">└ import SDK → spawn 原生引擎</span><span class="nd">agent 循环真正在此</span></div>
               </div>
             </div>
@@ -69,7 +69,7 @@
             <div class="dgm-cols" style="justify-content:center;flex-wrap:wrap">
               <div class="node c-data"><span class="nt">GitHub</span><span class="nd">进程状态仓</span></div>
               <div class="node c-data"><span class="nt">GHCR</span><span class="nd">程序 OCI 包</span></div>
-              <div class="node c-data"><span class="nt">Daytona</span><span class="nd">沙箱算力</span></div>
+              <div class="node c-data"><span class="nt">PPIO</span><span class="nd">沙箱算力</span></div>
               <div class="node c-data"><span class="nt">模型 API</span><span class="nd">引擎直连</span></div>
             </div>
           </div>
@@ -103,8 +103,8 @@
             <tr><td>db</td><td><code>control-plane/src/db/index.ts</code></td><td>SQLite schema + migrations（users·programs·installations·processes…）</td><td>全 CP</td></tr>
 
             <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">③ 沙箱与镜像</th></tr>
-            <tr><td><strong>sandbox provider</strong></td><td><code>packages/sandbox/src/provider.ts</code> + <code>providers/</code>（daytona·e2b）</td><td>把沙箱当被托管资源：<code>create / destroy</code>；多厂商运行时实现</td><td>sandbox-gateway·@daytonaio/sdk</td></tr>
-            <tr><td>aprog-bake</td><td><code>tools/bake/src/bake.ts</code> + <code>images/</code></td><td>构建期 CLI（<code>bun link</code> 上 PATH）：锚仓库根、按「名+版本+供应商」跑 <code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code> 烘镜像 → 厂商 snapshot</td><td>images/·Daytona</td></tr>
+            <tr><td><strong>sandbox provider</strong></td><td><code>packages/sandbox/src/provider.ts</code> + <code>providers/ppio.ts</code></td><td>把沙箱当被托管资源：<code>create / destroy</code>；当前 PPIO（AgentBay 暂下线，留扩展点）</td><td>sandbox-gateway·ppio-sandbox</td></tr>
+            <tr><td>aprog-bake</td><td><code>tools/bake/src/bake.ts</code> + <code>images/</code></td><td>构建期 CLI（<code>bun link</code> 上 PATH）：锚仓库根、按「名+版本+供应商」跑 <code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/bake.ts</code> 烘镜像 → PPIO template</td><td>images/·ppio-sandbox-cli</td></tr>
 
             <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">④ 引擎适配 / 协议</th></tr>
             <tr><td><strong>driver</strong></td><td><code>packages/driver/src/</code> driver·main</td><td>沙箱 entrypoint：拨回 CP · 起引擎 · 翻译事件 · 生命线（烘进镜像，CP 不源码依赖）</td><td>channel·supervisor·engine·SDK</td></tr>
@@ -140,7 +140,7 @@
 
             <tr><th colspan="4" style="background:var(--accent-soft);color:var(--accent)">⑩ 横切</th></tr>
             <tr><td>log</td><td><code>packages/log/</code></td><td><code>createLogger(scope)</code> 结构化日志；叶子零依赖</td><td>各包</td></tr>
-            <tr><td>config</td><td><code>control-plane/src/config.ts</code> · <code>sandbox/src/config.ts</code></td><td>环境配置（GitHub·SMTP·dataDir·Daytona…）</td><td>—</td></tr>
+            <tr><td>config</td><td><code>control-plane/src/config.ts</code>（provider 细配置在 <code>buildSandboxGateway</code> 直读 env）</td><td>环境配置（GitHub·SMTP·dataDir·PPIO_API_KEY·controlPlaneUrl/CA…）</td><td>—</td></tr>
           </tbody>
         </table></div>
         <div class="note">

@@ -41,7 +41,7 @@
             </a>
             <div class="ar down"><span class="albl">跑在 ▼</span><span class="gly">↓</span></div>
             <a class="node c-sandbox" href="components.html#sandbox">
-              <span class="nt">🧊 Sandbox <span class="tag">Daytona</span></span>
+              <span class="nt">🧊 Sandbox <span class="tag">PPIO</span></span>
               <span class="nd">环境：装工具 + 给 Engine 跑的容器</span>
             </a>
           </div>
@@ -103,7 +103,7 @@
         <p>见 <a href="interaction.html">沙箱交互界面</a>。分两个正交平面：</p>
         <ol>
           <li><strong>A · 资源平面</strong>：CP 经 <a href="interaction.html#resource-plane">provider SDK</a> 起停沙箱（create/destroy/hibernate/wake）。不碰文件。</li>
-          <li><strong>B · 数据平面</strong>：沙箱内 driver 自启后持烘入凭证<strong>拨回</strong> CP，建一条活满沙箱生命周期的常驻 <a href="interaction.html#data-plane">DriverChannel</a>——只剩<strong>事件流上行</strong>与<strong>输入下行</strong>两件实时事。检查点耐久与 wake 恢复改走 git（<code>git push</code> / <code>clone</code> 到 CP 托管 bare repo，见 <a href="proc-storage.html">进程状态存储</a>），不再经此平面搬运文件。</li>
+          <li><strong>B · 数据平面</strong>：沙箱内 driver 自启后持<strong>运行时注入的 bindToken</strong> 经 HTTPS <strong>拨回</strong> CP，建一条活满沙箱生命周期的常驻 <a href="interaction.html#data-plane">DriverChannel</a>——只剩<strong>事件流上行</strong>与<strong>输入下行</strong>两件实时事。检查点耐久与 wake 恢复改走 git（<code>git push</code> / <code>clone</code> 到 CP 托管 bare repo，见 <a href="proc-storage.html">进程状态存储</a>），不再经此平面搬运文件。</li>
           <li>detach 只是摘掉一个订阅者，DriverChannel <strong>不</strong>随之关；reattach 用游标 <code>from=&lt;seq&gt;</code> 补回间隙。</li>
         </ol>
         <h3 id="link3">链路 3 · Driver ↔ Engine</h3>

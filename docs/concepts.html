@@ -65,7 +65,7 @@
         <h2 id="sandbox">沙箱 Sandbox</h2>
         <p>
           per-process 的<strong>容器</strong>：装着工具（git、curl、运行时…），给引擎一个文件系统、进程空间和网络去跑。
-          当前由 <strong>Daytona</strong> 云提供 lifecycle 与 exec 能力。
+          当前由 <strong>PPIO</strong>（派欧云，E2B 同构托管）提供 lifecycle 与 exec 能力。
         </p>
         <p>
           沙箱是<strong>临时算力</strong>，本身无权威状态——它随时可以销毁重建，<strong>磁盘是临时盘、不挂持久卷</strong>。进程休眠就是释放沙箱；唤醒就是重新分配一个沙箱、<code>git clone</code> 进程仓库到它的工作树里（见 <a href="proc-storage.html">Git 模型</a>）。
@@ -87,7 +87,7 @@
             <div class="ar down"><span class="albl">跑在 ▼</span><span class="gly">↓</span></div>
             <a class="node c-sandbox" href="components.html#sandbox">
               <span class="nt">🧊 沙箱 Sandbox <span class="tag">环境</span></span>
-              <span class="nd">装工具 + 给引擎跑的容器，当前由 Daytona 提供</span>
+              <span class="nd">装工具 + 给引擎跑的容器，当前由 PPIO 提供</span>
             </a>
           </div>
           <div class="dgm-cap">三者互不知情，通过一层薄适配 <a href="components.html#driver"><b>Engine Driver</b></a> 粘合。</div>

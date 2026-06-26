@@ -47,7 +47,7 @@
         </p>
         <div class="dgm">
           <div class="dgm-stack tight">
-            <div class="node c-driver"><span class="nt">aprog-driver <span class="tag">沙箱 entrypoint · 单文件原生二进制</span></span><span class="nd">沙箱一起即自启，持烘入凭证拨回 CP（见 <a href="interaction.html#trust">信任模型</a>）。翻译层 + 生命线，<strong>不含</strong> agent 循环本体。</span></div>
+            <div class="node c-driver"><span class="nt">aprog-driver <span class="tag">运行时推入 · node bundle</span></span><span class="nd">create 时由 provider 经 <code>files.write</code> 推入、后台 <code>node</code> 启动，持<strong>注入的 bindToken</strong> 拨回 CP（见 <a href="interaction.html#trust">信任模型</a>）。翻译层 + 生命线，<strong>不含</strong> agent 循环本体。</span></div>
             <div class="node c-program"><span class="nt">└ import · Claude Agent SDK <span class="tag">库</span></span><span class="nd">编程控制面：<code>query()</code> 取事件、注入输入、<code>interrupt()</code>、多会话。这是 driver「编程式驱动程序」要的自由度——CLI（PTY 单会话）给不了。</span></div>
             <div class="node c-muted"><span class="nt">　└ spawn · Claude Code 引擎 <span class="tag">原生二进制</span></span><span class="nd">SDK 作 per-platform optional dep 自带（如 <code>@anthropic-ai/claude-agent-sdk-linux-x64</code>）。<strong>agent 循环真正在此</strong>，走 stream-json 跟 SDK 通信。人在终端跑的 <code>claude</code> CLI = <strong>同一引擎</strong>的 PTY 前端。</span></div>
             <div class="node c-data"><span class="nt">　　└ → 模型 API</span><span class="nd">引擎二进制直连 Anthropic。driver / SDK 都不碰这一跳。</span></div>
@@ -60,28 +60,28 @@
           aprog 不重写这套循环——它的价值在编排（沙箱 / 生命周期 / 持久化 / 多租），不在造引擎。
           所以 driver = 翻译层 + 生命线，真正「思考和动手」的是引擎；SDK 是 driver <strong>编程驱动那个引擎</strong>的库，<strong>不是纯 in-process API 客户端</strong>——<code>query()</code> 底下 spawn 的是引擎进程。
         </div>
-        <p>对应到<strong>打包产物</strong>，镜像里这条链是<strong>两份原生二进制</strong>：</p>
+        <p>对应到<strong>打包产物</strong>，运行时这条链是<strong>一份烘入的原生引擎 + 一份运行时推入的 node driver</strong>：</p>
         <div class="tbl-wrap"><table>
           <thead><tr><th>材料</th><th>怎么来</th><th>运行时</th><th>角色</th></tr></thead>
           <tbody>
-            <tr><td><code>aprog-driver</code></td><td><code>bun build --compile</code> 编成单文件</td><td>内嵌 Bun（焊死）</td><td>翻译层 / 生命线，稳定</td></tr>
-            <tr><td>Claude Code 引擎</td><td>SDK 自带的 per-platform 二进制</td><td>原生（无需 node）</td><td>引擎本体，随镜像版本钉</td></tr>
+            <tr><td><code>aprog-driver</code></td><td><code>bun build --target=node</code> 打成 <code>.mjs</code> bundle，create 时 <code>files.write</code> 推入</td><td>跑在 base 自带的 node v20</td><td>翻译层 / 生命线，稳定</td></tr>
+            <tr><td>Claude Code 引擎</td><td>烘进镜像（npm 装 <code>@anthropic-ai/claude-code</code> 或 SDK 自带二进制）</td><td>原生（无需 node）</td><td>引擎本体，随镜像版本钉</td></tr>
           </tbody>
         </table></div>
         <p>
-          两者都是原生 <code>linux/amd64</code>（glibc，对上 Daytona 的 <code>ubuntu:24.04</code>），所以 <strong>driver+引擎这条链不依赖镜像里的系统 node/bun</strong>。
+          引擎是原生 <code>linux/amd64</code>（glibc，PPIO base 为 <code>debian 12</code>）；driver 是 node bundle，<strong>跑在 base 自带的 node v20</strong> 上（故 base 必须带 node）。driver 不烘进镜像 → 可独立于镜像迭代。
           烘进镜像哪一层、怎么烘，见 <a href="sandbox.html#image">沙箱与镜像 · 分层</a> 与 <a href="sandbox.html#bake">烘焙</a>。
         </p>
         <div class="note warn">
           <span class="note-label">引擎与 SDK 版本成对锁</span>
           Claude Agent SDK 与 Claude Code 引擎<strong>严格版本对齐</strong>（每个 SDK 版本对应一个引擎版本）。
-          driver 内嵌 SDK、镜像烘引擎二进制 → 这两者<strong>必须是匹配的一对、一起升</strong>，由 <a href="sandbox.html#program-dep"><code>image@版本</code></a> 钉成一对，不能各自独立 bump。
+          driver bundle 内嵌 SDK（运行时推入）、镜像烘引擎二进制 → 这两者<strong>必须是匹配的一对、一起升</strong>，由 <a href="sandbox.html#program-dep"><code>image@版本</code></a> 钉成一对，不能各自独立 bump。
         </div>
         <div class="note">
           <span class="note-label">镜像里怎么把 SDK 指到引擎</span>
           driver 启动时用 SDK 的 <code>spawnClaudeCodeProcess</code>（官方原话：给「VM / 容器 / 远程」用）或 <code>pathToClaudeCodeExecutable</code> 指向烘好的引擎路径。
-          坑：<code>bun build --compile</code> 后 <code>require.resolve</code> 在 <code>$bunfs</code> 虚拟文件系统里失效，SDK 自动找不到自带引擎——官方解法是 <code>extractFromBunfs()</code> 解出来再喂路径；
-          但镜像里我们把引擎当<strong>独立文件</strong>烘到已知路径、直接指过去，不必走这个 hack。也因此 <code>HarnessSupervisor</code> 对 Claude 这条<strong>退化为 SDK 的 spawn 钩子</strong>（进程拉起交给 SDK，不再手搓）——与现有 <code>supervisor.ts</code> 待对齐。
+          driver 现在是 node 上跑的 <code>.mjs</code>（<strong>非 <code>--compile</code> 单文件</strong>），不存在「<code>$bunfs</code> 虚拟文件系统里 <code>require.resolve</code> 找不到自带引擎」那类坑——
+          引擎当<strong>独立文件</strong>烘到已知路径、直接 <code>pathToClaudeCodeExecutable</code> 指过去即可。也因此 <code>HarnessSupervisor</code> 对 Claude 这条<strong>退化为 SDK 的 spawn 钩子</strong>（进程拉起交给 SDK，不再手搓）——与现有 <code>supervisor.ts</code> 待对齐。
         </div>
 
         <h2 id="transduce">转换逻辑放在哪：纯核 + I/O 壳</h2>

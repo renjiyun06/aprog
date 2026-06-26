@@ -37,7 +37,7 @@
               <tr><td>进程</td><td><strong>进程 Process</strong></td><td>程序的一次运行，可休眠 / 唤醒，有自己的 PID 与目录</td></tr>
               <tr><td><code>/proc/&lt;pid&gt;/</code></td><td><strong>进程目录</strong></td><td><code>~/.aprog/&lt;pid&gt;/</code>，进程的真正状态，也是 harness 的 cwd（不挂卷，靠检查点持久化）</td></tr>
               <tr><td>CPU</td><td><strong>引擎 Engine</strong></td><td>底层 agent loop（当前 Claude Agent SDK，可替换）</td></tr>
-              <tr><td>内存 / 运行环境</td><td><strong>沙箱 Sandbox</strong></td><td>per-process 容器，临时算力，由 Daytona 提供</td></tr>
+              <tr><td>内存 / 运行环境</td><td><strong>沙箱 Sandbox</strong></td><td>per-process 容器，临时算力，由 PPIO 提供</td></tr>
             </tbody>
           </table>
         </div>

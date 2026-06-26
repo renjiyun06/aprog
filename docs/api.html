@@ -406,7 +406,7 @@
         </div>
         <div class="note warn" id="q-async">
           <span class="note-label">待确认 Q2 · wake 同步还是异步？</span>
-          <code>spawn</code> 只写控制平面记录，瞬时同步返回，无悬念。<code>wake</code> 含 <code>provider.create</code>（Daytona 实测约数秒），两种返回风格：
+          <code>spawn</code> 只写控制平面记录，瞬时同步返回，无悬念。<code>wake</code> 含 <code>provider.create</code>（PPIO 实测约数秒），两种返回风格：
           <strong>(a) 同步</strong>——阻塞到 <code>running</code> 才返回；<strong>(b) 异步</strong>——立刻 <code>202</code> 返回过渡态，前端订阅 <code>…/stream</code> 或轮询 <code>GET /proc/:pid</code> 观察转 <code>running</code>。
           我倾向 <strong>(b)</strong>：起沙箱的耗时不该占着 HTTP 连接，且前端本来就要连 stream。
         </div>

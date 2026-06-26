@@ -259,7 +259,7 @@ CREATE INDEX installations_user ON installations(user_id);</code></pre>
             <tr><td>program_id</td><td>TEXT</td><td><strong>钉死</strong>的程序 slug（= skill id）</td></tr>
             <tr><td>program_version</td><td>TEXT</td><td><strong>钉死</strong>的版本。与 <code>program_id</code> 一起 join <a href="#program-versions"><code>program_versions</code></a>，据此<strong>派生</strong>该用哪个镜像（<code>process → program@版本 → image@版本</code>，见 <a href="sandbox.html#program-dep">程序依赖镜像</a>）</td></tr>
             <tr><td>state</td><td>TEXT</td><td><code>spawned</code> / <code>waking</code> / <code>running</code> / <code>hibernating</code>（见状态机；<code>waking</code> = 异步唤醒过渡态）</td></tr>
-            <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>daytona</code> / <code>e2b</code> …（见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
+            <tr><td>provider</td><td>TEXT?</td><td>沙箱厂商：<code>ppio</code> …（AgentBay 暂下线，见 <a href="sandbox.html#provider">provider 抽象</a>）；首次 attach 前为 null</td></tr>
             <tr><td>sandbox_id</td><td>TEXT?</td><td>当前沙箱 ID；无沙箱（spawned / waking / hibernating）时为 null（waking 期间后台正在起）</td></tr>
             <tr><td>repo_url</td><td>TEXT</td><td>进程 git 仓库的<strong>实际 clone URL</strong>（不含凭证），如 <code>https://&lt;cp&gt;/aprog-proc-&lt;pid&gt;.git</code>；spawn 建库时写入（见 <a href="proc-storage.html#provisioning">寻址</a>）</td></tr>
             <tr><td>created_at</td><td>TEXT</td><td>spawn 时间（ISO）</td></tr>

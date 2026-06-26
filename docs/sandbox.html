@@ -22,7 +22,7 @@
         <div class="eyebrow">架构</div>
         <h1>沙箱与镜像</h1>
         <p class="lead">
-          沙箱是进程的临时算力——可销毁、可替换,藏在一个 <strong>provider 抽象</strong>后面(当前 Daytona,之后还要接别家)。
+          沙箱是进程的临时算力——可销毁、可替换,藏在一个 <strong>provider 抽象</strong>后面(当前 PPIO,之后还要接别家)。
           镜像则<strong>不是</strong>一层抽象,而是仓库里<strong>一个目录</strong>:按「名 / 版本」组织、每个版本自带打镜像脚本与材料。
           而程序<strong>依赖</strong>某个版本的镜像。这页讲三件事:provider 怎么把厂商差异关干净、镜像怎么在仓库里组织与版本化、程序如何依赖镜像。
         </p>
@@ -52,7 +52,7 @@
         <div class="note">
           <span class="note-label">为什么镜像不做成抽象</span>
           早期版本曾把「烘镜像」也抽象成一套 <code>ImageBaker × ImageBuilder</code> 的策略/方言接缝,想一份定义烘到任意厂商。
-          但现实是<strong>只用 Daytona</strong>、其余全是桩——那是<strong>从 0 个真实第二案例提前抽象</strong>,典型的过度设计,已拆除。
+          但现实是<strong>只用 PPIO</strong>(AgentBay 试过即下线)、其余全是桩——那是<strong>从 0 个真实第二案例提前抽象</strong>,典型的过度设计,已拆除。
           镜像回归成「一个目录 + 一段直调厂商 SDK 的 <code>bake.ts</code>」。等真出现第二家厂商 / 第二种构建模型,再从<strong>两个具体脚本</strong>里提炼骨架(见 <a href="#bake">烘焙</a>)。
         </div>
 
@@ -64,21 +64,21 @@
           <table>
             <thead><tr><th>职责</th><th>内容</th></tr></thead>
             <tbody>
-              <tr><td><strong>provider 运行时</strong></td><td><code>SandboxProvider</code>(create/destroy)+ 各厂商实现(<code>DaytonaProvider</code> / <code>E2BProvider</code>)</td></tr>
-              <tr><td><strong>入参契约 / 句柄</strong></td><td><code>DaytonaConfig</code> 等 provider 配置、<code>SandboxHandle</code>、不透明 <code>ImageRef</code></td></tr>
-              <tr><td><strong>错误归一</strong></td><td><code>SandboxError</code> 体系 + <code>mapDaytonaError</code>(把厂商 SDK 异常归一)</td></tr>
+              <tr><td><strong>provider 运行时</strong></td><td><code>SandboxProvider</code>(create/destroy)+ 各厂商实现(当前 <code>PPIOProvider</code>;AgentBay 暂时下线、留作扩展点)</td></tr>
+              <tr><td><strong>入参契约 / 句柄</strong></td><td><code>PPIOProviderDeps</code> 等 provider 配置、<code>CreateOptions</code>(bindToken + onProvisioned)、<code>SandboxHandle</code>、不透明 <code>ImageRef</code></td></tr>
+              <tr><td><strong>错误归一</strong></td><td><code>SandboxError</code> 体系 + provider 内 <code>wrap()</code>(把厂商 SDK 异常归一)</td></tr>
             </tbody>
           </table>
         </div>
         <div class="dgm">
           <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center;align-items:center">
-            <div class="node c-muted" style="min-width:160px"><span class="nt">@daytonaio/sdk · @aprog/log</span><span class="nd">厂商 SDK(下沉到此,不污染 control-plane)+ 日志</span></div>
+            <div class="node c-muted" style="min-width:160px"><span class="nt">ppio-sandbox · @aprog/log</span><span class="nd">厂商 SDK(下沉到此,不污染 control-plane;延迟 <code>require</code>,mock 路径不扛)+ 日志</span></div>
             <div class="ar"><span class="albl">依赖</span><span class="gly">→</span></div>
             <div class="node c-sandbox" style="min-width:170px"><span class="nt">@aprog/sandbox</span><span class="nd">只剩运行时 provider 库</span></div>
             <div class="ar"><span class="albl">被依赖</span><span class="gly">←</span></div>
-            <div class="node c-cp" style="min-width:190px"><span class="nt">@aprog/control-plane</span><span class="nd">仅 import 两个 type:<code>DaytonaConfig</code>(config.ts)、<code>SandboxHandle</code>(driver-channel.ts)</span></div>
+            <div class="node c-cp" style="min-width:190px"><span class="nt">@aprog/control-plane</span><span class="nd">仅 import 少量 type:<code>PPIOProvider</code> / <code>SandboxHandle</code> / <code>ImageRef</code> 等(http.ts / driver-channel.ts)</span></div>
           </div>
-          <div class="dgm-cap">耦合面就两处 <code>import type</code>,且不再直接抱厂商 SDK。</div>
+          <div class="dgm-cap">耦合面只是几个 <code>import</code>(provider + 类型),control-plane 不再直接抱厂商 SDK。</div>
         </div>
         <div class="note ok">
           <span class="note-label">镜像材料为什么不能放进这个包</span>
@@ -97,9 +97,9 @@
           <table>
             <thead><tr><th>档位</th><th>provider</th><th>隔离</th><th>为什么是它</th></tr></thead>
             <tbody>
-              <tr><td><strong>默认档</strong></td><td>Daytona(现状)</td><td>容器级 + gVisor</td><td>声明式构建最全(<code>addLocalDir</code>)、TS SDK 齐、冷启动快</td></tr>
-              <tr><td><strong>强隔离档</strong></td><td>E2B</td><td>Firecracker microVM</td><td>硬件级隔离;与 Daytona API 形状最像,是验证抽象的「第二家靶子」</td></tr>
-              <tr><td><strong>自托管 / on-prem</strong></td><td>Northflank(Kata / Cloud Hypervisor)</td><td>可选 microVM / gVisor</td><td>成熟 BYOC,企业私有部署;避开 Daytona 自托管的 AGPL 传染</td></tr>
+              <tr><td><strong>默认档(现状)</strong></td><td>PPIO(派欧云)</td><td>Firecracker microVM</td><td>E2B 同构托管(中国版 E2B)、国内出站开放(回拨 CP / GLM 均通,无需 VPN)、<strong>自定义镜像管线可用</strong>、冷启 ~秒级、按秒计费</td></tr>
+              <tr><td><strong>试过即下线</strong></td><td>AgentBay(阿里云无影)</td><td>容器级</td><td>自定义镜像云构建/激活在平台侧不可用(激活卡死),<strong>暂时下线</strong>;扩展点保留,需要时加回 <code>ProviderId</code></td></tr>
+              <tr><td><strong>强隔离备选</strong></td><td>E2B</td><td>Firecracker microVM</td><td>PPIO 的协议同构原型;直连国际网络受限,故国内选 PPIO</td></tr>
               <tr><td><strong>分支探索档</strong></td><td>Morph(Infinibranch)</td><td>microVM</td><td>~250ms 全 VM 状态分支,适合并行 agent / tree-of-thought</td></tr>
             </tbody>
           </table>
@@ -137,7 +137,7 @@
         <pre><code>images/
   &lt;镜像名&gt;/              ← 一个镜像 = 一个目录;名字就是目录名
     &lt;版本&gt;/              ← 一个版本 = 逻辑镜像(中立);跨供应商共享的材料放这层
-      &lt;供应商&gt;/          ← daytona / e2b …(当前只有 daytona)
+      &lt;供应商&gt;/          ← ppio / e2b …(当前只有 ppio)
         bake.ts          ← 这个版本在该供应商上怎么烘(直接调该厂商 SDK)
       …跨供应商共享的材料
     &lt;另一个版本&gt;/
@@ -146,30 +146,29 @@
           <div class="dgm-stack tight">
             <div class="node c-state"><span class="nt">文件系统即 registry</span><span class="nd">不在代码里枚举镜像名、不要 registry 模块。发现 = <code>ls images/&lt;名&gt;/</code>;加一个镜像 = 新建目录,不在任何地方注册。</span></div>
             <div class="node c-state"><span class="nt">版本 = 目录名</span><span class="nd">人定、可读、可排序——正是「每种镜像都有版本」要的。一个版本发布后<strong>不可变</strong>(进程钉的就是它)。</span></div>
-            <div class="node c-muted"><span class="nt">一个镜像起 N 个沙箱</span><span class="nd">Daytona 模型是「一个 snapshot 起 N 个 sandbox」,没有 per-process 镜像。但<strong>也不是</strong>「一个全宇宙镜像装下所有工具」——镜像有区分,程序按需<a href="#program-dep">依赖</a>。</span></div>
+            <div class="node c-muted"><span class="nt">一个镜像起 N 个沙箱</span><span class="nd">PPIO 模型是「一个 template 起 N 个 sandbox」,没有 per-process 镜像。但<strong>也不是</strong>「一个全宇宙镜像装下所有工具」——镜像有区分,程序按需<a href="#program-dep">依赖</a>。</span></div>
           </div>
         </div>
-        <p>镜像内容按<strong>变化频率</strong>分层,per-process 的东西绝不烘进去:</p>
+        <p>镜像内容按<strong>变化频率 + 是否秘密</strong>分层。底线一句话:<strong>镜像零密钥、零 token</strong>——per-process 与一切秘密都运行时注入,绝不烘:</p>
         <div class="dgm">
           <div class="dgm-stack tight">
-            <div class="node c-muted"><span class="nt">① 基础 + 引擎 + 工具(烘进去)</span><span class="nd">OS + <strong>引擎本体</strong>(Claude:SDK 自带的 <strong>Claude Code 原生二进制</strong> / Codex)+ 这个镜像要带的<a href="#tools">工具</a>;skill 工具按需带 Bun。慢变,随镜像版本走。driver 通过 SDK spawn 引擎,拓扑见 <a href="harness.html#topology">Harness · 运行时拓扑</a>。</span></div>
-            <div class="node c-driver"><span class="nt">② driver(烘进去)</span><span class="nd"><code>@aprog/driver</code> 经 <code>bun build --compile</code> 编成<strong>单个原生二进制</strong>(内嵌 Bun),落 <code>/opt/aprog/bin/</code>,作沙箱 entrypoint。prod 钉版本烘入,dev 用 bind-mount 盖掉免重烘。它和 ① 的引擎<strong>版本成对</strong>(见 <a href="harness.html#topology">拓扑</a>)。</span></div>
-            <div class="node c-state"><span class="nt">③ 每进程注入(spawn / wake 时,<strong>不</strong>烘)</span><span class="nd">进程目录、auth 凭据、program(skill) 文件。每进程不同,经 <a href="interaction.html">DriverChannel</a> / <code>git clone</code> 进来。</span></div>
+            <div class="node c-muted"><span class="nt">① 基础 + 引擎 + 非密路由(烘进去)</span><span class="nd">OS + <strong>引擎本体</strong>(Claude Code 原生 CLI / Codex)+ 这个镜像要带的<a href="#tools">工具</a> + <strong>非密的引擎路由配置</strong>(如 GLM 的 <code>base_url</code> + 模型映射,写在 <code>~/.claude/settings.json</code>——是路由不是密钥)。慢变,随镜像版本走。<strong>密钥不在这里</strong>(运行时注入,见 ③)。</span></div>
+            <div class="node c-driver"><span class="nt">② driver(<strong>运行时推入</strong>,非烘)</span><span class="nd"><code>@aprog/driver</code> 经 <code>bun build --target=node</code> 打成单个 <code>.mjs</code> bundle;<code>provider.create</code> 时经 <code>files.write</code> 推入沙箱(<code>/home/user/aprog/driver.mjs</code>),再以<strong>后台 <code>node</code></strong> 启动(base 自带 node v20)。不烘 → driver 可独立于镜像迭代(改 driver 不重烘)。它内嵌的 Claude Agent SDK 仍须与 ① 的引擎<strong>版本对齐</strong>(见 <a href="harness.html#topology">拓扑</a>)。</span></div>
+            <div class="node c-state"><span class="nt">③ 每进程 / 每沙箱注入(create / wake 时,<strong>不</strong>烘)</span><span class="nd">进程目录、auth 凭据、program(skill) 文件,以及一切秘密:<strong>bindToken</strong>(每沙箱信任 nonce)、<strong>GLM 密钥</strong>(<code>ANTHROPIC_AUTH_TOKEN</code>)、git/OAuth 凭证。经 driver 启动 env / <a href="interaction.html">DriverChannel</a> / <code>git clone</code> 进来。</span></div>
           </div>
         </div>
 
         <h2 id="bake">烘焙:跑那个供应商目录里的 bake.ts</h2>
         <p>
-          打镜像就是<strong>跑某版本目录里的 <code>bake.ts</code></strong>——它直接调 <code>@daytonaio/sdk</code> 把 base + 引擎 + 工具拼成 <code>Image</code>、
-          <code>snapshot.create</code> 注册成命名 snapshot,返回 <code>ImageRef</code>。一个薄 CLI 把它包成命令:
+          打镜像就是<strong>跑某版本目录里的 <code>bake.ts</code></strong>——它直接调厂商 CLI(PPIO 走 <code>ppio-sandbox-cli template build</code>:本地 <code>docker build</code> 把 base + 引擎 + 非密路由拼好、<code>push</code> 到厂商 registry、并注入 envd 控制层)注册成命名 template,返回 <code>ImageRef</code>。一个薄 CLI 把它包成命令:
         </p>
         <pre><code>aprog-bake &lt;镜像名&gt; &lt;版本&gt; &lt;供应商&gt;   # = 进 images/&lt;镜像名&gt;/&lt;版本&gt;/&lt;供应商&gt;/ 跑 bake.ts
-aprog-bake base 0.1.0 daytona
-aprog-bake base 0.1.0 daytona --cpu 4 --memory 8 --disk 20   # 覆盖资源</code></pre>
+aprog-bake base 0.1.0 ppio
+aprog-bake base 0.1.0 ppio --cpu 4 --memory 8 --disk 20   # 覆盖资源</code></pre>
         <div class="note">
-          <span class="note-label">资源(cpu / 内存 / 磁盘)是烘焙期参数</span>
-          对 Daytona,沙箱的 <code>cpu / memory / disk</code> 是<strong>烘进 snapshot</strong> 的(运行期 <code>create</code> 不再给),所以它们在<strong>烘焙时</strong>定。
-          默认值写在各 <code>bake.ts</code> 里(镜像自包含);<code>aprog-bake</code> 的 <code>--cpu/--memory/--disk</code> 经 env <strong>透传覆盖</strong>——本命令只转发、不解释,给了才传,否则用 bake.ts 自带默认。
+          <span class="note-label">资源(cpu / 内存 / 磁盘)的口径随厂商</span>
+          各家口径不同:PPIO 由 <strong>template / <code>SandboxOpts</code></strong> 决定,平台侧把 <code>Resources</code> 三元组当日志/契约;
+          有的厂商则把资源<strong>烘进镜像</strong>(运行期不再改)。默认值写在各 <code>bake.ts</code> 里(镜像自包含);<code>aprog-bake</code> 的 <code>--cpu/--memory/--disk</code> 经 env <strong>透传覆盖</strong>——本命令只转发、不解释,给了才传,否则用 bake.ts 自带默认。
         </div>
         <div class="note ok">
           <span class="note-label">打镜像是构建期 / CLI 的事,不归运行时服务器</span>
@@ -178,7 +177,7 @@ aprog-bake base 0.1.0 daytona --cpu 4 --memory 8 --disk 20   # 覆盖资源</cod
         </div>
         <div class="note">
           <span class="note-label">为什么没有「策略 / 厂商方言」那一层</span>
-          多供应商是<strong>目录维度,不是代码抽象</strong>:<code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/</code> 每家一个并列子目录,各自一份<strong>写死该厂商 SDK</strong> 的 <code>bake.ts</code>,不绕任何 <code>ImageBaker</code> / <code>pickBaker</code> 接缝。
+          多供应商是<strong>目录维度,不是代码抽象</strong>:<code>images/&lt;名&gt;/&lt;版本&gt;/&lt;供应商&gt;/</code> 每家一个并列子目录,各自一份<strong>写死该厂商 CLI/SDK</strong> 的 <code>bake.ts</code>,不绕任何 <code>ImageBaker</code> / <code>pickBaker</code> 接缝。
           代价是「一份定义烘到任意厂商」这个<strong>投机选项</strong>没了——但镜像产物本来就<a href="#program-dep">不跨厂商</a>、换厂商得重烘,所以没真损失。
           真要抽公共骨架,等有<strong>两个真实供应商案例</strong>再从两份 <code>bake.ts</code> 提炼,而不是现在从 0 个猜。
         </div>
@@ -235,26 +234,25 @@ aprog-bake base 0.1.0 daytona --cpu 4 --memory 8 --disk 20   # 覆盖资源</cod
 
         <h2 id="constraints">约束与版本</h2>
         <ul>
-          <li><strong>amd64 / glibc only</strong>——所有工具 / driver / 引擎二进制必须是 <code>linux/amd64</code> 且 glibc(对上 Daytona 的 <code>ubuntu:24.04</code>;SDK 自带引擎区分 musl/glibc),写进构建约定。</li>
-          <li><strong>引擎与 driver 内嵌的 SDK 版本成对</strong>——Claude Code 引擎二进制必须匹配 driver 里的 Claude Agent SDK 版本(两者严格对齐),一起升,由 <code>image@版本</code> 钉成一对(见 <a href="harness.html#topology">Harness · 拓扑</a>)。</li>
+          <li><strong>amd64 / glibc only</strong>——所有工具 / driver / 引擎二进制必须是 <code>linux/amd64</code> 且 glibc(PPIO base 为 <code>debian 12</code> / node v20 / py3.11),写进构建约定。</li>
+          <li><strong>引擎与 driver 内嵌的 SDK 版本成对</strong>——烘进镜像的 Claude Code 引擎必须匹配<strong>运行时推入的</strong> driver 里的 Claude Agent SDK 版本(两者严格对齐),一起升;引擎随 <code>image@版本</code> 走、driver bundle 随之配对(见 <a href="harness.html#topology">Harness · 拓扑</a>)。</li>
           <li><strong>版本 = 目录名</strong>(人定、不可变)。<code>content-hash</code> 当初是为补「没有可读版本」而自算的;现在目录名即版本即身份,content-hash <strong>退化为可选的完整性校验</strong>,不再是镜像的名字。</li>
-          <li><strong>资源(cpu/mem/disk)随 <code>snapshot.create</code> 烘进 snapshot</strong>——属镜像定义的一部分,起 sandbox 时不再逐个改。</li>
-          <li><strong>镜像大小上限 Daytona 未公布</strong>——工具多了镜像会变大,得早测。</li>
+          <li><strong>资源(cpu/mem/disk)口径随厂商</strong>——PPIO 经 template / <code>SandboxOpts</code> 决定;有的厂商烘进镜像。平台层 <code>Resources</code> 三元组只作日志/契约。</li>
+          <li><strong>镜像大小要早测</strong>——工具多了镜像会变大,各厂商上限不一,得早测。</li>
         </ul>
         <div class="note warn">
           <span class="note-label">版本握手</span>
-          driver 烘在镜像里、control-plane 在 VM 上,两者共用 <a href="protocol.html">protocol</a>。协议升版后可能错配——
+          driver 跑在沙箱里(运行时推入)、control-plane 在 VM 上,两者共用 <a href="protocol.html">protocol</a>。协议升版后可能错配——
           所以 <strong>attach 时做一次版本握手</strong>:driver 上报 protocol 版本,control-plane 校验兼容、不兼容就拒绝并提示「镜像该更新了」。
         </div>
 
         <h2 id="layout">代码组织</h2>
         <pre><code>packages/sandbox/          @aprog/sandbox —— 精瘦运行时库(被 control-plane import,无 bin)
   src/
-    provider.ts            SandboxProvider (create/destroy)
-    providers/daytona.ts   DaytonaProvider
-    types.ts               ImageRef / Resources / SandboxHandle / ProviderId
-    errors.ts              SandboxError 体系 + mapDaytonaError
-    config.ts              DaytonaConfig 等 provider 入参契约
+    provider.ts            SandboxProvider (create/destroy) + CreateOptions(bindToken/onProvisioned)
+    providers/ppio.ts      PPIOProvider(延迟 require ppio-sandbox;driver 运行时推入 + 后台 node)
+    types.ts               ImageRef / Resources / SandboxHandle / ProviderId('ppio')
+    errors.ts              SandboxError 体系(provider 内 wrap() 归一厂商异常)
     index.ts               单一公共出口(只导出运行时那半)
 
 tools/bake/                ← 构建期 CLI(workspace 包,bun link 上 PATH)
@@ -266,7 +264,7 @@ images/                    ← 仓库顶层:镜像目录(不是 package,无人 i
 (工具各自活在自己的 repo,由 bake.ts 引用 / 构建进来)</code></pre>
         <div class="note">
           <span class="note-label">三个物种,各归各位</span>
-          <code>packages/sandbox</code> 是 <strong>host 侧、被 import 的运行时库</strong>;<code>images/</code> 是<strong>沙箱侧材料</strong>、构建期才跑、无人 import;<code>aprog-bake</code> 又是第三个物种——<strong>命令行工具</strong>,既不被 import 也不是材料——故独立成 <code>tools/bake</code>(<code>@aprog/bake</code>),与 sandbox 运行时代码<strong>零耦合</strong>,只认 <code>images/</code> 约定(见 <a href="#package">包边界</a>)。<code>bake.ts</code>(在 <code>images/</code> 里)直调 <code>@daytonaio/sdk</code>,从仓库根 devDeps 解析。
+          <code>packages/sandbox</code> 是 <strong>host 侧、被 import 的运行时库</strong>;<code>images/</code> 是<strong>沙箱侧材料</strong>、构建期才跑、无人 import;<code>aprog-bake</code> 又是第三个物种——<strong>命令行工具</strong>,既不被 import 也不是材料——故独立成 <code>tools/bake</code>(<code>@aprog/bake</code>),与 sandbox 运行时代码<strong>零耦合</strong>,只认 <code>images/</code> 约定(见 <a href="#package">包边界</a>)。<code>bake.ts</code>(在 <code>images/</code> 里)直调厂商 CLI(PPIO 走 <code>ppio-sandbox-cli</code>)。
         </div>
 
         <div class="pager" data-pager></div>
