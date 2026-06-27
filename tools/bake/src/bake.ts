@@ -5,9 +5,9 @@
 //   images/<名>/<版本>/        ← 版本目录 = 逻辑镜像（中立；跨供应商共享的材料放这层）
 //   images/<名>/<版本>/<供应商>/bake.ts   ← 各家怎么打包（直调各自厂商 SDK，零抽象层）
 // 本命令就是「按 名+版本+供应商 找到那个 bake.ts、跑它」。
-//   例: aprog-bake base 0.1.0 daytona                       →  跑 images/base/0.1.0/daytona/bake.ts
-//   例: aprog-bake base 0.1.0 daytona --cpu 4 --memory 8 --disk 20   →  覆盖资源(经 env 透传给 bake.ts)
-// 资源(cpu/内存/磁盘)是平台 Resources 三元组；本命令只转发、不解释——给了才经 env 透传，否则 bake.ts 用自带默认。
+//   例: aprog-bake base 0.1.0 ppio                          →  跑 images/base/0.1.0/ppio/bake.ts
+// 资源(cpu/内存/磁盘)不在烘制期：PPIO 模型里 rootfs 与资源规格解耦，资源是运行时在 Sandbox.create
+// 时定（control-plane Resources → provider.create），故本命令不收资源参数。
 //
 // 路径靠两层约定，与 cwd 无关：
 //   L1 工具→仓库根：锚定 import.meta.dir（Bun 已把 ~/.bun/bin 的软链解析成真实仓库内位置）
@@ -66,11 +66,7 @@ const main = defineCommand({
   args: {
     name: { type: 'positional', description: '镜像名 = images/ 下的目录名（例: base）' },
     version: { type: 'positional', description: '版本 = 版本目录名（例: 0.1.0）' },
-    provider: { type: 'positional', description: '供应商 = 版本目录下的子目录名（例: daytona）' },
-    // 资源覆盖（可选）：平台 Resources 三元组。给了才透传，否则 bake.ts 用它自带的默认。
-    cpu: { type: 'string', description: '覆盖 vCPU 核数（默认由 bake.ts 定）' },
-    memory: { type: 'string', description: '覆盖内存 GiB（默认由 bake.ts 定）' },
-    disk: { type: 'string', description: '覆盖磁盘 GiB（默认由 bake.ts 定）' },
+    provider: { type: 'positional', description: '供应商 = 版本目录下的子目录名（例: ppio）' },
   },
   async run({ args }) {
     const repoRoot = findRepoRoot(import.meta.dir);
@@ -84,12 +80,8 @@ const main = defineCommand({
       process.exit(1);
     }
 
-    // 透传给 bake.ts（本命令只转发、不解释）：仓库根 + 给了的资源覆盖。
-    // 资源值只在显式提供时塞进 env，缺省让 bake.ts 走自带默认。
+    // 透传给 bake.ts（本命令只转发、不解释）：仓库根。资源不在烘制期，故不透传。
     const env: Record<string, string> = { ...process.env, APROG_REPO_ROOT: repoRoot };
-    if (args.cpu !== undefined) env.APROG_CPU = String(args.cpu);
-    if (args.memory !== undefined) env.APROG_MEMORY = String(args.memory);
-    if (args.disk !== undefined) env.APROG_DISK = String(args.disk);
 
     console.log(`[aprog-bake] 跑 ${bakePath}`);
     const proc = Bun.spawn(['bun', 'run', bakePath], { stdout: 'inherit', stderr: 'inherit', stdin: 'inherit', env });

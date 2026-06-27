@@ -7,8 +7,10 @@
 //    Sandbox.kill(id)，无需缓存会话句柄（故无 sessions Map）。
 //  - 鉴权：一把 PPIO_API_KEY（sk_）既作运行时 apiKey、也作 CLI 管理面 accessToken；这里只用运行时那半。
 //    显式经 opts.apiKey 注入（不靠进程级 env），DI 友好。
-//  - 默认非 root 用户（whoami=user）：driver 落点用 /home/user 下的可写目录，不能用 /opt（无权限）。
-//  - driver 不烘镜像、运行时经 files.write 推入 + 后台 node 启动（base 自带 node v20，跑 .mjs 无碍）。
+//  - 以 root 跑：base 镜像（ubuntu:24.04）把工具/引擎装进 /root、默认用户设 root。PPIO 是否认 USER root
+//    作运行时默认用户未文档化，故这里对每个 files.write/commands.run 显式带 user:'root'——无论默认用户是谁，
+//    driver 都以 root 落 /root/aprog、以 root 跑。base 自带 node（nvm LTS 软链到 /usr/local/bin，非交互 PATH 可见）。
+//  - driver 不烘镜像、运行时经 files.write 推入 + 后台 node 启动（跑 .mjs 无碍）。
 //    凭证（bindToken + 控制平面地址 + injectedEnv）经 commands.run 的 envs 注入到 driver 进程。
 //  - 自定义镜像（claude+GLM 路由等）走 images/<名>/<版本>/ppio/bake.ts（ppio.Dockerfile + template build），
 //    兑现为不透明的 template id 喂进 ImageRef.id；本层不碰打包。
@@ -23,12 +25,12 @@ import { SandboxConfigError, SandboxError, SandboxValidationError } from '../err
 export interface PPIOSandboxLike {
   readonly sandboxId: string;
   files: {
-    write(path: string, data: string): Promise<unknown>;
+    write(path: string, data: string, opts?: { user?: string }): Promise<unknown>;
   };
   commands: {
     run(
       cmd: string,
-      opts?: { envs?: Record<string, string>; cwd?: string; timeoutMs?: number; background?: boolean },
+      opts?: { envs?: Record<string, string>; cwd?: string; timeoutMs?: number; background?: boolean; user?: string },
     ): Promise<{ stdout?: string; exitCode?: number; pid?: number }>;
   };
 }
@@ -66,8 +68,8 @@ export interface PPIOProviderDeps {
   logger?: Logger;
 }
 
-/** 沙箱内 driver 落点（默认用户为 user，用其 home 下可写目录；node18+ 对 .js 默认 CommonJS，bundle 是 ESM → 必须 .mjs）。 */
-const DRIVER_DIR = '/home/user/aprog';
+/** 沙箱内 driver 落点（以 root 跑，落 root home 下可写目录；node18+ 对 .js 默认 CommonJS，bundle 是 ESM → 必须 .mjs）。 */
+const DRIVER_DIR = '/root/aprog';
 const DRIVER_PATH = `${DRIVER_DIR}/driver.mjs`;
 const DRIVER_LOG = `${DRIVER_DIR}/driver.log`;
 /** 控制平面回拨入口的 CA 证书在沙箱内的落点（配了 caCertPem 时写入，并经 NODE_EXTRA_CA_CERTS 让 driver 信任）。 */
@@ -149,10 +151,11 @@ export class PPIOProvider implements SandboxProvider {
       // await 它返回后再放 driver 拨号，保证「登记早于拨号」。
       if (opts.onProvisioned) await opts.onProvisioned({ sandboxId: sbx.sandboxId });
 
-      // 1) 运行时推 driver bundle（.mjs）入沙箱（files.write 自动建父目录）。
-      await sbx.files.write(DRIVER_PATH, this.driverBundle);
+      // 1) 运行时推 driver bundle（.mjs）入沙箱（files.write 自动建父目录）。user:'root' 保证落点 /root 可写
+      //    （即便 PPIO 运行时默认用户仍是 user）。
+      await sbx.files.write(DRIVER_PATH, this.driverBundle, { user: 'root' });
       // 1b) 若回拨走 TLS：把 CP 边缘的 CA 证书（公开非密）推进沙箱，下面经 NODE_EXTRA_CA_CERTS 让 driver 信任。
-      if (this.caCertPem) await sbx.files.write(DRIVER_CA_PATH, this.caCertPem);
+      if (this.caCertPem) await sbx.files.write(DRIVER_CA_PATH, this.caCertPem, { user: 'root' });
 
       // 2) 后台启动 driver：注入回连凭证 env。必须用 background:true——driver 是长驻进程（跑满沙箱生命周期、
       //    且握手失败会退避重试），若用前台 run/`&` 则 commands.run 会一直等它退出而超时。background 立即返回。
@@ -168,6 +171,7 @@ export class PPIOProvider implements SandboxProvider {
         envs,
         cwd: DRIVER_DIR,
         background: true,
+        user: 'root',
       });
       this.log.info('driver launched', { sandboxId: sbx.sandboxId, pid: lr.pid });
     } catch (e) {

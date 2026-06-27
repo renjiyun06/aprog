@@ -1,7 +1,10 @@
 {
+  "model": "opus",
   "env": {
     "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
-    "ANTHROPIC_MODEL": "glm-4.6",
-    "ANTHROPIC_SMALL_FAST_MODEL": "glm-4.5-air"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
