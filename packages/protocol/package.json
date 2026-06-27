@@ -3,10 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "aprog 事件流协议：会话即一条带 seq/id 的 append-only 流。engine-neutral，前端/后端/driver 共用此契约。",
+  "description": "aprog 协议契约：两组——① harness 事件（语义流，三方共用）② channel 通信事件（driver↔CP 通道，两方共用，零依赖①）。",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./harness": "./src/harness/index.ts",
+    "./channel": "./src/channel/index.ts"
   }
 }

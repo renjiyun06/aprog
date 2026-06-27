@@ -1,16 +1,14 @@
-// 临时 e2e：在 PPIO 沙箱上跑通「driver↔控制平面握手」初步链路。
-// 复用真实组件：DriverRegistry + 真实 /v1/driver/hello 路由 + PPIOProvider + ProviderSandboxGateway。
+// 真链路 smoke：在 PPIO 沙箱上跑通「driver↔控制平面 WebSocket 握手」。手动跑（需 PPIO key + frp/nginx + 计费沙箱）。
+// 复用真实组件：DriverRegistry + 真实 DriverChannelServer（WS）+ PPIOProvider + ProviderSandboxGateway。
 // 链路：gateway.create → PPIOProvider 起 PPIO 沙箱 + 推 driver + 注入 bindToken/CP地址 →
-//       driver 自启拨 http://8.134.166.10/aprog/v1/driver/hello → nginx→frps→frpc→本机:8099 →
-//       本路由 resolve(bindToken) 命中 = 握手成功。
+//       driver 自启拨 wss://8.134.166.10/aprog/v1/driver/channel → nginx(WS upgrade)→frps→frpc→本机:8099 →
+//       DriverChannelServer 收 Hello → resolve(bindToken) 命中 → 回 Welcome = 握手成功。
 //
-// 跑：APROG_DRIVER_BUNDLE=.../driver.mjs PPIO_API_KEY=... APROG_CONTROL_PLANE_URL=http://8.134.166.10/aprog \
-//     APROG_PPIO_TEMPLATE='' bun _e2e_ppio_handshake.ts
-import { DriverRegistry, type DriverBinding } from './src/driver-channel/registry.ts';
-import { ProviderSandboxGateway } from './src/process/sandbox-gateway.ts';
-import { Router } from './src/api/router.ts';
-import * as driver from './src/api/routes/driver.ts';
-import { toErrorResponse, notFound } from './src/api/errors.ts';
+// 跑：APROG_DRIVER_BUNDLE=.../driver.mjs PPIO_API_KEY=... APROG_CONTROL_PLANE_URL=https://8.134.166.10/aprog \
+//     APROG_CP_CA_CERT=.../cp-ca.pem APROG_PPIO_TEMPLATE=<id> bun smoke/handshake.ppio.ts
+import { DriverRegistry, type DriverBinding } from '../src/driver-channel/registry.ts';
+import { ProviderSandboxGateway } from '../src/process/sandbox-gateway.ts';
+import { DriverChannelServer } from '../src/driver-channel/channel.ts';
 import { PPIOProvider } from '@aprog/sandbox';
 import { readFileSync } from 'node:fs';
 
@@ -37,18 +35,19 @@ const drivers = {
   unregister: (t: string) => real.unregister(t),
 } as unknown as DriverRegistry;
 
-const router = new Router();
-driver.mount(router);
+const dc = new DriverChannelServer(drivers);
 const server = Bun.serve({
   port: PORT,
-  fetch(req) {
+  fetch(req, srv) {
     const url = new URL(req.url);
     console.log(`[e2e] ← 收到请求 ${req.method} ${url.pathname}`);
-    const path = url.pathname.replace(/^\/v\d+(?=\/)/, '');
-    const hit = router.match(req.method, path);
-    if (!hit) return toErrorResponse(notFound(`no ${req.method} ${url.pathname}`));
-    return hit.handler({ req, params: hit.params, query: url.searchParams, deps: { drivers } as never });
+    if (dc.matches(req.method, url.pathname)) {
+      if (srv.upgrade(req, { data: dc.newSessionData() })) return undefined;
+      return new Response('WebSocket upgrade 失败', { status: 400 });
+    }
+    return new Response('not found', { status: 404 });
   },
+  websocket: dc.websocket,
 });
 console.log(`[e2e] 握手服务器 listening :${PORT}（经隧道暴露在 ${cpUrl}）`);
 

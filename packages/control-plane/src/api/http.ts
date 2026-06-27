@@ -17,13 +17,13 @@ import { InstallStore } from '../catalog/installs.ts';
 import { ProcessManager } from '../process/manager.ts';
 import { ProviderSandboxGateway, MockSandboxGateway, type SandboxGateway } from '../process/sandbox-gateway.ts';
 import { DriverRegistry } from '../driver-channel/registry.ts';
+import { DriverChannelServer } from '../driver-channel/channel.ts';
 import { PPIOProvider, type ImageRef, type Resources, type SandboxProvider } from '@aprog/sandbox';
 import { GitHubRepoGateway, MockRepoGateway } from '../process/repo-gateway.ts';
 import * as auth from './routes/auth.ts';
 import * as programs from './routes/programs.ts';
 import * as installations from './routes/installations.ts';
 import * as proc from './routes/proc.ts';
-import * as driver from './routes/driver.ts';
 import * as shares from './routes/shares.ts';
 import * as notifications from './routes/notifications.ts';
 import { mountSse } from './sse.ts';
@@ -42,8 +42,10 @@ export function startApi(config: Config): void {
   // 进程编排：PCB 走 DB；沙箱动作经网关收口。
   // 进程仓库：配了 GITHUB_TOKEN 就真在 GitHub 建私有库，否则 mock（造假 clone URL）。
   const repos = config.github ? new GitHubRepoGateway(config.github) : new MockRepoGateway();
-  // driver 握手登记簿：网关 create 时登记 bindToken，driver 拨入时认领（routes/driver.ts）。
+  // driver 握手登记簿：网关 create 时登记 bindToken，driver 拨入时认领（driver-channel/channel.ts）。
   const drivers = new DriverRegistry();
+  // driver 通道服务（南面 WS）：握手 + 活连接表。http.ts 只装配，逻辑在 driver-channel/channel.ts。
+  const driverChannel = new DriverChannelServer(drivers);
   // 沙箱网关：按 config.sandbox.provider 选——ppio 接真实 PPIO（注入 bindToken + 控制平面地址 + 引擎鉴权），否则 mock。
   const sandbox = buildSandboxGateway(config, drivers);
   const procs = new ProcessManager(db, sandbox, repos);
@@ -64,7 +66,7 @@ export function startApi(config: Config): void {
     // 以下子系统尚未实现（stream/* 仍是接口）。先用 pending 占位：一旦被处理器触达即抛清晰错误。
     store: pending('StreamStore'),
     hub: pending('StreamHub'),
-    channelFor: () => undefined,
+    channelFor: (pid) => driverChannel.connectionFor(pid),
   };
 
   const router = new Router();
@@ -72,19 +74,25 @@ export function startApi(config: Config): void {
   programs.mount(router);
   installations.mount(router);
   proc.mount(router);
-  driver.mount(router);
   shares.mount(router);
   notifications.mount(router);
   mountSse(router);
 
   Bun.serve({
     port: config.port,
-    fetch(req): Response | Promise<Response> {
+    fetch(req, server): Response | Promise<Response> | undefined {
       const url = new URL(req.url);
+      // 南面：driver WS 升级（先于北面 REST 路由判定）。
+      if (driverChannel.matches(req.method, url.pathname)) {
+        if (server.upgrade(req, { data: driverChannel.newSessionData() })) return undefined;
+        return new Response('WebSocket upgrade 失败', { status: 400 });
+      }
+      // 北面：REST。
       const hit = router.match(req.method, stripVersion(url.pathname));
       if (hit === undefined) return toErrorResponse(notFound(`无此端点 ${req.method} ${url.pathname}`));
       return hit.handler({ req, params: hit.params, query: url.searchParams, deps });
     },
+    websocket: driverChannel.websocket,
   });
   console.log(`[control-plane] api listening on :${config.port}`);
 }

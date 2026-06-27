@@ -1,26 +1,6 @@
-// @aprog/driver — 引擎驱动入口。常驻沙箱，按程序选定的引擎起对应 adapter。
-// 当前仅定义模块接口，实现待定（见各文件内的 // ❓ 讨论点）。
+// @aprog/driver — 引擎驱动包。常驻沙箱，进程入口在 ./main.ts（拨向控制平面握手 + 后续拉起引擎）。
+//
+// 包已清空旧骨架（channel/driver/sequencer/fs/supervisor/engine/bundle + engines/* 转换层），
+// 等重设计；那批金标转换层代码在 git 历史 commit be00554。当前对外仅导出一个独立工具。
 
-export type { Driver, DriverDeps } from './driver.ts';
-export type {
-  DriverChannel,
-  Welcome,
-  EventFrame,
-  InputItem,
-  ControlSignal,
-  ChannelError,
-  FsRequest,
-  FsResponse,
-  FsEntry,
-  BundleKind,
-  BundleManifest,
-  IncomingBundle,
-} from './channel.ts';
-export type { Sequencer } from './sequencer.ts';
-export type { HarnessSupervisor, SpawnSpec, ExitStatus } from './supervisor.ts';
-export type { FsServer } from './fs.ts';
-export type { BundleIO, CheckpointBundle } from './bundle.ts';
-export type { EngineAdapter, EngineContext } from './engine.ts';
-export { ClaudeAdapter } from './engines/claude.ts';
-export { CodexAdapter } from './engines/codex.ts';
 export { scrubEngineEnv } from './engine-env.ts';
