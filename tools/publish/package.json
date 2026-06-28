@@ -1,0 +1,17 @@
+{
+  "name": "@aprog/publish",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aprog-publish CLI —— 发布期工具：读 programs/<名>/<版本>/、解依赖闭包、按 digest 钉死组成 OCI artifact 推到 registry（GHCR/本地）。driver 拉取的成品由它产出。push/ls/inspect 三个子命令。",
+  "bin": {
+    "aprog-publish": "./src/publish.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "citty": "^0.1.6",
+    "consola": "^3.4.2"
+  }
+}
