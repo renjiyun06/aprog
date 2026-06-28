@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>事件流协议 · aprog 文档</title>
+  <title>04 · 通道与协议 — aprog 设计文档</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="protocol">
@@ -17,233 +17,371 @@
 
   <div class="shell">
     <aside class="sidebar" id="sidebar"></aside>
-    <main class="content">
+    <main class="content with-toc">
       <article>
-        <div class="eyebrow">协议与会话</div>
-        <h1>事件流协议</h1>
+        <div class="eyebrow">aprog 设计文档 · 04</div>
+        <h1>通道与协议</h1>
         <p class="lead">
-          一次会话就是一条 append-only 的事件流：底层引擎吐的每一片思考/工具/回复、以及用户的每次输入，
-          都是流上一个带顺序号的事件。这条流是<strong>唯一数据源</strong>，实时推送、断线恢复、持久存档
-          全部由它统一承载。引擎是可替换的，所以这套协议是 engine-neutral 的——各家引擎怎么映射进来见
-          <a href="harness.html">Harness 适配</a>。
+          本篇定义跨线的全部类型化消息契约。所有契约集中于单一的包 <code>@aprog/protocol</code>，内分两组：
+          组① <strong>harness 事件</strong>——引擎中立的语义事件流，由 web、控制平面、driver 三方共用；
+          组② <strong>通道通信</strong>——driver 与控制平面之间的全双工通道帧，由两方共用。
+          二者经子路径分别导出，且组②对组①零依赖。本篇逐组给出帧格式、传输形态、握手与信任流程，
+          并按 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 如实标注各环节状态。数据平面在体系中的定位见
+          <a href="overview.html#planes">01 · 总览</a>。
         </p>
 
-        <h2 id="stream">会话即一条事件流</h2>
+        <div class="note">
+          <span class="note-label">标注约定</span>
+          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态；尚未落地的设计如实标注，不以「已实现」混淆。
+        </div>
+
+        <h2 id="two-groups">1 · 两组协议:一个包,零耦合</h2>
         <p>
-          每个进程一条事件流。流上每个事件由 <a href="components.html#driver">Driver</a> 盖两个标识：
+          <code>@aprog/protocol</code> 是单一的包，源码内分两组，经 <code>exports</code> 子路径分别导出，使用方可只引入所需的一组：
         </p>
-        <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
-            <div class="node c-cp" style="min-width:150px">
-              <span class="nt"># seq <span class="tag">位置</span></span>
-              <span class="nd">单调递增，每个事件（含用户输入）都有。<strong>游标单位</strong>，回答“落后多少 / 补哪些”。</span>
-            </div>
-            <div class="ar"><span class="gly">+</span></div>
-            <div class="node c-driver" style="min-width:150px">
-              <span class="nt">id <span class="tag">身份</span></span>
-              <span class="nd">逻辑分组，流一开始就定。把属于同一条消息的 delta 折叠成一条。回答“是不是同一条”。</span>
-            </div>
-          </div>
-          <div class="dgm-cap"><b>seq</b> 管重放到哪、<b>id</b> 管哪些折成一条。<b>id</b> 由 Driver 赋予；<b>seq</b> 由 control-plane 落库时盖全局单调（Driver 只保证一次运行内的局部顺序，见 <a href="interaction.html#seq">沙箱交互界面 · seq</a> 与 <a href="harness.html#seq">Harness 适配 · seq</a>）。</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>维度</th><th>组① harness 事件</th><th>组② 通道通信</th></tr></thead>
+            <tbody>
+              <tr><td>子路径导出</td><td><code>@aprog/protocol/harness</code></td><td><code>@aprog/protocol/channel</code></td></tr>
+              <tr><td>参与方</td><td>web、控制平面、driver 三方</td><td>driver、控制平面两方</td></tr>
+              <tr><td>职责</td><td>引擎中立的语义事件流（思考 / 工具 / 回复 / 用户输入…）</td><td>driver↔控制平面通道的帧传输（握手、双向通信）</td></tr>
+              <tr><td>方向</td><td>以事件上行、向 web 扇出为主</td><td>双向全双工，一条连接承载两个方向</td></tr>
+              <tr><td>耦合关系</td><td>纯值类型，不依赖组②</td><td><strong>对组①零依赖</strong>：harness 事件作为不透明载荷被通道携带，通道不 <code>import</code>、不解析其结构</td></tr>
+              <tr><td>实现状态</td><td>类型已定义 ✅；事件流经通道落地 🚧 / ❌（见 §6）</td><td>握手 ✅；其余帧待扩展 ❌（见 §5）</td></tr>
+            </tbody>
+          </table>
         </div>
-
-        <h2 id="kinds">事件种类</h2>
-        <p>协议把任何引擎的产出归一成下面几类（harness-neutral）。一个“项(item)”= 一条思考 / 一条回复 / 一次工具调用 / 一次命令执行……它有 <code>start → delta* → end</code> 的生命周期：</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>事件</th><th>含义</th><th>关键字段</th></tr></thead>
-          <tbody>
-            <tr><td><code>turn.start</code></td><td>一个 agent 回合开始（用户提交后引擎开干）</td><td>turn</td></tr>
-            <tr><td><code>user</code></td><td>用户输入（完整，非流式；由 Driver 回显进流）</td><td>id, content</td></tr>
-            <tr><td><code>item.start</code></td><td>一个项开始</td><td>id, item_type ∈ thinking / reply / tool / command / file_change …</td></tr>
-            <tr><td><code>item.delta</code></td><td>项的增量</td><td>id, patch（text / args / output…）</td></tr>
-            <tr><td><code>item.end</code></td><td>项完成，带 coalesced 全量</td><td>id, value</td></tr>
-            <tr><td><code>turn.end</code></td><td>回合结束</td><td>turn, usage?</td></tr>
-            <tr><td><code>checkpoint-committed</code></td><td>一个新保存点已 push 到进程 git 仓库（前端据此重拉状态）</td><td>ref</td></tr>
-            <tr><td><code>error</code></td><td>错误</td><td>message</td></tr>
-          </tbody>
-        </table></div>
-        <p>线上每条事件的信封：</p>
-        <pre><code>{"seq":182, "ts":"…", "kind":"item.delta", "id":"msg_B:1", "patch":{"text":"找到了"}}
-{"seq":183, "ts":"…", "kind":"item.end",   "id":"msg_B:1", "value":{"item":"reply","text":"找到了，是 join 写错"}}</code></pre>
-        <div class="note">
-          <span class="note-label">不做授权</span>
-          产品形态<strong>自动批准</strong>引擎的所有操作，所以协议里没有 allow/deny 事件——审批由 Driver 自动应答、不进流（Codex 那种审批往返见 <a href="harness.html#approvals">Harness 适配</a>）。
-        </div>
-
-        <h2 id="shape">每类的字段</h2>
-        <p>信封字段（每个事件都有）：<code>seq:number</code>（全局单调，control-plane 盖）、<code>ts:string</code>（ISO-8601，Driver 盖）、<code>parent?:ItemId</code>（子代理归属，可选，主流为空——见下）、<code>raw?:unknown</code>（引擎原始载荷，可选——见下「保真兜底」）。其余按 <code>kind</code>：</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th><code>kind</code></th><th>字段</th></tr></thead>
-          <tbody>
-            <tr><td><code>turn.start</code></td><td><code>turn:TurnId</code></td></tr>
-            <tr><td><code>user</code></td><td><code>id:ItemId</code>、<code>content:string</code></td></tr>
-            <tr><td><code>item.start</code></td><td><code>id:ItemId</code>、<code>item_type</code></td></tr>
-            <tr><td><code>item.delta</code></td><td><code>id:ItemId</code>、<code>patch:ItemPatch</code>（见下）</td></tr>
-            <tr><td><code>item.end</code></td><td><code>id:ItemId</code>、<code>value:ItemValue</code>（见下，<strong>已合并全量</strong>）</td></tr>
-            <tr><td><code>turn.end</code></td><td><code>turn:TurnId</code>、<code>stop_reason:StopReason</code>（见下）、<code>raw_stop_reason?:string</code>、<code>usage?:{ input?, output?, context_window?, extra? }</code></td></tr>
-            <tr><td><code>compaction</code></td><td><code>trigger:'auto'|'manual'</code>、<code>pre_tokens?:number</code>（引擎压缩了自己的上下文，见下）</td></tr>
-            <tr><td><code>checkpoint-committed</code></td><td><code>ref:string</code>（新保存点的 commit SHA，见下）</td></tr>
-            <tr><td><code>error</code></td><td><code>severity:'fatal'|'transient'|'warning'</code>、<code>message:string</code>（见下）</td></tr>
-          </tbody>
-        </table></div>
-        <p><code>item.delta.patch</code>（delta 增量）与 <code>item.end.value</code>（end 全量）是<strong>同一个项的两种形态</strong>，按项类型一一对应：</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>项类型</th><th><code>patch</code>（增量载荷）</th><th><code>value</code>（合并后全量）</th></tr></thead>
-          <tbody>
-            <tr><td><code>thinking</code></td><td><code>{ kind:"text", text }</code></td><td><code>{ item:"thinking", text, signature? }</code></td></tr>
-            <tr><td><code>reply</code></td><td><code>{ kind:"text", text }</code></td><td><code>{ item:"reply", text }</code></td></tr>
-            <tr><td><code>tool</code></td><td><code>{ kind:"tool_args", partial_json }</code></td><td><code>{ item:"tool", name, args, result? }</code></td></tr>
-            <tr><td><code>command</code></td><td><code>{ kind:"command_output", chunk }</code></td><td><code>{ item:"command", command, output, exit_code? }</code></td></tr>
-            <tr><td><code>file_change</code></td><td><code>{ kind:"file_change", diff }</code></td><td><code>{ item:"file_change", path, diff }</code></td></tr>
-          </tbody>
-        </table></div>
-        <div class="dgm-cap">权威类型见 <code>packages/protocol/src/events.ts</code> 与 <code>envelope.ts</code>。</div>
-
-        <p><code>turn.end.stop_reason</code>（<code>StopReason</code>）<strong>归一成「用户不同反应」的小集</strong>——取值粒度 = 用户会做出的不同动作的数量，不再细；引擎原词进 <code>raw_stop_reason</code>。用户关心“为什么停了”，所以建模进流：</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th><code>stop_reason</code></th><th>用户的反应</th><th>Claude 来源</th><th>Codex 来源</th></tr></thead>
-          <tbody>
-            <tr><td><code>completed</code></td><td>正常说完，轮到我</td><td><code>"end_turn"</code> / <code>"stop_sequence"</code></td><td><code>TurnComplete</code></td></tr>
-            <tr><td><code>interrupted</code></td><td>被打断/取代（中性）</td><td>用户中断</td><td><code>TurnAborted</code>：Interrupted / Replaced / ReviewEnded</td></tr>
-            <tr><td><code>limit</code></td><td><strong>可能没说完，要不要继续</strong></td><td><code>"max_tokens"</code> / <code>error_max_turns</code></td><td><code>TurnAborted</code>：BudgetLimited</td></tr>
-            <tr><td><code>refused</code></td><td>它拒答了，换个问法</td><td><code>"refusal"</code></td><td>—</td></tr>
-            <tr><td><code>error</code></td><td>它崩了</td><td><code>error_during_execution</code></td><td><code>Error</code></td></tr>
-          </tbody>
-        </table></div>
-        <div class="dgm-cap"><code>max_tokens</code> 与 <code>max_turns</code>（及 Codex 的 BudgetLimited）都塌进 <code>limit</code>——用户反应都是“撞天花板了，要不要继续”；<em>哪种</em>上限留给 <code>raw_stop_reason</code> 的调试视图。Claude 的 <code>tool_use</code> / <code>pause_turn</code> 不是回合结束（回合继续），不映射成 <code>turn.end</code>。</div>
-
-        <div class="note">
-          <span class="note-label">compaction ≠ 流的合并</span>
-          <code>compaction</code> 事件记录的是<strong>引擎压缩了它自己的上下文</strong>（context compaction），和前面说的“流的合并 / 读时投影”是两码事——<strong>事件流本身永不删减</strong>。它如实落在流里，只为让用户在历史里看到“此处之前的上下文被引擎压缩过”。取自 Claude 的 <code>compact_boundary</code> / <code>SDKCompactBoundaryMessage</code>（带 <code>trigger</code> / <code>pre_tokens</code>）。
-        </div>
-        <div class="note">
-          <span class="note-label">checkpoint-committed：只通知，不搬运</span>
-          这条事件只是<strong>一个通知</strong>：一个新保存点已经 <code>commit</code> 并 <code>push</code> 到该进程的 git 仓库。<strong>检查点内容本身不走事件流</strong>——它存在 git 里、按 <code>ref</code> 拉取；事件流只负责告诉前端「有新保存点了」，前端据此按 <code>ref</code> 去重拉 git 状态。耐久与传输全是 <code>git push</code>，详见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
-        </div>
-        <div class="note ok">
-          <span class="note-label">子代理：parent 字段</span>
-          每个事件信封可带可选 <code>parent:ItemId</code>——子代理（subagent）产生的事件，<code>parent</code> 指向派生它的 <strong>Agent 工具调用的 id</strong>（Claude 的 <code>parent_tool_use_id</code>）；主流（顶层 agent）事件为空。前端据此把子代理的 thinking/tool/reply 折叠成一棵<strong>子树</strong>，而不是摊平进主流。
-        </div>
-        <div class="note">
-          <span class="note-label">error 的 severity</span>
-          <code>error</code> 带严重级别，让 UI 区别对待，<strong>别把“正在重连”误报成“挂了”</strong>：<code>fatal</code> 致命、回合无法继续（红色，Codex <code>Error</code>）；<code>transient</code> 瞬时、系统正在自愈（黄色「重连中…」，Codex <code>StreamError</code>）；<code>warning</code> 继续了但需提示（黄色提示行，Codex <code>Warning</code>）。
-        </div>
-        <div class="note ok">
-          <span class="note-label">保真兜底：raw 字段，与「typed 收敛」之道</span>
-          协议要同时<strong>完美适配底层 harness</strong>（Claude / Codex）又<strong>保持自身抽象</strong>，靠的是一条生成规则：<strong>typed 字段只建模「用户该知道、且会据此行动」的东西，归一粒度 = 用户不同反应的数量；其余引擎丰富度原样进 <code>raw?:unknown</code>，携带而不建模。</strong>「完美适配」不等于「类型里建模一切」（那会毁掉抽象），而是<strong>一切都没丢</strong>——通用 UI 读 typed，高级检视器/调试/未来需求读 <code>raw</code>。Driver 在<strong>归一有损</strong>的事件（<code>item.end</code> / <code>turn.end</code> / <code>error</code> / <code>compaction</code>）上填 <code>raw</code>。用户的反应集是有限且引擎中性的（轮到我了吗 / 要不要继续 / 要担心吗 / 它怎么忘事了），贴合它，就同时贴合了所有 harness。
-        </div>
-
-        <h2 id="one-stream">实时与持久是同一条流</h2>
         <p>
-          这条流上既有 <strong>delta</strong>（细粒度，供“正在打字”的实时感），也有 <strong>item.end</strong>（coalesced 的完整条目）。
-          所以<strong>不需要两套通道</strong>：
+          两组解耦的关键在于<strong>组②是纯传输契约</strong>。未来的事件流上行帧（待加）只是上行方向并集里的一个成员，
+          其载荷为一个不透明类型：driver 在其中放入一条 harness <code>Event</code>，控制平面落库时解读，而通道本身既不导入也不解析该结构。
+          于是两组各自独立演进——harness 事件的语义变化不触动通道传输层，反之亦然。
         </p>
-        <ul>
-          <li><strong>实时</strong> = tail 流的末尾，delta 即推 → “正在打字”；</li>
-          <li><strong>持久</strong> = <strong>原始流本身</strong>就是存档，<strong>跟进程目录一起落盘、一起持久化</strong>——<strong>不删 delta、不做破坏性压实</strong>。因为 <code>item.end</code> 已带合并全量，原始流既能逐字回放、又不增加历史读取成本（压实只是将来可选的冷段省空间优化，不改协议、可后加）。</li>
-        </ul>
-        <div class="note ok">
-          <span class="note-label">session.aprog.jsonl = 流的读时投影</span>
-          那个“干净的会话记录”不是第二份数据源，而是把这条流<strong>合并后的样子</strong>（丢 delta、每个 <code>id</code> 取 <code>item.end</code>）。它由原始流<strong>随时按需重建</strong>，不必落地；留它只为给人/agent 省去每次折叠的开销。删了不丢信息。详见 <a href="state.html#layers">三层数据</a>。
+
+        <h2 id="frame">2 · 统一帧格式 Frame&lt;t,p&gt;</h2>
+        <p>
+          组②的每条通信帧采用统一格式 <code>Frame&lt;T extends string, P&gt; = { t: T; p: P }</code>。
+          字段 <code>t</code> 为类型判别标签（discriminator），接收方据其分派；载荷收于 <code>p</code>。
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>字段</th><th>类型</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>t</code></td><td><code>T extends string</code></td><td>类型判别标签；一组方向并集以其区分各帧</td></tr>
+              <tr><td><code>p</code></td><td><code>P</code></td><td>该类型的专属载荷</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <strong>扩展规则</strong>：新增一个通信帧 = 定义一个 <code>Frame&lt;'标签', { …载荷… }&gt;</code>，
+          并将其加入对应方向的并集（driver→控制平面加入 <code>DriverFrame</code>，反向加入 <code>ControlPlaneFrame</code>，见 §5）。
+          当前仅保留真正在用的握手帧；其余帧待实际用到时按此格式机械扩展，不预先铺设。
+        </p>
+        <div class="note">
+          <span class="note-label">协议版本 CHANNEL_PROTOCOL_VERSION = 1</span>
+          driver 将协议版本烘入镜像，控制平面独立部署，握手时比对（见 §4）。版本不一致时控制平面主动关闭连接，
+          以关闭码 <code>1002</code> 表示版本不匹配。
         </div>
 
-        <h2 id="merge">合并：看历史给完整态，实时才打字</h2>
+        <h2 id="transport">3 · 传输:WebSocket 通道</h2>
         <p>
-          这条 delta 流<strong>可合并</strong>，因为每个 <code>patch</code> 都是对<strong>单个 <code>id</code> 缓冲区的追加</strong>（append-only）——没有乱序、没有冲突，合并就是顺序拼接，纯函数：
+          沙箱处于 NAT 之后，控制平面无法主动拨入，只有沙箱能向外拨出。因此连接必然由 <strong>driver 主动拨出一条全双工 WebSocket</strong>，
+          两个方向的帧都在这条连接上往返。帧以 NDJSON 编码——每条 WebSocket 消息为一个 JSON 对象。
         </p>
-        <ul>
-          <li><code>text</code> / <code>command_output</code> / <code>file_change</code>：直接<strong>拼接</strong>；</li>
-          <li><code>tool_args</code>：拼接 <code>partial_json</code> 分片，末尾一次 <code>JSON.parse</code>。</li>
-        </ul>
-        <p>更省事的是：<code>item.end.value</code> <strong>本身就是合并后的全量</strong>，所以<strong>已完成的项根本不用自己折叠</strong>——直接取 <code>value</code>。于是同一条流支持两种读法：</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>读法</th><th>怎么读</th><th>呈现</th></tr></thead>
-          <tbody>
-            <tr><td>实时 attach</td><td>tail：<code>item.delta</code> 即推，<code>item.end</code> 到了定稿替换</td><td>逐字“打字”</td></tr>
-            <tr><td><strong>看历史（如休眠进程）</strong></td><td>丢 <code>turn.*</code> / <code>item.start</code> / <code>item.delta</code>，每个 <code>id</code> 只取 <code>item.end.value</code>，连同 <code>user</code> 按 <code>seq</code> 排</td><td><strong>直接给合并后的完整记录，不打字</strong></td></tr>
-          </tbody>
-        </table></div>
-        <div class="dgm-cap">休眠进程被打开 → control-plane 从持久化的原始流回放 → 历史段全是已合并的 <code>item.end</code>（看历史不打字）；用户若继续 attach 实时，只有尾部那个未完成项才回到 delta 播放。<code>seq</code> 保证所有界面拿到<strong>同一顺序</strong>。</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>维度</th><th>取值</th></tr></thead>
+            <tbody>
+              <tr><td>通道路径</td><td><code>/v1/driver/channel</code></td></tr>
+              <tr><td>发起方</td><td>driver（沙箱受 NAT 限制，只能主动拨出）</td></tr>
+              <tr><td>形态</td><td>单条全双工 WebSocket，双向帧共用</td></tr>
+              <tr><td>帧编码</td><td>NDJSON：逐帧 <code>JSON.stringify</code> / <code>JSON.parse</code></td></tr>
+              <tr><td>控制平面端</td><td>Bun.serve 原生 WebSocket（<code>http.ts</code> 为唯一 <code>Bun.serve</code>，升级判定后转交通道模块）</td></tr>
+              <tr><td>driver 端</td><td>node 全局 <code>WebSocket</code></td></tr>
+              <tr><td>URL 推导</td><td>控制平面基址 <code>http(s)://host/base</code> → <code>ws(s)://host/base/v1/driver/channel</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">带外大块不走本通道</span>
+          OCI 闭包拉取与进程态 <code>git clone</code> 等大块传输不经此通道（见 <a href="program-package.html#pull">02 · 程序与发版</a> 与
+          <a href="images.html">03 · 镜像与沙箱</a>）。待扩展 seed 帧时，通道只下发 URI 与短时凭证，真正的字节走带外。
+        </div>
 
-        <h2 id="example">一个完整示例：一轮交互</h2>
-        <p>把上面所有概念串起来——用户问“为什么登录偶尔失败？”，引擎想一下、跑一次 Grep、再回复。<strong>线上的原始流</strong>（持久化落盘的就是它，逐字 delta 全在）：</p>
-        <pre><code>{"seq":41,"ts":"…","kind":"user","id":"u_41","content":"为什么登录偶尔失败？"}
-{"seq":42,"ts":"…","kind":"turn.start","turn":"t7"}
-{"seq":43,"ts":"…","kind":"item.start","id":"msg_a:0","item_type":"thinking"}
-{"seq":44,"ts":"…","kind":"item.delta","id":"msg_a:0","patch":{"kind":"text","text":"先翻登录"}}
-{"seq":45,"ts":"…","kind":"item.delta","id":"msg_a:0","patch":{"kind":"text","text":"相关代码"}}
-{"seq":46,"ts":"…","kind":"item.end","id":"msg_a:0","value":{"item":"thinking","text":"先翻登录相关代码","signature":"Eq…"}}
-{"seq":47,"ts":"…","kind":"item.start","id":"toolu_01","item_type":"tool"}
-{"seq":48,"ts":"…","kind":"item.delta","id":"toolu_01","patch":{"kind":"tool_args","partial_json":"{\"q\":\""}}
-{"seq":49,"ts":"…","kind":"item.delta","id":"toolu_01","patch":{"kind":"tool_args","partial_json":"login\"}"}}
-{"seq":50,"ts":"…","kind":"item.end","id":"toolu_01","value":{"item":"tool","name":"Grep","args":{"q":"login"},"result":"auth.ts:42  if (expired) renew()"}}
-{"seq":51,"ts":"…","kind":"item.start","id":"msg_b:0","item_type":"reply"}
-{"seq":52,"ts":"…","kind":"item.delta","id":"msg_b:0","patch":{"kind":"text","text":"是 token "}}
-{"seq":53,"ts":"…","kind":"item.delta","id":"msg_b:0","patch":{"kind":"text","text":"过期判断写反了。"}}
-{"seq":54,"ts":"…","kind":"item.end","id":"msg_b:0","value":{"item":"reply","text":"是 token 过期判断写反了。"}}
-{"seq":55,"ts":"…","kind":"turn.end","turn":"t7","stop_reason":"completed","usage":{"input":1840,"output":210,"context_window":42000}}</code></pre>
-        <p>读法：<code>id</code> 把碎片归组——<code>msg_a:0</code> 的两条 text delta（seq 44/45）合成 thinking 全文；<code>toolu_01</code> 的两段 <code>partial_json</code>（48/49）拼成 <code>{"q":"login"}</code>，工具结果在 <code>item.end</code>（50）补上；<code>msg_b:0</code> 同理。<strong>每个项的 <code>item.end</code> 都已是合并全量。</strong></p>
-        <p><strong>休眠后回看历史</strong>：丢掉 <code>turn.*</code> / <code>item.start</code> / <code>item.delta</code>，每个 <code>id</code> 只取 <code>item.end.value</code>、连同 <code>user</code> 按 <code>seq</code> 排——同一条流立刻变成<strong>合并好的完整记录</strong>（即 <a href="reference.html#session-schema">session.aprog.jsonl</a> 的样子），不打字：</p>
-        <pre><code>user      为什么登录偶尔失败？
-thinking  先翻登录相关代码
-tool      Grep {"q":"login"} → auth.ts:42  if (expired) renew()
-reply     是 token 过期判断写反了。</code></pre>
-        <div class="dgm-cap">同一段 seq 41–55：实时 attach 时逐字播 delta；休眠后回看只取那 4 条 <code>item.end</code> 直接成文。原始流一字未删，两种呈现都从它派生。</div>
-
-        <p>再看<strong>子代理 + 上下文压缩 + 停止原因</strong>怎么落在同一条流里——主代理派一个 <code>code-reviewer</code> 子代理（Agent 工具调用 <code>toolu_rev</code>），子代理内部的项都带 <code>parent:"toolu_rev"</code>；中途引擎压了一次上下文；回合带停止原因结束：</p>
-        <pre><code>{"seq":70,"ts":"…","kind":"item.start","id":"toolu_rev","item_type":"tool"}
-{"seq":71,"ts":"…","kind":"item.end","id":"toolu_rev","value":{"item":"tool","name":"Agent","args":{"agent":"code-reviewer"},"result":"见子代理产出"}}
-{"seq":72,"ts":"…","kind":"item.start","id":"msg_c:0","item_type":"thinking","parent":"toolu_rev"}
-{"seq":73,"ts":"…","kind":"item.end","id":"msg_c:0","parent":"toolu_rev","value":{"item":"thinking","text":"先看 auth.ts"}}
-{"seq":74,"ts":"…","kind":"item.start","id":"msg_c:1","item_type":"reply","parent":"toolu_rev"}
-{"seq":75,"ts":"…","kind":"item.end","id":"msg_c:1","parent":"toolu_rev","value":{"item":"reply","text":"第 42 行 expired 判断写反了"}}
-{"seq":76,"ts":"…","kind":"compaction","trigger":"auto","pre_tokens":152000}
-{"seq":77,"ts":"…","kind":"turn.end","turn":"t8","stop_reason":"completed","usage":{"input":2010,"output":180}}</code></pre>
-        <div class="dgm-cap"><code>parent:"toolu_rev"</code> 让前端把 seq 72–75 折成 <code>code-reviewer</code> 的<strong>子树</strong>（不摊平进主流）；<code>compaction</code>（seq 76）如实记录“引擎在此压了上下文”——<strong>流本身一字未删</strong>；<code>turn.end.stop_reason</code> 告诉用户回合为何结束。</div>
-
-        <h2 id="recover">断线恢复</h2>
-        <p>客户端只记一个数：<strong>已渲染到的最后一条事件的 <code>seq</code></strong>（游标）。重连时报上去，服务端在<strong>同一条订阅</strong>上：</p>
-        <div class="dgm">
-          <div class="dgm-stack tight">
-            <div class="node c-frontend"><span class="nt">前端 重连</span><span class="nd">subscribe { from: 游标 seq }</span></div>
-            <div class="ar down"><span class="gly">↓</span></div>
-            <div class="node c-driver">
-              <span class="nt">Driver 在一条流上依次回放</span>
-              <ul class="acts">
-                <li><code>seq &gt; 游标</code> 的事件：落在<strong>已压实段</strong>→给折叠后的 <code>item.end</code>；落在<strong>尾部</strong>→给原始 delta</li>
-                <li>紧接着续 <strong>live delta</strong>（同管交接，原子无缝，不漏不重）</li>
-              </ul>
-            </div>
-            <div class="ar down"><span class="gly">↓</span></div>
-            <div class="node c-frontend"><span class="nt">前端 按 id 合并</span><span class="nd">delta 追加、item.end 定稿、快照整条替换——全按 <code>id</code> 幂等，多收也不出错</span></div>
-          </div>
-          <div class="dgm-cap">“落后多少”由 seq 差精确回答；那条<strong>正打到一半</strong>的事件，重放尾部 delta 自然补全——不需要单独的快照机制。投递 <b>at-least-once</b>，前端按 id 去重。</div>
+        <h2 id="handshake">4 · 握手与信任</h2>
+        <p>
+          driver 自启后的第一件事即拨向控制平面建立可信连接。它持 create 时注入的 <code>bindToken</code>，
+          经注入的控制平面地址拨出 WebSocket，发送 <code>Hello</code> 帧；控制平面据 <code>bindToken</code> 认领出连接所属的进程，回以 <code>Welcome</code> 帧。
+        </p>
+        <p>
+          <strong>信任凭证 bindToken</strong> 由控制平面网关在 create 沙箱时生成（<code>crypto.randomUUID</code>），凭证所有权归控制平面，
+          供应商仅负责注入。<code>bindToken</code> 每沙箱唯一，因此一张令牌同时充当<strong>能力证明</strong>与<strong>身份标识</strong>。
+        </p>
+        <p>
+          <strong>register-before-launch（登记早于启动）</strong>：供应商在「沙箱已起、driver 未启」之间回调 <code>onProvisioned(sandboxId)</code>，
+          控制平面在回调内将 <code>bindToken → { pid, sandboxId }</code> 登记进 <code>DriverRegistry</code>，<code>await</code> 其返回后供应商才启动 driver。
+          于是 driver 首拨即命中登记簿，杜绝「拨号早于登记」的竞态。
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant GW as 控制平面网关
+    participant REG as DriverRegistry
+    participant SP as SandboxProvider
+    participant D as driver
+    participant CH as DriverChannelServer
+    GW->>GW: bindToken = crypto.randomUUID()
+    GW->>SP: create(image, res, {bindToken, onProvisioned})
+    SP-->>GW: onProvisioned(sandboxId)（沙箱已起、driver 未启）
+    GW->>REG: register(bindToken → {pid, sandboxId})
+    Note over GW,REG: 登记早于 driver 启动
+    SP->>D: 注入 bindToken + 控制平面地址，后台启动 driver
+    D->>CH: WS connect /v1/driver/channel
+    D->>CH: Hello {protocolVersion, bindToken}
+    CH->>REG: resolve(bindToken)
+    REG-->>CH: {pid, sandboxId}
+    CH-->>D: Welcome {protocolVersion, pid, mode}
+    Note over CH,D: 钉死连接到 pid；连接保持，留待后续双向帧
+          </pre>
+        </div>
+        <p>握手两帧的载荷字段如下：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>帧</th><th>方向</th><th>载荷字段（p）</th></tr></thead>
+            <tbody>
+              <tr><td><code>Hello</code> <code>t:'hello'</code></td><td>driver → 控制平面</td><td><code>protocolVersion:number</code>、<code>bindToken:string</code>（create 时注入的每沙箱能力令牌）</td></tr>
+              <tr><td><code>Welcome</code> <code>t:'welcome'</code></td><td>控制平面 → driver</td><td><code>protocolVersion:number</code>、<code>pid:string</code>（连接绑定的进程 id）、<code>mode:'resume'|'restore'</code>（driver 据此决定铺设进程目录的方式）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>握手过程中控制平面以 WebSocket 关闭码拒绝异常连接：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>关闭码</th><th>触发</th><th>driver 应对</th></tr></thead>
+            <tbody>
+              <tr><td><code>1002</code></td><td>协议版本不匹配</td><td>视为致命，由顶层兜底退出</td></tr>
+              <tr><td><code>1008</code></td><td>未知 <code>bindToken</code>（登记 / 拨号竞态的网络抖动）</td><td>退避重拨——拨号与握手作为一个原子重试单元，退避 1s / 2s / 3s（封顶 3s），最多 20 次</td></tr>
+            </tbody>
+          </table>
         </div>
         <div class="note warn">
-          <span class="note-label">一个陷阱</span>
-          resync 与 live 必须走<strong>同一条有序订阅</strong>：服务端先吐“游标后的事件”、紧接着吐 live delta。别拆成“HTTP 拿全量 + 另开 WS 收增量”两次调用——那中间会漏/重。
+          <span class="note-label">Welcome.mode 现状 🚧</span>
+          类型层面 <code>mode</code> 取值为 <code>resume</code>（瞬时重连）或 <code>restore</code>（冷唤醒）；当前实现恒回 <code>restore</code>，
+          两态分流尚未落地。<code>resume</code> 路径（driver 端缓冲重放、按已存 seq 去重）待事件流上行帧接入后补全。
         </div>
 
-        <h2 id="echo">用户输入：echo-from-stream</h2>
+        <h2 id="channel-frames">5 · 通道帧:现状与扩展点</h2>
         <p>
-          用户回车后，前端<strong>不</strong>乐观地把消息画上去。它只是把输入提交给 Driver（经 DriverChannel）；Driver 接受后注入一个
-          <code>user</code> 事件<strong>到流</strong>（局部定序，control-plane 落库时盖 <code>seq</code>），再顺着流回到所有 viewer——前端这时才显示它。
+          组②按方向分为两个并集：<code>DriverFrame</code>（driver 能发的全部帧）与 <code>ControlPlaneFrame</code>（控制平面能发的全部帧）。
+          当前各自仅含握手一帧；其余帧为规划中的扩展点，按 §2 的统一格式在真正用到时加入对应并集。
         </p>
-        <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;justify-content:center">
-            <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">回车 → 提交，不本地渲染</span></div>
-            <div class="ar accent"><span class="albl">submit</span><span class="gly">→</span></div>
-            <div class="node c-driver" style="min-width:130px"><span class="nt">Driver</span><span class="nd">接受 → 注入 <code>user</code> 事件(CP 盖 seq)</span></div>
-            <div class="ar accent"><span class="albl">stream</span><span class="gly">→</span></div>
-            <div class="node c-frontend" style="min-width:130px"><span class="nt">前端</span><span class="nd">从流里收到 → 才显示</span></div>
-          </div>
-          <div class="dgm-cap">界面只有<strong>“流”这一个真相源</strong>。代价是用户输入看着略有延迟，但逻辑彻底统一：用户消息和引擎产出走同一条流、同一套 seq/id/恢复语义，多设备/多 viewer 天然一致。</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>方向并集</th><th>帧 / 扩展点</th><th>状态</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td rowspan="4"><code>DriverFrame</code><br>（driver → 控制平面）</td><td><code>Hello</code></td><td>✅</td><td>握手首帧</td></tr>
+              <tr><td>事件流上行</td><td>❌</td><td>承载组① harness <code>Event</code> 作为不透明载荷，逐帧上行</td></tr>
+              <tr><td>fs 应答</td><td>❌</td><td>对控制平面 fs 请求的回应</td></tr>
+              <tr><td>退出 / 心跳</td><td>❌</td><td>引擎退出通告、保活</td></tr>
+              <tr><td rowspan="6"><code>ControlPlaneFrame</code><br>（控制平面 → driver）</td><td><code>Welcome</code></td><td>✅</td><td>握手应答，钉死身份</td></tr>
+              <tr><td>输入下行</td><td>❌</td><td>用户消息注入 harness 输入流</td></tr>
+              <tr><td>控制</td><td>❌</td><td>中断 / checkpoint-now / hibernate-prepare 等带内控制信号</td></tr>
+              <tr><td>ack</td><td>❌</td><td>对上行帧的确认</td></tr>
+              <tr><td>fs 请求</td><td>❌</td><td>目录 / 文件读请求</td></tr>
+              <tr><td>seed 种子</td><td>❌</td><td>下发敏感种子（per-process auth、git 凭证、registry token）</td></tr>
+            </tbody>
+          </table>
         </div>
+        <div class="note">
+          <span class="note-label">不超前设计</span>
+          通道当前只实现握手（<code>Hello</code> / <code>Welcome</code>）。控制平面收到非握手帧时记录并忽略。
+          其余帧（事件流、输入、控制、ack、fs、seed、心跳、退出…）待真正用到时按统一格式机械扩展，不预先铺设。
+        </div>
+
+        <h2 id="harness-events">6 · 组① harness 事件流</h2>
+        <p>
+          每个进程对应一条 append-only 的事件流。底层引擎产出的每一片思考、工具调用、回复，以及用户的每次输入，
+          都是流上一个带顺序号的事件。这条流是<strong>唯一数据源</strong>：实时推送、断线恢复、持久存档统一由它承载。
+          引擎可替换，故本组协议引擎中立——各引擎私有消息由其对应的 driver 翻译为本组事件（适配细节见
+          <a href="legacy/harness.html">Harness 适配</a>）。
+        </p>
+        <p>
+          流上每个事件由两个标识定位：<code>seq</code> 为单调递增的流位置（控制平面落库时盖，跨生命周期全局单调，回答「落后多少 / 补哪些」）；
+          <code>id</code> 为逻辑分组标识（driver 取引擎稳定标识赋予，把同一条消息的增量折叠成一条，回答「是不是同一条」）。
+          二者分工：<code>seq</code> 管重放到哪，<code>id</code> 管哪些折成一条。
+        </p>
+
+        <h3 id="envelope">事件信封</h3>
+        <p>所有事件共有以下信封字段：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>字段</th><th>类型</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>seq</code></td><td><code>number</code></td><td>流位置，控制平面盖，全局单调</td></tr>
+              <tr><td><code>ts</code></td><td><code>string</code></td><td>ISO-8601 时间戳，driver 盖</td></tr>
+              <tr><td><code>parent?</code></td><td><code>ItemId</code></td><td>子代理归属：值为派生它的 Agent 工具调用 id（Claude 的 <code>parent_tool_use_id</code>）；主流事件为空</td></tr>
+              <tr><td><code>raw?</code></td><td><code>unknown</code></td><td>引擎原始载荷，归一前的 harness 原文。driver 在归一有损的事件上填，作保真兜底</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="event-kinds">事件种类</h3>
+        <p>任何引擎的产出归一为以下几类（以 <code>kind</code> 判别）。一个「项（item）」= 一条思考 / 一条回复 / 一次工具调用 / 一次命令执行 / 一次文件改动，生命周期为 <code>start → delta* → end</code>：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th><code>kind</code></th><th>含义</th><th>关键字段</th></tr></thead>
+            <tbody>
+              <tr><td><code>turn.start</code></td><td>一个 agent 回合开始（用户提交后引擎开始执行）</td><td><code>turn</code></td></tr>
+              <tr><td><code>user</code></td><td>用户输入（完整、非流式；由 driver 回显进流）</td><td><code>id</code>、<code>content</code></td></tr>
+              <tr><td><code>item.start</code></td><td>一个项开始</td><td><code>id</code>、<code>item_type</code></td></tr>
+              <tr><td><code>item.delta</code></td><td>项的增量（实时「正在打字」）</td><td><code>id</code>、<code>patch</code></td></tr>
+              <tr><td><code>item.end</code></td><td>项完成，带 coalesced 全量</td><td><code>id</code>、<code>value</code></td></tr>
+              <tr><td><code>turn.end</code></td><td>回合结束</td><td><code>turn</code>、<code>stop_reason</code>、<code>raw_stop_reason?</code>、<code>usage?</code></td></tr>
+              <tr><td><code>compaction</code></td><td>引擎压缩了自身上下文（与事件流的合并无关，流永不删减）</td><td><code>trigger</code>、<code>pre_tokens?</code></td></tr>
+              <tr><td><code>error</code></td><td>错误 / 非致命提示</td><td><code>severity</code>、<code>message</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">不做授权</span>
+          产品形态自动批准引擎的全部操作，故协议中没有 allow / deny 事件——审批由 driver 自动应答、不进流。
+        </div>
+
+        <h3 id="item-shape">项的两种形态:patch 与 value</h3>
+        <p>
+          <code>item.delta.patch</code>（增量载荷）与 <code>item.end.value</code>（合并后全量）是同一个项的两种形态，按项类型一一对应。
+          <code>item.end.value</code> 本身即合并全量，故看历史时无需自行折叠 delta：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>项类型</th><th><code>patch</code>（增量载荷）</th><th><code>value</code>（合并后全量）</th></tr></thead>
+            <tbody>
+              <tr><td><code>thinking</code></td><td><code>{ kind:'text', text }</code></td><td><code>{ item:'thinking', text, signature? }</code></td></tr>
+              <tr><td><code>reply</code></td><td><code>{ kind:'text', text }</code></td><td><code>{ item:'reply', text }</code></td></tr>
+              <tr><td><code>tool</code></td><td><code>{ kind:'tool_args', partial_json }</code></td><td><code>{ item:'tool', name, args, result? }</code></td></tr>
+              <tr><td><code>command</code></td><td><code>{ kind:'command_output', chunk }</code></td><td><code>{ item:'command', command, output, exit_code? }</code></td></tr>
+              <tr><td><code>file_change</code></td><td><code>{ kind:'file_change', diff }</code></td><td><code>{ item:'file_change', path, diff }</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          同一条流支持两种读法：<strong>实时 attach</strong> 时 tail 末尾，<code>item.delta</code> 即推、<code>item.end</code> 到达时定稿替换，呈现逐字「打字」；
+          <strong>看历史</strong>时丢弃 <code>turn.*</code> / <code>item.start</code> / <code>item.delta</code>，每个 <code>id</code> 仅取 <code>item.end.value</code>，连同 <code>user</code> 按 <code>seq</code> 排，即得合并后的完整记录，不打字。
+          原始流一字未删，两种呈现均由它派生。
+        </p>
+
+        <h3 id="stop-reason">停止原因 stop_reason</h3>
+        <p>
+          <code>turn.end.stop_reason</code> 归一为「用户不同反应」的小集——取值粒度等于用户会做出的不同动作的数量，不再细分；引擎原词存入 <code>raw_stop_reason</code>：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th><code>stop_reason</code></th><th>用户的反应</th><th>Claude 来源</th><th>Codex 来源</th></tr></thead>
+            <tbody>
+              <tr><td><code>completed</code></td><td>正常说完，轮到用户</td><td><code>end_turn</code> / <code>stop_sequence</code></td><td><code>TurnComplete</code></td></tr>
+              <tr><td><code>interrupted</code></td><td>被打断或取代（中性）</td><td>用户中断</td><td><code>Interrupted</code> / <code>Replaced</code> / <code>ReviewEnded</code></td></tr>
+              <tr><td><code>limit</code></td><td>可能没说完，是否继续</td><td><code>max_tokens</code> / <code>error_max_turns</code></td><td><code>BudgetLimited</code></td></tr>
+              <tr><td><code>refused</code></td><td>安全拒答，换个问法</td><td><code>refusal</code></td><td>—</td></tr>
+              <tr><td><code>error</code></td><td>执行中出错</td><td><code>error_during_execution</code></td><td><code>Error</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note ok">
+          <span class="note-label">保真兜底:typed 收敛, raw 携带</span>
+          typed 字段只建模「用户该知道、且会据此行动」的内容，归一粒度等于用户不同反应的数量；其余引擎丰富度原样进 <code>raw</code>（携带而不建模）。
+          通用 UI 读 typed，高级检视器 / 调试 / 未来需求读 <code>raw</code>。用户的反应集有限且引擎中立，贴合它即同时贴合所有 harness。
+        </div>
+
+        <h3 id="example">示例:一轮交互</h3>
+        <p>用户问「为什么登录偶尔失败？」，引擎思考一次、执行一次 Grep、再回复。线上的原始流（持久化落盘的即是它，逐字 delta 全在）：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th><code>seq</code></th><th><code>kind</code></th><th><code>id</code></th><th>关键载荷</th></tr></thead>
+            <tbody>
+              <tr><td>41</td><td><code>user</code></td><td><code>u_41</code></td><td><code>content:"为什么登录偶尔失败？"</code></td></tr>
+              <tr><td>42</td><td><code>turn.start</code></td><td>—</td><td><code>turn:"t7"</code></td></tr>
+              <tr><td>43</td><td><code>item.start</code></td><td><code>msg_a:0</code></td><td><code>item_type:"thinking"</code></td></tr>
+              <tr><td>44</td><td><code>item.delta</code></td><td><code>msg_a:0</code></td><td><code>patch:{kind:"text", text:"先翻登录"}</code></td></tr>
+              <tr><td>45</td><td><code>item.delta</code></td><td><code>msg_a:0</code></td><td><code>patch:{kind:"text", text:"相关代码"}</code></td></tr>
+              <tr><td>46</td><td><code>item.end</code></td><td><code>msg_a:0</code></td><td><code>value:{item:"thinking", text:"先翻登录相关代码"}</code></td></tr>
+              <tr><td>47</td><td><code>item.start</code></td><td><code>toolu_01</code></td><td><code>item_type:"tool"</code></td></tr>
+              <tr><td>48</td><td><code>item.delta</code></td><td><code>toolu_01</code></td><td><code>patch:{kind:"tool_args", partial_json:'{"q":"'}</code></td></tr>
+              <tr><td>49</td><td><code>item.delta</code></td><td><code>toolu_01</code></td><td><code>patch:{kind:"tool_args", partial_json:'login"}'}</code></td></tr>
+              <tr><td>50</td><td><code>item.end</code></td><td><code>toolu_01</code></td><td><code>value:{item:"tool", name:"Grep", args:{q:"login"}, result:"auth.ts:42 …"}</code></td></tr>
+              <tr><td>51</td><td><code>item.start</code></td><td><code>msg_b:0</code></td><td><code>item_type:"reply"</code></td></tr>
+              <tr><td>52</td><td><code>item.delta</code></td><td><code>msg_b:0</code></td><td><code>patch:{kind:"text", text:"是 token "}</code></td></tr>
+              <tr><td>53</td><td><code>item.delta</code></td><td><code>msg_b:0</code></td><td><code>patch:{kind:"text", text:"过期判断写反了。"}</code></td></tr>
+              <tr><td>54</td><td><code>item.end</code></td><td><code>msg_b:0</code></td><td><code>value:{item:"reply", text:"是 token 过期判断写反了。"}</code></td></tr>
+              <tr><td>55</td><td><code>turn.end</code></td><td>—</td><td><code>turn:"t7", stop_reason:"completed", usage:{input:1840, output:210}</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <code>id</code> 把碎片归组：<code>msg_a:0</code> 的两条 text delta（seq 44/45）合成 thinking 全文；<code>toolu_01</code> 的两段 <code>partial_json</code>（48/49）拼成 <code>{"q":"login"}</code>，工具结果在 <code>item.end</code>（50）补上；<code>msg_b:0</code> 同理。每个项的 <code>item.end</code> 都已是合并全量。
+          休眠后回看历史，仅取四条 <code>item.end</code> 连同 <code>user</code> 按 <code>seq</code> 排，即成合并好的完整记录。
+        </p>
+
+        <h3 id="recover">断线恢复与用户输入</h3>
+        <p>
+          客户端只记一个数——已渲染到的最后一条事件的 <code>seq</code>（游标）。重连时以 <code>Subscribe { from }</code> 报上去，
+          服务端在<strong>同一条订阅</strong>上先回放 <code>seq &gt; from</code> 的事件、紧接着续 live delta，原子交接、不漏不重。投递为 at-least-once，前端按 <code>id</code> 幂等合并：
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant FE as 前端
+    participant CP as 控制平面
+    FE->>CP: Subscribe { from: 游标 seq }
+    CP-->>FE: 回放 seq &gt; from 的事件（已压实段给 item.end，尾部给原始 delta）
+    CP-->>FE: 紧接续 live delta（同一订阅，原子交接）
+    Note over FE: 按 id 幂等合并：delta 追加、item.end 定稿；多收去重
+          </pre>
+        </div>
+        <p>
+          <strong>用户输入采用 echo-from-stream</strong>：前端回车后不本地乐观渲染，只把输入提交给 driver；driver 接受后注入一个 <code>user</code> 事件到流（控制平面落库盖 <code>seq</code>），再顺流回到所有 viewer——前端此时才显示它。
+          界面只有「流」这一个真相源，用户消息与引擎产出走同一套 <code>seq</code> / <code>id</code> / 恢复语义，多设备天然一致。
+        </p>
+        <div class="note warn">
+          <span class="note-label">本组实现状态 🚧 / ❌</span>
+          组① 的全部事件类型已在 <code>@aprog/protocol/harness</code> 中定义（✅，类型层面），但当前仅从旧位置平移过来、内部结构待整理；
+          且这些事件尚未经通道落地——通道目前只完成握手，事件流上行帧、<code>seq</code> 盖章、断线重放均待 §5 的扩展点接入（❌）。
+          本节描述的读法与恢复语义为已定的设计目标，非当前运行态。
+        </div>
+
+        <h2 id="status">7 · 实现状态</h2>
+        <p>握手与信任链路已就绪；其余通信帧与 harness 事件流的落地待扩展。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>环节</th><th>状态</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>统一帧格式 <code>Frame&lt;t,p&gt;</code> 与 <code>CHANNEL_PROTOCOL_VERSION = 1</code></td><td>✅</td><td><code>packages/protocol/src/channel/index.ts</code></td></tr>
+              <tr><td>WebSocket 通道（driver 拨出、Bun.serve 原生 WS、<code>/v1/driver/channel</code>、NDJSON）</td><td>✅</td><td>控制平面 <code>http.ts</code> + <code>driver-channel/channel.ts</code>；driver <code>main.ts</code></td></tr>
+              <tr><td>握手 <code>Hello</code> / <code>Welcome</code>（版本比对、退避重拨）</td><td>✅</td><td>onHello → resolve → Welcome；driver 端原子重试</td></tr>
+              <tr><td><code>bindToken</code> 信任 + register-before-launch</td><td>✅</td><td>网关 <code>crypto.randomUUID</code> 生成；<code>onProvisioned</code> 内登记早于启动</td></tr>
+              <tr><td><code>Welcome.mode</code> 区分 <code>resume</code> / <code>restore</code></td><td>🚧</td><td>类型已定，当前恒回 <code>restore</code></td></tr>
+              <tr><td>通道帧扩展（事件流上行 / 输入 / 控制 / ack / fs / seed / 退出）</td><td>❌</td><td>方向并集已留扩展点，待真正用到时按统一格式加入</td></tr>
+              <tr><td>组① harness 事件类型定义（<code>@aprog/protocol/harness</code>）</td><td>✅</td><td>类型层面已定义</td></tr>
+              <tr><td>组① 内部结构整理</td><td>🚧</td><td>当前仅从旧位置平移</td></tr>
+              <tr><td>harness 事件流经通道落地（envelope / <code>seq</code> 上行、断线重放）</td><td>❌</td><td>待通道事件流帧接入</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          代码可校验：<code>packages/protocol/src/channel/index.ts</code>（<code>Frame</code> / <code>Hello</code> / <code>Welcome</code> / 版本 / 方向并集）、
+          <code>packages/protocol/src/harness/</code>（事件与信封类型）、
+          <code>packages/control-plane/src/driver-channel/channel.ts</code>（服务端握手 <code>onHello → Welcome</code>）、
+          <code>packages/driver/src/main.ts</code>（客户端拨号、握手、重试）。
+        </p>
 
         <div class="pager" data-pager></div>
       </article>
+      <aside class="toc"></aside>
     </main>
   </div>
   <script src="docs.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'neutral', sequence: { useMaxWidth: true } });</script>
 </body>
 </html>

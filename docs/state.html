@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>进程目录与状态 · aprog 文档</title>
+  <title>06 · 状态契约 — aprog 设计文档</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="state">
@@ -17,205 +17,304 @@
 
   <div class="shell">
     <aside class="sidebar" id="sidebar"></aside>
-    <main class="content">
+    <main class="content with-toc">
       <article>
-        <div class="eyebrow">状态与持久化</div>
-        <h1>进程目录与状态</h1>
+        <div class="eyebrow">aprog 设计文档 · 06</div>
+        <h1>状态契约</h1>
         <p class="lead">
-          一个核心断言：<strong>进程的状态不依赖对话上下文</strong>。进程“做到哪了”记录在它的目录里——
-          一套由 state 程序库定义的、有 schema 的状态文件。沙箱可销毁、对话可丢，唯独这个目录是事实源。
+          进程的权威状态不依赖对话上下文，而记于进程目录——一套由 <code>state</code> 程序库定义的、有 schema 的状态契约。
+          本篇定义进程目录的承载形态（git 仓库）、三层数据的权威边界、execution 状态契约的文件结构与 resume 语义、
+          检查点的捕获时机与一致性职责，以及分支、rewind 与数据库投影。
+          运行编排见 <a href="proc-wake.html">05 · 运行生命周期</a>，程序分发见 <a href="program-package.html">02 · 程序与发版</a>。
         </p>
 
-        <h2 id="dir">进程目录 = 真正的状态</h2>
-        <p>
-          每个进程是 <code>~/.aprog/&lt;pid&gt;/</code> 下的一个目录（类比 <code>/proc/&lt;pid&gt;/</code>）。它<strong>就是底层 harness 的工作目录（cwd）</strong>——
-          这点很重要：平台只关心这个目录里的东西，用户在界面上看到的进程目录也正是它。（harness 并不被禁止访问别处，只是别处平台不管。）
-          它<strong>不挂持久卷</strong>，活在沙箱本地盘上；耐久性靠<a href="#checkpoint">检查点</a> commit 后 <code>git push</code> 到 CP 托管的 bare 仓库（完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>），而非靠卷。
-          目录结构由 <strong>state 程序库</strong>统一定义：身份、输入流、有 schema 的执行状态、以及 resume 语义。
-        </p>
-        <div class="dgm">
-          <div class="tree">
-            <div class="tn"><span class="gly dir">📂</span><span class="tname">~/.aprog/&lt;pid&gt;/</span></div>
-            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">meta.yml</span><span class="tnote">进程控制块 (PCB)：phase / input_cursor / status</span></div>
-            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">input.md</span><span class="tnote">append-only 的用户输入流（权威意图）</span></div>
-            <div class="tn lvl1"><span class="gly star">★</span><span class="tname">execution-state/</span><span class="tnote">有 schema 的执行状态</span></div>
-            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">state.yaml</span><span class="tnote">inline 键 + by-ref 指针</span></div>
-            <div class="tn lvl1" style="padding-left:46px"><span class="gly file">·</span><span class="tname" style="font-weight:400">*.md / blobs</span><span class="tnote">by-ref 的大块内容（决策记录、笔记…）</span></div>
-            <div class="tn lvl1"><span class="gly file">📄</span><span class="tname">session.aprog.jsonl</span><span class="tnote">会话逐字记录（engine-neutral，给 <a href="protocol.html">前端/审计</a>）</span></div>
-            <div class="tn lvl1"><span class="gly dir">📁</span><span class="tname">artifacts/</span><span class="tnote">程序产出的文件</span></div>
-          </div>
-          <div class="legend">
-            <span class="li"><span style="color:#1a7f37;font-weight:700">★</span> 进程状态 · 唯一权威 · 驱动 resume</span>
-            <span class="li"><span style="color:var(--fg-subtle)">📄</span> 会话记录 · 仅展示/审计</span>
-          </div>
+        <div class="note">
+          <span class="note-label">标注约定</span>
+          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态。须区分两类断言：<strong>协议 / 契约设计</strong>（已定）与<strong>运行时落地</strong>（多在 driver 侧待接入），后文如实标注。
         </div>
 
-        <h2 id="resume">唤醒靠状态，不靠对话</h2>
+        <h2 id="dir">1 · 进程目录与权威状态</h2>
         <p>
-          休眠进程被唤醒时，会分到一个全新沙箱、引擎<strong>冷启动、空上下文</strong>。它怎么知道“做到哪了”？
-          靠 resume 协议读状态文件：读 <code>meta.yml</code> 的 phase 和 input_cursor、读游标之后的 <code>input.md</code> 输入、
-          读 <code>execution-state/state.yaml</code> 及其 by-ref blob，然后重跑当前阶段的 on-entry。
+          每个进程在 per-user 根目录 <code>~/.aprog/</code> 下拥有一个进程目录 <code>~/.aprog/&lt;id&gt;/</code>（类比 <code>/proc/&lt;pid&gt;/</code>）。
+          它<strong>就是底层 harness 的工作目录（cwd）</strong>，也是平台唯一关心、用户界面所见的进程视图。
+          核心断言：<strong>进程目录就是进程的权威状态</strong>——沙箱可销毁、对话可丢弃，唯独这个目录是事实源。
+          为支持<a href="#branches">分支与 rewind</a>，进程目录<strong>以一个 git 仓库承载</strong>：一个进程 = 一个仓库，一个检查点 = 一次 commit。
         </p>
-        <div class="note bad">
-          <span class="note-label">绝不反向重建引擎上下文</span>
-          aprog <strong>不会</strong>把历史对话翻译回引擎、重新喂进去来“恢复记忆”。因为进程状态根本不依赖对话——
-          所有要紧的东西（阶段、游标、决策、产物）都已被 state 捕获进目录。对话因此是<strong>可丢弃</strong>的。
-        </div>
-        <p>
-          这也是为什么换引擎（Claude → Codex）不丢工作：会话归 aprog 所有、状态在目录里，新引擎冷启动后照样能从状态接着干。
-          代价只是它读不到上一个引擎的私有对话缓存——而这本来就不需要。
-        </p>
-
-        <h2 id="layers">三层数据：谁权威、谁进快照</h2>
-        <p>同一段“执行”涉及三类数据，职责严格分开，别混为一谈：</p>
         <div class="tbl-wrap">
           <table>
-            <thead><tr><th>层</th><th>文件</th><th>谁写</th><th>进快照</th><th>参与 resume</th><th>用途</th></tr></thead>
+            <thead><tr><th>维度</th><th>约定</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td><strong>进程状态</strong></td><td>meta.yml / input.md / execution-state/</td><td>程序（经引擎）</td><td>✅</td><td>✅ 权威</td><td>让进程接着干</td></tr>
-              <tr><td><strong>会话记录</strong></td><td>session.aprog.jsonl</td><td>Driver</td><td>✅（在进程目录里）</td><td>❌</td><td>前端历史 + 审计</td></tr>
-              <tr><td><strong>引擎缓存</strong></td><td>session.jsonl（SDK 私有）</td><td>引擎</td><td>❌</td><td>❌</td><td>沙箱内临时上下文，可丢</td></tr>
+              <tr><td>根目录</td><td><code>~/.aprog/</code></td><td>per-user；其下每个子目录是一个进程</td></tr>
+              <tr><td>进程目录</td><td><code>~/.aprog/&lt;id&gt;/</code></td><td>权威状态；同时是 harness 的 cwd 与 git 工作树</td></tr>
+              <tr><td>标识</td><td><code>&lt;yyMMdd&gt;-&lt;nanoid&gt;</code></td><td>自动生成、实践无碰撞、可按 <code>ls -lt</code> 排序；创建时<strong>必须呈现给用户</strong>，否则无法日后 resume</td></tr>
+              <tr><td>承载</td><td>git 仓库</td><td>进程目录即一个被版本化的仓库；检查点 = commit，分支 = branch，rewind = checkout</td></tr>
+              <tr><td>耐久</td><td><code>git push</code> / <code>git clone</code></td><td><strong>不挂持久卷</strong>，活在沙箱临时盘；耐久靠检查点 push 到远端，唤醒靠 clone 灌回</td></tr>
+              <tr><td>内容</td><td><code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code></td><td>由 <code>state</code> 库定义的状态契约，见 <a href="#contract">§3</a></td></tr>
             </tbody>
           </table>
         </div>
-        <ul>
-          <li><strong>进程状态</strong>是唯一权威，驱动 resume；它和会话记录都在进程目录里，跟着进程持久化。</li>
-          <li><strong>会话记录</strong>是 engine-neutral 的逐字转录，只为展示和审计，不参与 resume。</li>
-          <li><strong>引擎缓存</strong>（<code>session.jsonl</code>）是沙箱生命周期内的临时物，沙箱一销毁就没了，永不权威、不进 aprog 快照。</li>
-        </ul>
         <div class="note">
-          <span class="note-label"><code>input.md</code> ≠ 会话记录</span>
-          <code>input.md</code> 只存<strong>用户输入</strong>，是 state 协议里驱动 FSM 的权威意图流（<code>input_cursor</code> 标记处理到哪）；
-          会话记录是含思考/工具/回复的<strong>完整转录</strong>。用户消息在两处都出现，但服务的对象不同——前者驱动执行，后者驱动界面。
-        </div>
-
-        <h2 id="checkpoint">检查点：耐久性归平台，一致性归程序</h2>
-        <div class="note">
-          <span class="note-label">存储 / 传输的完整模型</span>
-          下文谈的是检查点的<strong>语义</strong>（何时算一致、谁负责什么）。它<strong>怎么存、怎么传</strong>由 git 落地——<strong>一个检查点 = 一次 commit；最新检查点 = 仓库 HEAD（不在 PCB 存指针）</strong>，耐久靠 <code>git push</code>、唤醒靠 <code>git clone</code>。完整模型见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>。
+          <span class="note-label">两套标识，各司其职</span>
+          进程目录的 <code>id</code> 由 <code>state</code> 协议定义为 <code>&lt;yyMMdd&gt;-&lt;nanoid&gt;</code>（per-execution）。控制平面的 PCB 另以整型 <code>pid</code> 索引进程（投影侧，见 <a href="#db">§6</a>）；二者分属契约层与关系投影层，互不替代。
         </div>
         <p>
-          沙箱本地盘随时可能没（厂商回收、OOM、崩溃、网络分区）。让状态扛住这个，靠<strong>检查点</strong>——把进程目录的 state 子集
-          <strong>commit 并 <code>git push</code> 到 CP 托管的 bare 仓库</strong>。但「什么时候算一个能安全 resume 的点」，<strong>平台判断不了，只有上层程序知道</strong>。所以职责这么分：
+          须区分两类实体并行存在：<strong>程序</strong>为共享、不可变、按版本分发，经 OCI 制品拉取（见 <a href="program-package.html">02</a>）；
+          <strong>进程态</strong>为每进程独占、可变、可分支，以 git 仓库承载。二者在唤醒时<strong>并行下载</strong>落入沙箱，职责互不重叠。
+        </p>
+
+        <h2 id="layers">2 · 三层数据及权威性</h2>
+        <p>同一段“执行”涉及三类数据，职责严格分开，不得混为一谈：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>层</th><th>内容 / 载体</th><th>权威性</th><th>承载 / 分发</th><th>参与 resume</th></tr></thead>
+            <tbody>
+              <tr><td>① 程序 Program</td><td>skill 目录（解包至 <code>skills/</code>）</td><td>共享、不可变、按版本</td><td>OCI 制品按版本拉取</td><td>提供执行逻辑（非状态）</td></tr>
+              <tr><td>② 进程态 Process state</td><td><code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code></td><td><strong>每进程独占、可变、可分支 · 唯一权威</strong></td><td>git 仓库（commit / push）</td><td>✅ 权威</td></tr>
+              <tr><td>③ 会话事件流 Session events</td><td><code>session.jsonl</code>（harness 产生的逐字事件）</td><td>仅展示 / 审计，非权威</td><td>事件流（投影）</td><td>❌</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note bad">
+          <span class="note-label">唤醒靠状态，绝不反向重建对话</span>
+          休眠进程被唤醒时分到<strong>全新沙箱、引擎冷启动、空上下文</strong>。它靠 resume 协议读状态文件判断“做到哪了”，
+          <strong>绝不</strong>把历史对话翻译回引擎重新喂入来“恢复记忆”。所有要紧的东西（阶段、游标、决策、产物）都已被 <code>state</code> 捕获进目录——对话因此<strong>可丢弃</strong>。
+          这也是换引擎（Claude → 其他）不丢工作的原因：状态在目录里，新引擎冷启动后照样从状态接着干。
+        </div>
+        <div class="note">
+          <span class="note-label">引擎私有缓存不在三层之内</span>
+          引擎 SDK 自身的会话缓存（沙箱内的私有上下文）是沙箱生命周期内的临时物，<strong>永不权威、不进检查点</strong>，沙箱一销毁即没。它既非进程态，也不是 aprog 拥有的会话事件流。
+        </div>
+
+        <h2 id="contract">3 · execution 状态契约</h2>
+        <p>
+          <code>state</code> 程序库定义 execution 的文件契约与 resume 语义。一个 <strong>execution</strong> 是“一次运行”的命名作用域：
+          程序引用 + 已收输入 + 累积的 execution-state + 生命周期元数据——它不是运行的<em>结果</em>，而是运行<em>发生于其中</em>、可经 ID 寻址、跨中断持久的工作区。目录三件：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>路径</th><th>角色</th><th>OS 类比</th></tr></thead>
+            <tbody>
+              <tr><td><code>meta.yml</code></td><td>协议标准字段 + <code>state_schema</code> 快照</td><td>PCB（标准化外部接口）</td></tr>
+              <tr><td><code>input.md</code></td><td>append-only 用户输入流</td><td>输入队列</td></tr>
+              <tr><td><code>execution-state/</code></td><td>程序自管的工作状态</td><td>私有进程内存（程序管理）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="meta"><code>meta.yml</code> · 标准字段</h3>
+        <p>协议标准字段在前；程序可在其下追加自有字段，只懂协议的工具读标准字段、忽略其余。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>字段</th><th>取值</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code></td><td><code>&lt;yyMMdd&gt;-&lt;nanoid&gt;</code></td><td>execution 标识</td></tr>
+              <tr><td><code>program</code></td><td>名 / 路径</td><td>被执行物（典型为一份 skill 文档）</td></tr>
+              <tr><td><code>program_version</code></td><td>版本</td><td>复制程序文档的版本字段；无则省略</td></tr>
+              <tr><td><code>status</code></td><td><code>running</code> / <code>completed</code> / <code>failed</code></td><td>生命周期状态</td></tr>
+              <tr><td><code>phase</code></td><td>自由文本</td><td>程序自定义 FSM 的当前阶段；<strong>必须写于此</strong>，使 resume 不必先读 <code>execution-state/</code></td></tr>
+              <tr><td><code>created_at</code> / <code>last_active_at</code></td><td>ISO8601</td><td>时间戳</td></tr>
+              <tr><td><code>input_cursor</code></td><td><code>input-NNN</code></td><td>最近一条<strong>已完全处理</strong>的输入 ID；无则省略——驱动 resume</td></tr>
+              <tr><td><code>state_schema</code></td><td>有序列表</td><td>execution 自有的 schema 快照，见 <a href="#schema">§3 · state_schema</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="input"><code>input.md</code> · 追加式输入流</h3>
+        <p>单文件、<strong>append-only</strong>，原始历史绝不重写。它只存<strong>用户对程序说的话</strong>，是驱动 FSM 的权威意图流；程序内部的问答、决策、中间产物一律进 <code>execution-state/</code>。每条输入的结构：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>元素</th><th>格式</th><th>约定</th></tr></thead>
+            <tbody>
+              <tr><td>条目 ID</td><td><code>input-NNN</code></td><td>有序递增，是 <code>input_cursor</code> 指向的对象</td></tr>
+              <tr><td>时间戳</td><td>ISO8601</td><td>每条必带</td></tr>
+              <tr><td>标题</td><td>可选短标题</td><td>—</td></tr>
+              <tr><td>分隔符</td><td><code>---</code></td><td>条目间以 Markdown 水平线分隔；不识别其他分隔符</td></tr>
+              <tr><td>正文</td><td>Markdown</td><td>仅含用户输入</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label"><code>input.md</code> ≠ 会话事件流</span>
+          <code>input.md</code> 只存用户输入，驱动执行；会话事件流是含思考 / 工具 / 回复的完整转录，驱动界面。用户消息在两处都出现，但服务对象不同。
+        </div>
+
+        <h3 id="exec-state"><code>execution-state/</code> · 有 schema 的执行状态</h3>
+        <p>程序为本次 execution 累积的工作状态。一个 YAML 索引文件统领，大块内容经 by-ref 指针外置为 blob：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>组成</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr><td><code>state.yaml</code></td><td>唯一 KV 索引：每个 schema 条目对应 YAML 树的一个叶子路径（<strong>点号分隔</strong>，如 <code>vision.tagline</code>）。读一次即知程序当前所有持有</td></tr>
+              <tr><td><code>&lt;子路径&gt;</code> blob</td><td>经 <code>{ $file: &lt;相对路径&gt; }</code> 从 <code>state.yaml</code> 引用的大块内容；<strong>必须留在 <code>execution-state/</code> 内，禁止 <code>../</code> 逃逸</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>每个叶子的值有三种存储模式：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th><code>storage</code></th><th>值的表示</th><th>附加字段</th></tr></thead>
+            <tbody>
+              <tr><td><code>inline</code></td><td>YAML 标量 / 列表 / 映射，直存 <code>state.yaml</code></td><td>—</td></tr>
+              <tr><td><code>by-ref</code></td><td><code>{ $file: &lt;path&gt; }</code>，内容在 blob</td><td><code>content_type</code>（<code>markdown</code> / <code>yaml</code> / <code>json</code> / <code>html</code> / <code>text</code> / <code>binary</code> / …）</td></tr>
+              <tr><td><code>map</code></td><td>内层键遵循 <code>key_pattern</code> 的映射，每个内层值再按内层存储约定</td><td><code>key_pattern</code> + <code>value_storage</code>（+ <code>value_content_type</code>）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">原子性与生命周期</span>
+          <code>state.yaml</code> 写入<strong>必须原子</strong>（写临时文件再 <code>rename()</code> 覆盖），读者永不见半成品；blob 同此模式（大二进制流式写入时以 <code>.partial</code> 暂存、完成再 rename）。
+          从 <code>state.yaml</code> 删除某键时，<strong>必须同时删除其引用的 blob</strong>（不留孤儿）。
+        </div>
+
+        <h3 id="schema">state_schema · 声明的形状</h3>
+        <p>
+          <code>state_schema</code> 是 <code>meta.yml</code> 下的有序列表，声明 <code>execution-state/</code> 的形状。它是 execution 的<strong>自有副本</strong>：
+          创建时从程序 <code>SKILL.md</code> 的基线 schema <strong>快照复制</strong>而来，此后冻结——程序日后即便发布新基线，本 execution 仍沿用其冻结副本（默认不迁移运行中的 execution）。
+          基线由<strong>程序自身的声明</strong>与<strong>各 <code>depends_on</code> 库的 schema</strong> 合并而成（同名键来自不同来源 = 创建期硬错误，须改名再试）。
+          运行期可向列表追加新条目以扩展；<strong>强制</strong>：<code>state.yaml</code> 中每个叶子都须对应一个 schema 条目（“先声明、再写入”）。
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>字段</th><th>必填</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>key</code></td><td>是</td><td><code>state.yaml</code> 树的点号路径（如 <code>vision.tagline</code>）；段内含字面点须引号包裹</td></tr>
+              <tr><td><code>storage</code></td><td>是</td><td><code>inline</code> / <code>by-ref</code> / <code>map</code></td></tr>
+              <tr><td><code>content_type</code></td><td><code>by-ref</code> 时</td><td>被引 blob 的格式</td></tr>
+              <tr><td><code>key_pattern</code></td><td><code>map</code> 时</td><td>内层键模式（如 <code>&lt;mod-id&gt;</code>，仅文档、不强制正则）</td></tr>
+              <tr><td><code>value_storage</code></td><td><code>map</code> 时</td><td>内层值的存储：<code>inline</code> / <code>by-ref</code></td></tr>
+              <tr><td><code>value_content_type</code></td><td><code>map</code> 且内层 <code>by-ref</code> 时</td><td>内层 blob 的格式</td></tr>
+              <tr><td><code>description</code></td><td>是</td><td>此键的用途</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="resume">resume · 游标与续跑</h3>
+        <p>resume 读状态而非对话。续跑流程严格定义如下：</p>
+        <ul>
+          <li>读 <code>meta.yml</code> 的 <code>phase</code> 与 <code>input_cursor</code>；</li>
+          <li>取 <code>input.md</code> 中位于游标<strong>之后</strong>的条目，即未处理输入；</li>
+          <li>读 <code>execution-state/state.yaml</code> 及其 by-ref blob，恢复工作状态；</li>
+          <li>继续当前阶段。<strong>仅在一条输入被完全消费后</strong>（已反映进 <code>execution-state/</code>）才推进游标。</li>
+        </ul>
+        <div class="note warn">
+          <span class="note-label">at-least-once，不是 exactly-once</span>
+          协议保证 <strong>at-least-once</strong> 投递：若 agent 在作用于某输入后、推进游标前死亡，下次 resume 会再见同一条输入。
+          <strong>重处理安全（幂等）是程序自身的责任</strong>，非协议责任——程序应在 <code>execution-state/</code> 留痕，借以识别“已开始未完成”并跳过已应用项。
+        </div>
+
+        <h2 id="checkpoint">4 · 检查点</h2>
+        <p>
+          沙箱临时盘随时可能消失（厂商回收、OOM、崩溃、网络分区）。让状态扛住，靠<strong>检查点</strong>——把进程目录的 state 子集 commit 进 git 并推到远端。
+          但“什么时候算一个能安全 resume 的点”，<strong>平台判断不了，只有上层程序知道</strong>。职责据此三分：
         </p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>关注点</th><th>归谁</th><th>具体</th></tr></thead>
             <tbody>
-              <tr><td>状态的<strong>内容与结构</strong></td><td>程序 / state 库</td><td>meta / input / execution-state 怎么组织、自己逻辑怎么 resume</td></tr>
-              <tr><td>状态的<strong>一致性</strong>（何时算干净）</td><td><strong>程序</strong></td><td>在语义一致的点<strong>主动调检查点工具</strong>标记一个 commit。平台无从判断这个</td></tr>
-              <tr><td>状态的<strong>耐久性</strong></td><td>平台 / driver</td><td>怎么传、怎么恢复、多久才真同步一次（debounce）。对内容无知</td></tr>
+              <tr><td>状态的<strong>内容与结构</strong></td><td>程序 / <code>state</code> 库</td><td>meta / input / execution-state 如何组织、自身逻辑如何 resume</td></tr>
+              <tr><td>状态的<strong>一致性</strong>（何时算干净）</td><td><strong>程序</strong></td><td>在语义一致点<strong>主动调检查点工具 mark</strong> 一个 commit；平台无从判断</td></tr>
+              <tr><td>状态的<strong>耐久性</strong></td><td>平台 / driver</td><td>如何传、如何恢复、多久真同步一次（debounce）；对内容无知</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="note ok">
-          <span class="note-label">平台只提供两件基础设施</span>
-          这一节的总纲：<strong>进程一致性主要是上层程序的事</strong>，平台只给两样最小的底座——① <strong>持久化进程目录</strong>（commit 后 <code>git push</code> 到 CP bare repo、崩溃后 <code>git clone</code> 灌回），
-          ② 一个<strong>检查点工具</strong>，供程序在它认为一致的时刻调用。其余（什么算一致、外部副作用怎么对齐、resume 怎么续）全是程序的语义责任。
-        </div>
 
-        <h3 id="two-grades">两种「一致」：无撕裂 vs 语义一致</h3>
-        <p>把「一致」拆开，才看清为什么非得程序来定：</p>
+        <h3 id="two-grades">两种「一致」</h3>
+        <p>把“一致”拆开，才看清为何必须由程序裁定：</p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>层级</th><th>含义</th><th>谁能判断</th></tr></thead>
             <tbody>
-              <tr><td><strong>无撕裂</strong>（tear-free）</td><td>没在写盘中途、盘面原子（写临时文件再 rename）</td><td>平台 / driver 可观测（agent 空闲那刻）</td></tr>
-              <tr><td><strong>语义一致</strong>（coherent）</td><td>state/ 此刻是「我进展到哪」的<strong>完整忠实描述</strong>，从这恢复能正确续</td><td><strong>只有程序知道</strong></td></tr>
+              <tr><td><strong>无撕裂</strong>（tear-free）</td><td>未在写盘中途、盘面原子（写临时文件再 rename）</td><td>平台 / driver 可观测（agent 空闲那刻）</td></tr>
+              <tr><td><strong>语义一致</strong>（coherent）</td><td><code>execution-state/</code> 此刻是“进展到哪”的完整忠实描述，从此恢复能正确续</td><td><strong>只有程序知道</strong></td></tr>
             </tbody>
           </table>
         </div>
         <div class="note warn">
-          <span class="note-label">turn-end 只是无撕裂，不等于语义一致</span>
-          曾经的设计拿「harness 回复完、转入空闲」这个 quiescent 点当检查点时机——它确实<strong>无撕裂</strong>，但程序的 state 更新常<strong>跨多个 turn</strong>
-          （一个逻辑操作写到一半就让出回合）。turn-end 落在中间，快照恢复出来不会损坏、却是个<strong>语义半成品</strong>。所以判断一致的权威必须是程序，不是平台的猜测。
+          <span class="note-label"><code>turn.end</code> 只是无撕裂，不等于语义一致</span>
+          程序的 state 更新常<strong>跨多个 turn</strong>（一个逻辑操作写到一半就让出回合）。仅以 <code>turn.end</code> 为时机的快照虽<strong>无撕裂</strong>，却可能落在逻辑中途，是<strong>语义半成品</strong>。所以判定一致的权威必须是程序，而非平台的猜测。
         </div>
 
-        <h3 id="ckpt-tool">检查点是给程序的工具，平台只做 debounce</h3>
+        <h3 id="capture">mark 武装 + <code>turn.end</code> 捕获</h3>
         <p>
-          于是检查点反过来了：平台把它做成一个<strong>工具</strong>（就像别的平台能力——赋予 harness 的一种操作，类似 CLI 命令），
-          程序在语义一致处<strong>主动调一次</strong> = 「我现在干净，这是个合法续点」。类比数据库的 <code>COMMIT</code>——程序说「一致了」，存储层自己决定何时真正落盘。两个决定就此分开：
+          检查点被做成一个<strong>工具</strong>（平台赋予 harness 的一种操作，类比数据库 <code>COMMIT</code>）：程序在语义一致处<strong>主动调一次</strong> = “我现在干净，这是合法续点”。
+          但<strong>调用 ≠ 检查点</strong>：此刻引擎还在跑、盘还在被写，去拍快照会与正在进行的写竞态、撕裂。所以这个调用只是 <strong>mark / 意向</strong>，driver 把它<strong>挂起</strong>，
+          等 harness 把本轮回复说完（<code>turn.end</code>、转入等待输入）、盘面 settled，才真正捕获——这才同时拿到<strong>语义一致（程序 mark）+ 无撕裂（回合结束）</strong>。
         </p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>决定</th><th>归谁</th><th>怎么做</th></tr></thead>
-            <tbody>
-              <tr><td><strong>此刻一致吗</strong>（commit mark）</td><td>程序</td><td>调检查点工具喊一声。可能落在 turn 边界，但判据是语义、不是空闲</td></tr>
-              <tr><td><strong>何时真捕获 + 真传</strong></td><td>平台 / driver</td><td>mark 只<strong>武装</strong>；真正捕获推迟到 <strong>harness 结束本回合回复（<code>turn.end</code>）</strong>、盘面静止时 <code>git add -A &amp;&amp; git commit</code>。再按 <strong>debounce</strong> 决定多久 <code>git push</code> 推回 CP bare repo</td></tr>
-            </tbody>
-          </table>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant P as 程序（经引擎）
+    participant D as driver
+    participant G as git 远端
+    P->>D: 语义干净点 → 调检查点工具（mark：武装 / 意向）
+    Note over D: 挂起 mark，盯住事件流
+    P->>D: turn.end（回复说完、转等输入），盘面 settled
+    alt mark 自武装以来未被写脏
+        D->>D: git add -A &amp;&amp; git commit（新 HEAD = 最新检查点）
+        D->>G: 按 debounce → git push（耐久）
+    else mark 后又调过修改性工具（安全网）
+        Note over D: 干净点被改脏 → 本次不捕获，等下一个干净 mark
+    end
+          </pre>
         </div>
         <div class="note warn">
-          <span class="note-label">关键 · 调用 ≠ 检查点：mark 武装，<code>turn.end</code> 才捕获</span>
-          程序调检查点工具时<strong>引擎还在跑、盘还在被写</strong>——此刻去拍快照会和正在进行的写<strong>竞态、撕裂</strong>。所以这个调用只是个 <strong>mark / 意向</strong>，
-          driver 把它挂起，<strong>等 harness 把这轮回复说完（<code>turn.end</code>、转入等待输入）</strong>、盘面 settled，才捕获——这才同时拿到<strong>语义一致（程序 mark）+ 无撕裂（回合结束）</strong>。
-          driver 是 harness 父进程、看着事件流，<code>turn.end</code> 对它是个明确信号。
-          <br><strong>安全网（兜底）</strong>：driver 还要盯 mark 之后到 <code>turn.end</code> 之间——若 agent 又调了<strong>修改性工具</strong>（write/edit/写盘的 bash，区别于只读的 read/search/list），
-          说明被 mark 标记的干净点<strong>之后又被改脏</strong>，这次<strong>不算检查点</strong>，等下一个干净的 mark。这逼出程序纪律：<strong>写在前、mark 在后、紧接着让出回合</strong>。正常程序本就该如此，安全网只抓「mark 完又乱写」。
+          <span class="note-label">安全网：mark 后又乱写则作废</span>
+          driver 盯 mark 到 <code>turn.end</code> 之间：若 agent 又调了<strong>修改性工具</strong>（write / edit / 写盘的 bash，区别于只读的 read / search / list），说明被标记的干净点之后又被改脏，这次<strong>不算检查点</strong>，等下一个干净 mark。
+          这逼出程序纪律：<strong>写在前、mark 在后、紧接着让出回合</strong>。
         </div>
-        <p>debounce 是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆：</p>
+        <p>debounce 是一条<strong>耐久性 ↔ 同步成本</strong>的滑杆——mark 只决定“何时算一致”，多久真 <code>push</code> 由 driver 按策略定：</p>
         <div class="tbl-wrap">
           <table>
             <thead><tr><th>策略</th><th>同步成本</th><th>崩溃丢失窗口</th></tr></thead>
             <tbody>
-              <tr><td>每个 mark 都同步</td><td>高</td><td>最小（最多回退一个 mark）</td></tr>
+              <tr><td>每个 mark 都 push</td><td>高</td><td>最小（最多回退一个 mark）</td></tr>
               <tr><td>每 N 个 mark / 每 T 分钟</td><td>中</td><td>中</td></tr>
-              <tr><td>仅休眠时同步</td><td>最低</td><td>最大（整段运行）</td></tr>
+              <tr><td>仅休眠时 push</td><td>最低</td><td>最大（整段运行）</td></tr>
             </tbody>
           </table>
         </div>
         <div class="note">
           <span class="note-label">liveness 兜底</span>
-          程序若<strong>从不</strong>调工具，崩溃就全丢回 bootstrap。基线是<strong>程序责任</strong>（state 技能在 loop 纪律里要求周期性 mark）；平台<em>可选</em>在太久没干净 mark 时，于某个 <code>turn.end</code> 拍一张无撕裂快照当粗兜底，但干净的点永远来自程序的 mark。
+          程序若从不 mark，崩溃就全丢回 bootstrap。基线是<strong>程序责任</strong>（<code>state</code> 库在 loop 纪律里要求周期性 mark）；平台<em>可选</em>在太久没干净 mark 时，于某个 <code>turn.end</code> 拍一张无撕裂快照作粗兜底，但干净点永远来自程序的 mark。
         </div>
         <div class="note ok">
-          <span class="note-label">休眠 = 一次 mark + 让出沙箱</span>
-          进程空闲等人，恰好也是<strong>最该让出沙箱</strong>的时刻。<a href="interaction.html#hibernate">hibernate-prepare</a> 会<strong>强制把最近的 mark 同步掉</strong>再 destroy——
-          所以<strong>休眠在机制上就是「确保最新 mark 落地 + 顺手让出沙箱」</strong>。CP 也可在分享 / 迁移前主动 <code>checkpoint-now</code> 强制一次。
+          <span class="note-label">休眠 = 强制落最近 mark + 让出沙箱</span>
+          进程空闲等人，恰好也是最该让出沙箱的时刻。休眠在机制上即“确保最新 mark 落地 + destroy 沙箱”；控制平面也可在分享 / 迁移前主动强制一次检查点。
+        </div>
+        <div class="note">
+          <span class="note-label">耐久传输：git push / clone</span>
+          一个检查点 = 一次 commit，<strong>最新检查点 = 仓库 HEAD</strong>（不在 PCB 存指针）。耐久靠 <code>git push</code> 到控制平面托管的远端（bare 仓库），唤醒靠 <code>git clone --depth=1</code>（默认检出 HEAD）灌回新沙箱——天然跨厂商。
+          前端只读<strong>已提交的一致快照</strong>（经 CP 代理按 ref 读 git），尚未提交的撕裂态不给用户看；驱动 push / clone 的是 CP 现签、钉死单库、短时有效、最小权限的令牌，真凭证不出控制平面。
         </div>
 
-        <h3 id="external">系统外副作用：程序记游标，平台不回退</h3>
+        <h3 id="external">外部副作用边界</h3>
         <p>
-          检查点能把进程<strong>倒带</strong>到上一个 mark，但倒带不了已经逃出进程目录的<strong>外部副作用</strong>——典型是 <code>git push</code>：推上远端的 commit 立刻、不可逆地耐久了，平台 rewind 不了它。
-        </p>
-        <p>
-          场景：程序开发一个 git 项目，某轮 ① 改码 ② commit + push（远端到 C）③ 进度记进 state/ ④ 检查点同步。崩溃若卡在 ②④ 之间——
-          push 活下来、记录随沙箱死，恢复回到上一个 mark（还在 B），<strong>进程记忆与远端世界岔开</strong>。这个双写窗口<strong>结构上消不掉</strong>（换顺序只把缝挪到另一边），
-          <strong>平台层没有更好的办法</strong>。真正的一致由<strong>程序语义</strong>兜，两条纪律：
+          检查点能把进程<strong>倒带</strong>到上一个 mark，但倒带不了已逃出进程目录的<strong>外部副作用</strong>——典型是向远端项目 <code>git push</code>、发邮件、调外部 API：它们立刻、不可逆地耐久了，平台 rewind 不了。
+          这个双写窗口<strong>结构上消不掉</strong>（换顺序只把缝挪到另一边），平台层没有更好的办法。真正的一致由<strong>程序语义</strong>兜，两条纪律：
         </p>
         <ul>
-          <li><strong>记游标</strong>：push 后把 commit hash 记进 state/（跟着检查点原子持久化）——这就是 git 版的 <code>input_cursor</code>。</li>
-          <li><strong>恢复签出记录的 hash，而非分支</strong>：分支 tip 是<strong>可变外部引用</strong>（可能被那次逃逸的 push 或协作者推动）；签出记录的<strong>不可变 hash</strong>，工作树与进程状态就都落在 B、彼此自洽，堵死「工作树静默超前于我的记忆」这种最坏的腐坏。</li>
+          <li><strong>记游标</strong>：副作用完成后把其标识（如远端 commit hash）记进 <code>execution-state/</code>，随检查点原子持久化——这就是 git 版的 <code>input_cursor</code>。</li>
+          <li><strong>恢复签出记录的不可变 hash，而非分支 tip</strong>：分支 tip 是可变外部引用（可能被逃逸的 push 或协作者推动）；签出记录的不可变 hash，工作树与进程状态就都落在同一点、彼此自洽，堵死“工作树静默超前于我的记忆”这种最坏腐坏。</li>
         </ul>
         <div class="note ok">
           <span class="note-label">远端孤儿无害——只关心内部是否自洽</span>
-          恢复后签出 B、重做出 C′，远端那个孤儿 C「挂着就挂着」：只要程序<strong>独占这条分支</strong>（agent 自己的 WIP 分支），<code>push --force</code> 用 C′ 盖掉 C，孤儿变 unreferenced 被 GC。
-          正确性底线是<strong>恢复后内部自洽</strong>——记游标 + 签出 hash 已经保证。「恢复即对账」（认领 C、跳过重做）只是<strong>省重复劳动的可选优化</strong>，非必需。
-          唯一会真咬人的是<strong>共享分支且他人已 pull</strong>（改写已发布历史），超出独占 WIP 分支的场景。
+          只要程序独占该分支（agent 自己的 WIP 分支），恢复后重做出的新 commit 经 <code>push --force</code> 盖掉逃逸的孤儿，孤儿变 unreferenced 被 GC。正确性底线是<strong>恢复后内部自洽</strong>（记游标 + 签出 hash 已保证）；“恢复即对账、跳过重做”只是省重复劳动的可选优化。唯一会真咬人的是<strong>共享分支且他人已 pull</strong>，超出独占 WIP 分支的场景。
         </div>
-
-        <h3 id="restore">恢复 = 纯 resume，没有「回退语义」</h3>
         <p>
-          沙箱 / driver 死了，我们<strong>不抢救</strong>——直接把进程<a href="#resume">恢复</a>到上一个健康 mark（新沙箱 <code>git clone --depth=1</code> 灌回检查点，默认检出 HEAD）。系统<strong>内</strong>状态<strong>没有任何回退语义要设计</strong>：
-        </p>
-        <ul>
-          <li>底层 harness 启动后<strong>就是普通 resume</strong>，它不知道、也不关心「丢了一段活」。</li>
-          <li>上个 mark 到崩溃前那几条输入，<strong>控制平面 eager 持久化着</strong>（输入很小、一到就存，是耐久脊梁）；恢复后当<strong>普通新输入重投</strong>给正在等输入的 harness，它当第一次收到来处理。没有重放、没有补偿、没有回退事件。</li>
-          <li>系统<strong>外</strong>副作用（git push、发邮件、调外部 API）不靠平台回退，靠程序的游标 + 幂等纪律对齐，见 <a href="#external">上一节</a>。协议保证仍是 <strong>at-least-once，不是 exactly-once</strong>。</li>
-        </ul>
-        <p>
-          于是两类状态两种节奏，互补：<strong>输入</strong>（轻、是脊梁）发出即存；<strong>执行状态 / 会话</strong>（重）在程序 mark 处按 debounce 检查点。
-          <strong>状态永不删除</strong>——退出只是没有沙箱关联，目录与历史完整保留。具体的 spawn / hibernate / wake / exit 调用链见 <a href="flows.html">生命周期流程</a>。
+          于是恢复 = <strong>纯 resume，没有回退语义要设计</strong>：harness 启动后就是普通 resume，不知道也不关心“丢了一段活”。
+          mark 到崩溃前那几条输入由控制平面 <strong>eager 持久化</strong>（输入很小、一到就存，是耐久脊梁），恢复后当普通新输入重投给正在等输入的 harness——无重放、无补偿、无回退事件。
+          两类状态两种节奏互补：<strong>输入</strong>（轻、脊梁）发出即存；<strong>执行状态 / 会话</strong>（重）在程序 mark 处按 debounce 检查点。<strong>状态永不删除</strong>，退出只是没有沙箱关联，目录与历史完整保留。
         </p>
 
-        <h2 id="branches">版本化进程目录 → 分支</h2>
+        <h2 id="branches">5 · 分支与 rewind</h2>
         <p>
-          既然检查点是一串<strong>带名字的存档点</strong>（程序 mark 时可带 label，像 <code>git commit -m</code>），那进程目录天然就是控制平面上一个<strong>被版本化的仓库</strong>。
-          从某个旧存档点<strong>岔一条分支</strong>去试别的方向，进程历史就从「线」变成「树」。底层就是给进程目录做版本管理，<strong>UI 上不暴露任何 git 术语</strong>（见 <a href="window.html#branches">工作窗口 · 分支与进度树</a>）。
+          检查点是一串<strong>带名字的存档点</strong>（mark 时可带 label，像 <code>git commit -m</code>）。于是进程目录天然就是控制平面上一个<strong>被版本化的仓库</strong>：
+          从某个旧存档点<strong>岔一条分支</strong>去试别的方向，进程历史就从“线”变成“树”。底层即给进程目录做 git 版本管理，<strong>UI 上不暴露任何 git 术语</strong>。
         </p>
         <div class="tbl-wrap">
           <table>
-            <thead><tr><th>进程概念</th><th>版本化对应</th></tr></thead>
+            <thead><tr><th>进程概念</th><th>git 对应</th></tr></thead>
             <tbody>
               <tr><td>一个检查点 mark</td><td>一次 commit（label = commit message）</td></tr>
               <tr><td><strong>分支</strong>（从存档点岔开试新方向）</td><td>branch</td></tr>
@@ -225,25 +324,78 @@
             </tbody>
           </table>
         </div>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart LR
+    A["commit · mark①"] --> B["commit · mark②"]
+    B --> M[("主线 tip（唤醒检出此处）")]
+    A -. "从 mark① 分支（试新走法）" .-> X["commit · 支线"]
+    X --> N[("支线 tip（独立可运行 / 可并行）")]
+    B -. "rewind = checkout 旧 mark" .-> A
+          </pre>
+        </div>
         <div class="note ok">
           <span class="note-label">两棵耦合的版本树：superproject ↔ submodule</span>
           注意有<strong>两棵独立的 git</strong>：① <strong>进程目录</strong>——平台在控制平面上版本化（外层）；② <strong>项目代码</strong>——程序在项目自己的远端版本化（内层）。
-          二者靠 <a href="#external">记录的 commit hash 游标</a>钉在一起：外层每个 commit 里存着一个指向内层的 SHA——正是 <strong>superproject 钉住 submodule</strong> 的形状。
-          于是平台 fork 外层（branch 进程目录）<strong>免费、纯在 CP 上</strong>；但要让内层也分叉，得靠程序在 resume 时把项目 repo <strong>从那个 SHA 另开一条 git 分支</strong>（平台对 git 无知，只传一个「你是 fork」信号）。
+          二者靠记录的 commit hash 游标钉在一起：外层每个 commit 里存着一个指向内层的 SHA——正是 <strong>superproject 钉住 submodule</strong> 的形状。
+          于是平台 fork 外层（branch 进程目录）<strong>免费、纯在 CP 上</strong>；要让内层也分叉，得靠程序在 resume 时把项目 repo 从那个 SHA 另开一条分支（平台对 git 无知，只传一个“你是 fork”信号）。
         </div>
         <p>
-          <strong>运行单位是「分支」</strong>，不是进程：列表里每条分支是一条独立可 attach / 可运行 / 可<a href="#branches">分享</a>的执行线，<strong>可并行</strong>；「进程」退化成把同家族分支兜在一起的<strong>分组</strong>。
+          <strong>运行单位是“分支”</strong>，不是进程：列表里每条分支是一条独立可 attach / 可运行 / 可分享的执行线，<strong>可并行</strong>；“进程”退化成把同家族分支兜在一起的<strong>分组</strong>。
           主分支没有自己的名字——它就是这个进程；只有支线在创建时起名。
         </p>
         <div class="note">
-          <span class="note-label">没有 merge</span>
-          外层机械上能 merge，但「合并两条 agent 跑出来的状态 + 两条代码分支」<strong>语义上不成立</strong>——所以<strong>只 branch、不 merge</strong>。分支用来做<strong>分支尝试</strong>（同一起点试不同走法），不是用来最终汇合。
+          <span class="note-label">只 branch，不 merge</span>
+          外层机械上能 merge，但“合并两条 agent 跑出来的状态 + 两条代码分支”<strong>语义上不成立</strong>。分支用于<strong>分支尝试</strong>（同一起点试不同走法），不用于最终汇合。
+        </div>
+
+        <h2 id="db">6 · 数据库：投影</h2>
+        <p>内容真相在 OCI（程序）与 git（进程态）；控制平面数据库是可查询的<strong>投影</strong>与平台独有的关系态，非权威内容来源：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>表</th><th>定位</th><th>真相在哪</th></tr></thead>
+            <tbody>
+              <tr><td><code>processes</code>（PCB）</td><td>进程控制块：<code>pid</code> / owner / 钉死 <code>program@版本</code> / <code>state</code> / <code>sandbox_id</code> / <code>repo_url</code> …</td><td>进程态在 git；PCB 是关系投影</td></tr>
+              <tr><td><code>programs</code> / <code>program_versions</code></td><td>程序身份 + 版本索引（<code>digest</code>、镜像依赖）</td><td>OCI digest + git 源</td></tr>
+              <tr><td><code>installations</code></td><td>用户 × 程序的安装关系</td><td>DB 权威（平台独有关系态）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">哪些内容态不入 PCB</span>
+          <ul style="margin:6px 0 0">
+            <li><code>meta.yml</code> 的 <code>phase</code> / <code>status</code> / <code>input_cursor</code> 是程序内部 FSM 态，<strong>resume 权威在进程目录</strong>，不进 PCB（冲突以目录为准）。</li>
+            <li>“最新检查点是哪个 commit” = 仓库 HEAD，可推导，<strong>不入 PCB</strong>；<code>spawned</code> / <code>hibernating</code> 的区分由 <code>state</code> 列承载。</li>
+            <li>进程跑在哪个镜像，由钉死的 <code>program@版本</code> join <code>program_versions</code> 派生，<strong>不入 PCB</strong>。</li>
+          </ul>
+        </div>
+
+        <h2 id="status">7 · 实现状态</h2>
+        <p>状态契约的<strong>协议层</strong>已由 <code>state</code> 库定义并落地；git 检查点 / 分支的<strong>运行时</strong>多在 driver 侧待接入，与 <a href="proc-wake.html">05</a> 一致。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>层</th><th>要素</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td rowspan="3">状态契约（协议）</td><td>execution 目录结构、<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code> 契约</td><td>✅ 由 <code>state</code> 库定义</td></tr>
+              <tr><td><code>state_schema</code> 快照与合并、<code>by-ref</code> blob、原子写</td><td>✅ 协议已定</td></tr>
+              <tr><td>cursor / resume 语义、at-least-once、幂等归程序</td><td>✅ 协议已定</td></tr>
+              <tr><td>进程模型</td><td><code>processes</code>（PCB）表 + 生命周期 spawn / wake / hibernate / kill</td><td>✅ 已实现（沙箱动作 mock）</td></tr>
+              <tr><td rowspan="2">检查点</td><td>mark + <code>turn.end</code> 捕获 + debounce 语义</td><td>🚧 协议 / 设计已定，运行时未落地</td></tr>
+              <tr><td>git <code>commit</code> / <code>push</code> 耐久（<code>CheckpointStore</code>）</td><td>🚧 仅接口；现存代码为旧式 bundle，未接 git；<code>destroy</code> 回占位 ref</td></tr>
+              <tr><td>唤醒取回</td><td>driver：<code>git clone</code> 灌回 HEAD</td><td>❌ 未接入 driver</td></tr>
+              <tr><td>分支与 rewind</td><td>git 分支即进程分叉、superproject ↔ submodule</td><td>❌ 运行时未落地（协议 / 设计已定）</td></tr>
+              <tr><td>沙箱编排</td><td><code>SandboxGateway</code>：<code>ProviderSandboxGateway</code>（PPIO） vs <code>MockSandboxGateway</code></td><td>🚧 真实网关存在；检查点走 git 部分占位，默认 mock</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <div class="pager" data-pager></div>
       </article>
+      <aside class="toc"></aside>
     </main>
   </div>
   <script src="docs.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { useMaxWidth: true }, sequence: { useMaxWidth: true } });</script>
 </body>
 </html>

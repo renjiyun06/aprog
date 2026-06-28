@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>01 · 总览 — aprog 设计文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="overview">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content with-toc">
+      <article>
+        <div class="eyebrow">aprog 设计文档 · 01</div>
+        <h1>总览</h1>
+        <p class="lead">
+          本篇定义 aprog 平台的核心抽象、组成模块，以及一次进程唤醒的完整控制流，并标注各环节的实现状态。
+          它是设计文档体系的主干；各专题在此基础上展开：程序与发版（02）、镜像与沙箱（03）、通道与协议（04）、运行生命周期（05）、状态契约（06）。
+        </p>
+
+        <div class="note">
+          <span class="note-label">标注约定</span>
+          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态；文档随实现推进而扩充。
+        </div>
+
+        <h2 id="abstractions">1 · 核心抽象</h2>
+        <p>aprog 是运行 AI 程序的虚拟操作系统。其核心抽象与传统操作系统逐一对应：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>操作系统</th><th>aprog</th><th>定义</th></tr></thead>
+            <tbody>
+              <tr><td>可执行程序</td><td><strong>程序 Program</strong></td><td>以目录形态存在的一项能力（skill）；对平台为可版本化发布的<strong>包</strong>（OCI 制品）。静态实体。</td></tr>
+              <tr><td>进程</td><td><strong>进程 Process</strong></td><td>程序的一次运行，可休眠与唤醒，拥有独立的 PID 与进程目录。</td></tr>
+              <tr><td><code>/proc/&lt;pid&gt;/</code></td><td><strong>进程目录</strong></td><td><code>~/.aprog/&lt;pid&gt;/</code>，进程的权威状态，以 git 仓库承载（以支持分支）。</td></tr>
+              <tr><td>CPU</td><td><strong>引擎 Engine</strong></td><td>底层 agent 循环，当前由 Claude Agent SDK 启动的原生引擎承担，可替换。</td></tr>
+              <tr><td>内存与运行环境</td><td><strong>沙箱 Sandbox</strong></td><td>每进程独立的容器，提供临时算力，由 PPIO 供给，于唤醒时创建。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          须区分两类实体：<strong>程序</strong>为共享、不可变、按版本分发，经 OCI 制品发布；
+          <strong>进程态</strong>为每进程独占、可变、可分支，以 git 仓库承载。
+          二者在唤醒时并行落入沙箱，职责互不重叠。
+        </p>
+
+        <h2 id="planes">2 · 体系结构：两个平面</h2>
+        <p>系统交互沿两条正交的轴展开，分由两个子系统承载，不应合并：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>维度</th><th>A · 资源平面</th><th>B · 数据平面</th></tr></thead>
+            <tbody>
+              <tr><td>职责</td><td>沙箱的创建与销毁（算力）</td><td>进程的事件、输入与控制（数据）</td></tr>
+              <tr><td>承载者</td><td><code>SandboxProvider</code>（PPIO）</td><td>driver 与控制平面之间的通道</td></tr>
+              <tr><td>形态</td><td>调用厂商 SDK 创建容器</td><td>由 driver 主动建立的一条 WebSocket</td></tr>
+              <tr><td>消息格式</td><td>—</td><td>统一帧 <code>Frame&lt;t,p&gt;</code>，可扩展</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="components">3 · 组件与依赖</h2>
+        <div class="diagram">
+          <pre class="mermaid">
+flowchart LR
+    W["Web 前端"] -->|"REST / SSE"| CP["控制平面"]
+    CP -->|"创建沙箱 · A 平面"| SB
+    subgraph SB["沙箱 Sandbox · PPIO"]
+      direction TB
+      D["driver"] --> E["引擎 Engine"]
+    end
+    D -->|"WebSocket · B 平面"| CP
+          </pre>
+        </div>
+        <p>
+          依赖方向受约束：driver <strong>不依赖</strong>控制平面的实现代码，仅依赖协议契约 <code>@aprog/protocol</code>；
+          引擎对平台为黑盒，由 driver 适配。控制平面对外区分两个面：北面向 Web 提供 REST 与 SSE，南面向 driver 提供 WebSocket 通道（<code>/v1/driver/channel</code>）。
+        </p>
+
+        <h2 id="wake">4 · 进程唤醒控制流</h2>
+        <p>下图为用户触发唤醒至引擎就绪的完整时序。阴影区为当前<strong>未实现</strong>部分。</p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 用户与前端
+    participant CP as 控制平面
+    participant PM as ProcessManager
+    participant SP as SandboxProvider
+    participant D as driver
+    participant E as 引擎
+    U->>CP: POST /proc/:pid/wake
+    CP->>PM: wake(pid)
+    PM->>SP: create(pid, program@version)
+    Note over SP: 生成 bindToken；先登记后启动
+    SP->>D: 推送 driver 并注入 env，后台启动
+    PM-->>U: 返回 PCB（state=running）
+    Note over U,PM: 已实现；当前为同步返回，过早置 running
+    D->>CP: WebSocket Hello（bindToken）
+    CP-->>D: Welcome（pid, mode）
+    Note over CP,D: 握手已实现
+    rect rgb(244,239,233)
+    Note over CP,E: 以下均未实现
+    CP-->>D: 下发种子：程序引用 / registry / 凭证
+    D->>D: 拉取 OCI 闭包，untar 至 skills/
+    D->>D: git clone 进程态
+    D->>E: 经 SDK 启动引擎
+    E-->>D: ready
+    D->>CP: ready 帧
+    CP-->>U: 经 SSE 或轮询转为 running
+    end
+          </pre>
+        </div>
+        <div class="note">
+          <span class="note-label">已知限制：过早置 running</span>
+          当前 <code>wake</code> 为同步返回：<code>sandbox.create</code> 返回（沙箱容器启动、driver 进程拉起）后即将进程置为 running，
+          此时握手尚未完成、引擎尚未启动。目标形态为异步：<code>wake</code> 立即返回 <code>waking</code> 态，
+          前端经轮询或 SSE 等待，直至 driver 启动引擎并回报 ready 后转为 running。补全这条 ready 回流是打通整条链路的关键。
+        </div>
+
+        <h2 id="distribution">5 · 程序分发</h2>
+        <p>
+          程序以目录形态开发，发布为 OCI 制品并推送至 GHCR（工具 <code>aprog-publish</code>）。✅
+          依赖声明于程序目录的 <code>aprog.json</code>（<code>{"dependencies":{"state":"0.1.0"}}</code>），不写入 <code>SKILL.md</code>。
+          发布期解析传递闭包，将每个依赖按 sha256 digest 钉死，拍平写入 OCI config（即 lockfile）。
+          driver 拉取时不解析依赖，仅取该已钉死的扁平闭包，解包并排部署至 <code>skills/</code>，并借内容寻址实现去重。
+          详见 <a href="program-package.html">02 · 程序与发版</a>。
+        </p>
+
+        <h2 id="state">6 · 状态模型</h2>
+        <p>
+          程序（共享、不可变）经 OCI 按版本拉取；进程态（每进程、可变、可分支）以 git 承载。
+          execution 内部的状态契约（<code>meta.yml</code>、<code>input.md</code>、<code>execution-state/</code>、cursor 与 resume）详见
+          <a href="state.html">06 · 状态契约</a>。控制平面的数据库为上述真相的<strong>投影</strong>，非权威来源。
+        </p>
+
+        <h2 id="status">7 · 实现状态</h2>
+        <p>核心要素已基本就绪，未完成部分集中于 driver 握手后的运行时编排。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>平面</th><th>要素</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td rowspan="2">资源平面</td><td>base 镜像（ubuntu / root / 工具链 / GLM）经 aprog-bake 烘为 PPIO template</td><td>✅</td></tr>
+              <tr><td>PPIO provider：唤醒时创建沙箱、推送 driver、注入环境变量</td><td>✅</td></tr>
+              <tr><td rowspan="3">数据平面</td><td>控制平面北面 REST 与 SSE</td><td>✅</td></tr>
+              <tr><td>控制平面南面 WebSocket 通道与 DriverRegistry（先登记后启动）</td><td>✅</td></tr>
+              <tr><td>driver 握手 Hello / Welcome；通信帧 <code>Frame&lt;t,p&gt;</code></td><td>✅</td></tr>
+              <tr><td rowspan="2">分发面</td><td>aprog-publish：aprog.json → 闭包 → digest 钉死 → 推送 GHCR</td><td>✅</td></tr>
+              <tr><td>driver 拉取 OCI 闭包并解包至 skills/</td><td>❌ 机制已验证，未接入 driver</td></tr>
+              <tr><td rowspan="4">运行时编排</td><td>异步唤醒与 waking 过渡态</td><td>❌ 当前为同步</td></tr>
+              <tr><td>driver：git clone 进程态</td><td>❌</td></tr>
+              <tr><td>driver：经 SDK 启动引擎</td><td>❌</td></tr>
+              <tr><td>driver → 控制平面 ready 帧，前端转为 running</td><td>❌</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="map">8 · 文档导航</h2>
+        <p>设计文档主干为 5 篇（本页为 01）；过时材料归档于 <code>docs/legacy/</code>。</p>
+        <div class="hero-cards">
+          <a class="hero-card" href="program-package.html">
+            <div class="num">02</div><div class="name">程序与发版</div>
+            <p class="blurb">OCI 包模型、aprog.json 依赖、GHCR、发布与拉取、数据库投影。</p>
+          </a>
+          <a class="hero-card" href="images.html">
+            <div class="num">03</div><div class="name">镜像与沙箱</div>
+            <p class="blurb">镜像目录模型与烘制、base 镜像内容、供应商抽象、PPIO 运行约束。</p>
+          </a>
+          <a class="hero-card" href="protocol.html">
+            <div class="num">04</div><div class="name">通道与协议</div>
+            <p class="blurb">harness 事件与 driver↔控制平面通信两组，统一 Frame，握手。</p>
+          </a>
+          <a class="hero-card" href="proc-wake.html">
+            <div class="num">05</div><div class="name">运行生命周期</div>
+            <p class="blurb">spawn / wake / hibernate 全序与运行时编排。</p>
+          </a>
+          <a class="hero-card" href="state.html">
+            <div class="num">06</div><div class="name">状态契约</div>
+            <p class="blurb">进程目录三层数据、git 检查点、分支、数据库投影。</p>
+          </a>
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+      <aside class="toc"></aside>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'neutral', flowchart: { useMaxWidth: true }, sequence: { useMaxWidth: true } });</script>
+</body>
+</html>

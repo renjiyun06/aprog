@@ -9,60 +9,14 @@
   // <h2> ids on that page; they render as sub-links only for the active page.
   const NAV = [
     {
-      group: '入门',
+      group: '设计文档',
       items: [
-        { page: 'index',        label: 'aprog 是什么' },
-        { page: 'concepts',     label: '核心概念' },
-        { page: 'journey',      label: '运行全景' },
-      ],
-    },
-    {
-      group: '产品 · 工作窗口',
-      items: [
-        { page: 'window',       label: '工作窗口' },
-      ],
-    },
-    {
-      group: '架构',
-      items: [
-        { page: 'modules',      label: '系统模块鸟瞰' },
-        { page: 'architecture', label: '三层抽象' },
-        { page: 'components',    label: '组件清单' },
-        { page: 'code-architecture', label: '代码架构' },
-        { page: 'sandbox',       label: '沙箱与镜像' },
-        { page: 'program-package', label: '程序与发版' },
-        { page: 'interaction',   label: '沙箱交互界面' },
-        { page: 'api',           label: '控制平面 API' },
-        { page: 'api-impl',      label: '控制平面 API 实现' },
-      ],
-    },
-    {
-      group: '协议与会话',
-      items: [
-        { page: 'protocol',     label: '事件流协议' },
-        { page: 'harness',      label: 'Harness 适配' },
-        { page: 'agent-sdk',    label: 'Claude Agent SDK 事件模型' },
-      ],
-    },
-    {
-      group: '状态与持久化',
-      items: [
-        { page: 'state',        label: '进程目录与状态' },
-        { page: 'proc-storage', label: '进程状态存储 (Git)' },
-        { page: 'data-model',   label: '数据模型' },
-      ],
-    },
-    {
-      group: '流程',
-      items: [
-        { page: 'flows',        label: '生命周期流程' },
-        { page: 'proc-wake',    label: 'wake 唤醒流程' },
-      ],
-    },
-    {
-      group: '参考',
-      items: [
-        { page: 'reference',    label: '协议 / Schema / CLI' },
+        { page: 'overview',        label: '01 · 总览' },
+        { page: 'program-package', label: '02 · 程序与发版' },
+        { page: 'images',          label: '03 · 镜像与沙箱' },
+        { page: 'protocol',        label: '04 · 通道与协议' },
+        { page: 'proc-wake',       label: '05 · 运行生命周期' },
+        { page: 'state',           label: '06 · 状态契约' },
       ],
     },
   ];
@@ -83,8 +37,10 @@
       for (const it of g.items) {
         const active = it.page === current;
         html += '<a class="sb-link' + (active ? ' active' : '') + '" href="' + it.page + '.html">' + it.label + '</a>';
-        if (active) {
-          // inject in-page h2 anchors as sub-links
+        // 本页小节优先由右栏「本页目录」(.toc) 承担；当右栏目录不存在或被响应式隐藏(窄屏)时，回退到左栏注入小节。
+        var tocEl = document.querySelector('.toc');
+        var tocShown = tocEl && getComputedStyle(tocEl).display !== 'none';
+        if (active && !tocShown) {
           const subs = [].slice.call(document.querySelectorAll('article h2[id]'));
           if (subs.length) {
             html += '<div class="sb-sub">';

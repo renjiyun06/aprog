@@ -98,6 +98,8 @@ a:hover { text-decoration: underline; }
 
 /* ───────────── content ───────────── */
 .content { display: block; min-width: 0; padding: 44px 56px 120px; }
+/* 启用右栏「本页目录」的页面：正文 + 220px 目录两栏 */
+.content.with-toc { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 48px; align-items: start; }
 article { max-width: var(--content-max); min-width: 0; }
 .eyebrow { font-family: var(--mono); font-size: 11.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 12px; }
 article h1 { font-size: 2.35rem; line-height: 1.14; font-weight: 600; margin: 0 0 16px; letter-spacing: -0.028em; }
@@ -293,6 +295,7 @@ a.node:hover::after { opacity: 1; }
 /* responsive */
 @media (max-width: 1100px) {
   .content { grid-template-columns: minmax(0,1fr); }
+  .content.with-toc { display: block; }
   .toc { display: none; }
 }
 @media (max-width: 860px) {

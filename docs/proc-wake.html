@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>wake · 唤醒进程流程 · aprog 文档</title>
+  <title>05 · 运行生命周期 — aprog 设计文档</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body data-page="proc-wake">
@@ -17,303 +17,328 @@
 
   <div class="shell">
     <aside class="sidebar" id="sidebar"></aside>
-    <main class="content">
+    <main class="content with-toc">
       <article>
-        <div class="eyebrow">流程</div>
-        <h1>wake · 唤醒进程流程</h1>
+        <div class="eyebrow">aprog 设计文档 · 05</div>
+        <h1>运行生命周期</h1>
         <p class="lead">
-          单挑「唤醒」这一个接口,把它从前端点击到进程跑起来的<strong>整条链</strong>讲透:
-          <strong>当用户点「唤醒进程」,后端到底要做哪些事、哪些已落地、哪些待对接沙箱</strong>。
-          唤醒走<strong>异步</strong>(<a href="#sync-async">已拍板</a>):wake 立即回 <code>waking</code>,真正就绪(<code>running</code>)稍后经前端本就订阅的事件流推回。
-          模型背景见 <a href="data-model.html#process">数据模型 · Process</a>,状态取回(<strong>git clone</strong>)见 <a href="proc-storage.html">进程状态存储（Git 模型）</a>,程序包拉取见 <a href="program-package.html">程序与发版</a>,平面与握手见 <a href="interaction.html#s-wake">沙箱交互界面</a>。
+          本篇定义进程的运行生命周期：三个动词 <code>spawn</code>（创建）、<code>wake</code>（唤醒）、<code>hibernate</code>（休眠），
+          以及连接三者的进程状态机。它是 <a href="overview.html#wake">01 · 总览 §4「进程唤醒控制流」</a>的展开，对各环节如实标注实现状态。
+          进程状态的权威落点为控制平面 <code>ProcessManager</code> 所维护的进程控制块（PCB，数据库 <code>processes</code> 表）；
+          进程的内容态以 git 仓库承载，详见 <a href="state.html">06 · 状态契约</a>。
         </p>
 
-        <div class="note ok">
-          <span class="note-label">现状：PCB 已通,沙箱 mock,异步待落</span>
-          唤醒的<strong>编排骨架</strong>(取 PCB → 起沙箱 → 回写状态 → 返回 PCB)已落地并端到端验证;
-          但当前是<strong>同步形</strong>(直接回 <code>running</code>),且「真正起沙箱」走 <a href="data-model.html#process"><code>MockSandboxGateway</code></a>——只造假 <code>sandbox_id</code>,不 <code>git clone</code> 取回状态、不拉程序包、不拉 harness、不建通道。
-          本轮已定<strong>改异步</strong>(立即回 <code>waking</code>、<code>running</code> 经 stream 推)。本页用 <span class="tag"><span class="pill run">现</span></span> 标已做的、<span class="tag"><span class="pill">待</span></span> 标接入真实沙箱后才补的。
+        <div class="note">
+          <span class="note-label">标注约定</span>
+          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态。当前实现至 <code>wake</code> 链路的 driver 握手已就绪；
+          握手之后的运行时编排、以及异步唤醒所需的 <code>waking</code> 过渡态尚未落地。
         </div>
 
-        <h2 id="signature">接口签名</h2>
-        <p>一个动词、一个 owner-only 端点。<strong>异步</strong>:立即返回 <code>waking</code> 的 PCB,不挂着等冷启。前端无须区分「首跑」还是「恢复」——都只是点「唤醒」。</p>
-        <div class="tbl-wrap"><table>
-          <tbody>
-            <tr><td>方法 / 路径</td><td><code>POST /proc/:pid/wake</code></td></tr>
-            <tr><td>鉴权 / 授权</td><td><code>withAuth</code>（token→User）→ <code>authorize(user, pid, 'owner')</code>（非属主 403,不存在 404）</td></tr>
-            <tr><td>请求体</td><td>无</td></tr>
-            <tr><td>响应</td><td><code>200</code> + <a href="data-model.html#process">PCB</a>(<strong><code>state=waking</code></strong>,毫秒返回);<code>running</code> <strong>不</strong>在本响应里——稍后经<a href="#sync-async">事件流</a>推</td></tr>
-            <tr><td>前端入口</td><td><code>wakeProcess(pid)</code>(<code>web/src/stores/processes.ts</code>)→ 就地置该行为 <code>waking</code>(「唤醒中…」);监听 stream 待其翻 <code>running</code></td></tr>
-            <tr><td>后端落点</td><td><code>routes/proc.ts → wake()</code> → <code>ProcessManager.wake(pid)</code>(<code>process/manager.ts</code>)</td></tr>
-          </tbody>
-        </table></div>
-
-        <h2 id="two-cases">一个接口,两种唤醒</h2>
-        <p>同一个 <code>wake</code> 覆盖两种入态,内部靠<strong>仓库有没有 commit</strong>(即 <code>state</code> 是 spawned 还是 hibernating)分叉——对前端透明,对后端是两条路径:</p>
-        <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
-            <div class="node c-muted" style="flex:1">
-              <span class="nt">spawned → running <span class="tag"><span class="pill hib">首跑</span></span></span>
-              <span class="nd"><strong>从未起过沙箱</strong>,无检查点。冷启:新沙箱 + 灌<strong>初始 input</strong>,harness 首次按 <a href="state.html">state 技能</a>写出进程目录骨架、从 <code>input_cursor=0</code> 跑起。</span>
-            </div>
-            <div class="node c-muted" style="flex:1">
-              <span class="nt">hibernating → running <span class="tag"><span class="pill hib">恢复</span></span></span>
-              <span class="nd"><strong>跑过、有 commit</strong>。新沙箱 + <code>git clone</code> 取回工作记忆(默认 HEAD = 最新检查点),harness 按 <a href="state.html#resume">resume</a> 续跑。进程目录、产物都还在。</span>
-            </div>
-          </div>
-          <div class="dgm-cap">
-            两条路径只在 <strong>git clone「取回什么」</strong>不同(空 / 初始 input vs HEAD 最新检查点);起沙箱、<strong>拉程序包</strong>、起引擎、建通道、回写 PCB 全相同。
-            <code>running</code> 入态则<strong>幂等</strong>:已有沙箱,直接回当前 PCB,不重起。
-          </div>
-        </div>
-
-        <h2 id="flow">完整流程(异步 · 真实沙箱版)</h2>
+        <h2 id="states">1 · 进程状态机</h2>
         <p>
-          一次 <code>wake</code> 串起两个平面:<strong>A 平面</strong>(控制平面起停沙箱)与 <strong>B 平面</strong>(<a href="interaction.html#data-plane">DriverChannel</a>,事件上行 + input 下行)。
-          关键:<strong>第 ② 步就把响应回给前端(<code>waking</code>)</strong>,③–⑧ 全在<strong>后台</strong>跑,<code>running</code> 最后经 stream 推回。
+          进程的稳态由单一判据决定：<strong>是否关联一个沙箱</strong>。有沙箱即 <code>running</code>；无沙箱则区分为
+          <code>spawned</code>（已创建、从未起过沙箱、无检查点）与 <code>hibernating</code>（曾运行、已释放沙箱、留有检查点）。
+          状态机<strong>无终止态</strong>：进程运行完毕或被 <code>kill</code>，均仅回到 <code>hibernating</code>，进程目录与产物始终保留、随时可再唤醒。
         </p>
-        <div class="mermaid-wrap" style="overflow-x:auto;margin:18px 0;border:1px solid var(--border);border-radius:10px;padding:14px 10px;background:var(--bg-sidebar)">
+        <p>
+          为承认异步唤醒期间的过渡，设计上建议增设第四态 <code>waking</code>，作为 <code>running</code> 的前奏（详见 §4）。
+          下图中 <code>waking</code> 及其相关转移为<strong>目标形态，当前实现尚未落地</strong>。
+        </p>
+        <div class="diagram">
           <pre class="mermaid">
-sequenceDiagram
-  actor Web as 前端
-  participant CP as 控制平面
-  participant Sbx as 沙箱·provider
-  participant Drv as driver
-  participant Reg as OCI registry
-  participant Git as 进程仓·bare
-  participant Eng as 引擎
-  Web->>CP: POST /proc/:pid/wake
-  CP->>CP: ① 鉴权 + 授权 + 取 PCB
-  Note right of CP: running 入态 → 幂等直接回
-  CP->>CP: ② state=waking(记住来路)
-  CP-->>Web: 200 · PCB(waking)
-  Note over Web: 立即渲染「唤醒中…」
-  Note over CP,Eng: ↓ 后台 bring-up(③–⑧)异步 ↓
-  CP->>Sbx: ③ create(派生镜像 program@版本→image@版本)
-  Sbx->>Drv: 沙箱起 · provider 推入并后台启动 driver
-  Drv->>CP: ④ 持注入 bindToken 经 HTTPS 拨入(登记早于拨号→命中) + 版本握手
-  CP-->>Drv: ⑤ 下发种子(模型 auth + registry/git 短期 token)
-  par ⑥ 并行铺进程目录(driver 直连存储)
-    Drv->>Reg: OCI pull 程序包 + depends_on 闭包(digest)
-    Reg-->>Drv: layers(CAS 命中则跳过)
-  and
-    Drv->>Git: git clone --depth=1(HEAD / 空仓)
-    Git-->>Drv: 进程目录 ~/.aprog/&lt;pid&gt;/
-  end
-  Drv->>Eng: ⑦ spawn 引擎(首跑 init / 恢复 resume)
-  Eng-->>Drv: ready(连回 · 事件泵活)
-  Drv->>CP: 报 ready
-  CP->>CP: ⑧ state=running · 回填 sandbox_id/provider
-  CP-->>Web: stream: waking → running
-  Note over Web: 卡片翻「运行」
-  alt 任一后台步失败
-    CP->>Sbx: destroy(释放沙箱)
-    CP->>CP: 回滚 state=来路(spawned/hibernating)
-    CP-->>Web: stream: 报错
-  end
+stateDiagram-v2
+    [*] --> spawned: spawn
+    spawned --> waking: wake
+    hibernating --> waking: wake
+    waking --> running: driver 报 ready
+    waking --> spawned: bring-up 失败回滚
+    waking --> hibernating: bring-up 失败回滚
+    running --> hibernating: hibernate / kill / 运行完毕
+    running --> running: wake（幂等）
+    note right of waking
+      过渡态（建议增设）
+      当前未实现 ❌：wake 仍同步直接置 running
+    end note
           </pre>
         </div>
-        <div class="dgm-cap" style="margin:0 0 14px">时序图:参与者横向、时间向下。第 ② 步即回前端(<code>waking</code>),③–⑧ 后台异步,<code>running</code> 经 stream 推回;失败则 destroy + 回滚。下方<strong>节点</strong>是逐步的带 mock 标注细化。</div>
-        <p style="margin-top:0">逐步细化(标注 mock 现状):</p>
-        <div class="dgm">
-          <div class="seq-req"><span class="chip"><span class="cdot" style="background:#1f99a8"></span>前端</span><span class="mono">POST /proc/&lt;pid&gt;/wake</span></div>
-          <div class="ar down"><span class="gly">↓</span></div>
-          <div class="node c-frontend">
-            <span class="nt">① 鉴权 + 授权 + 取 PCB <span class="tag"><span class="pill run">现</span></span></span>
-            <ul class="acts">
-              <li><code>withAuth</code> 验 token → User;<code>authorize(user, pid, 'owner')</code>(不存在 404、非属主 403)</li>
-              <li>读 PCB:<code>running</code> → <strong>幂等</strong>直接返回当前 PCB(已有沙箱);否则进入 ②</li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="albl">毫秒级 · 立即回前端 ▼</span><span class="gly">↓</span></div>
-          <div class="node c-cp">
-            <span class="nt">② 置 waking + 立即返回 <span class="tag"><span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li><code>UPDATE state='waking'</code>;<strong>记住来路</strong>(<code>spawned</code>/<code>hibernating</code>)以便失败回滚</li>
-              <li><strong>立刻</strong>把 PCB(<code>state=waking</code>)返回前端 → 卡片渲染「唤醒中…」(spinner)</li>
-              <li>起沙箱转入<strong>后台任务</strong>;HTTP 不挂着等冷启(<code>waking</code> 同时是<strong>并发占位</strong>,防两 tab 起两沙箱)</li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="albl">↓ 以下 ③–⑧ 全在后台异步 ↓ · A 平面 · 起算力</span><span class="gly">↓</span></div>
-          <div class="node c-cp">
-            <span class="nt">③ 申请沙箱(派生镜像) <span class="tag"><span class="pill run">现</span> <span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li><code>SandboxGateway.create()</code> → provider(PPIO…)按<strong>该 program 版本依赖的镜像</strong>(<code>program@版本 → image@版本</code>,见 <a href="sandbox.html#program-dep">程序依赖镜像</a>)起沙箱;网关<strong>先签发 bindToken 并登记</strong>(driver 未启),provider 再把 driver 运行时推入、后台启动</li>
-              <li><strong>慢点在此</strong>:冷启容器 = 秒级~数十秒(正是放后台、走异步的原因)</li>
-              <li>mock 现状:立即返回 <code>mock-sbx-&lt;pid&gt;-xxxx</code> / <code>provider=mock</code>,无真实算力</li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="albl">B 平面 · driver 拨入 ▼</span><span class="gly">↓</span></div>
-          <div class="node c-driver">
-            <span class="nt">④ driver 拨入 + 绑定 + 握手 <span class="tag"><span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li>driver 自启,持<strong>运行时注入的 bindToken</strong> 经 HTTPS 拨向 CP → <a href="interaction.html#trust">CP 据登记簿认领</a>(登记早于拨号,首拨即命中) + protocol 版本握手 → 建 <a href="interaction.html#data-plane">DriverChannel</a></li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="gly">↓</span></div>
-          <div class="node c-cp">
-            <span class="nt">⑤ CP 下发种子 <span class="tag"><span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li>经 B 下发敏感种子:<strong>模型 auth</strong>(用户 OAuth,跑引擎用,不能烘 / 不进 git)+ <strong>短期 registry pull token</strong>(拉程序包)+ <strong>git deploy token</strong>(clone 进程仓)</li>
-              <li>这些因人而异、必须握手后下发;它们<strong>gate 下一步</strong>的 pull/clone(没凭证拉不动)。真凭证不出 CP,沙箱只拿短期窄 scope(见 <a href="interaction.html#trust">信任与启动序</a>)</li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="albl">driver 直连存储 · 并行取 ▼</span><span class="gly">↓</span></div>
-          <div class="node c-driver">
-            <span class="nt">⑥ driver 并行铺好进程目录 <span class="tag"><span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li><strong>拉程序包(横向依赖)</strong>:按 digest <a href="program-package.html#pull">OCI pull</a> 程序包 + <code>depends_on</code> 闭包 → 摆 skill 目录 + 瘦装(<code>bins→PATH</code> / env)。共享库(如 <code>state</code>)命中本地 CAS 只下一次</li>
-              <li><strong>clone 进程态</strong>:driver <code>git clone --depth=1</code>(HEAD = 最新检查点;<strong>首跑</strong>仓库空 / 只放初始 input)→ <code>~/.aprog/&lt;pid&gt;/</code>(<a href="state.html">权威内容态</a>:meta.yml / input.md / execution-state/),落沙箱<strong>临时盘</strong></li>
-              <li>两者<strong>互相独立 → 并行</strong>;都<strong>直连存储</strong>,不挤 control-stream(耐久真相在 CP 托管 bare 仓,见 <a href="proc-storage.html">Git 模型</a>)</li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="gly">↓</span></div>
-          <div class="node c-driver">
-            <span class="nt">⑦ driver 起引擎 + 报 ready <span class="tag"><span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li>driver(经 SDK)spawn 原生引擎:<strong>首跑</strong> init 写骨架从头跑,<strong>恢复</strong>按 <a href="state.html#resume">resume</a> 续跑(拓扑见 <a href="harness.html#topology">Harness · 运行时拓扑</a>)</li>
-              <li>引擎连回、事件泵活、空闲待输入 → driver <strong>报 ready</strong></li>
-            </ul>
-          </div>
-          <div class="ar down"><span class="albl">A 平面 · stream 推回 ▲</span><span class="gly">↑</span></div>
-          <div class="node c-cp">
-            <span class="nt">⑧ 翻 running + stream 推前端 <span class="tag"><span class="pill run">现</span> <span class="pill">待</span></span></span>
-            <ul class="acts">
-              <li><code>UPDATE state='running'</code>、回填 <code>sandbox_id</code> + <code>provider</code>、刷 <code>last_active_at</code>;HEAD 自己就是最新检查点,<code>wake</code> 不改它</li>
-              <li>经<strong>事件 / 状态 stream</strong> 推 <code>waking→running</code> → 前端那张卡片翻 <span class="pill run">运行</span></li>
-              <li><strong>任一后台步失败</strong> → 释放已起的沙箱 → 回滚到<strong>来路原态</strong>(<code>spawned</code>/<code>hibernating</code>)→ 经 stream 报错</li>
-            </ul>
-          </div>
-          <div class="dgm-cap">
-            <strong>关键</strong>:前端在第 ② 步就拿到响应(<code>waking</code>),<code>running</code> 是稍后从它<strong>本就订阅的 stream</strong> 收到的——不是 wake 响应回来的。
-            之后对话事件同样经 DriverChannel 上行、CP <a href="interaction.html#seq">盖全局 seq</a> 落库 + 扇出;那是 attach/订阅的事,不属 wake 本身。
-          </div>
+        <p>状态枚举与定义：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>状态</th><th>定义</th><th>沙箱</th><th>稳态</th><th>实现</th></tr></thead>
+            <tbody>
+              <tr><td><code>spawned</code></td><td>已创建 PCB，从未起过沙箱，进程仓库无检查点</td><td>无</td><td>是</td><td>✅</td></tr>
+              <tr><td><code>running</code></td><td>关联一个活动沙箱，引擎运行中</td><td>有</td><td>是</td><td>✅（见 §4 限制）</td></tr>
+              <tr><td><code>hibernating</code></td><td>曾运行、已释放沙箱，进程仓库 HEAD 即最新检查点</td><td>无</td><td>是</td><td>🚧</td></tr>
+              <tr><td><code>waking</code></td><td>异步唤醒受理后、就绪前的过渡态；<code>sandbox_id</code> 暂空</td><td>起中</td><td>否（过渡）</td><td>❌ 建议增设</td></tr>
+            </tbody>
+          </table>
         </div>
-
-        <h2 id="effects">PCB 字段副作用</h2>
-        <p>唤醒前后,PCB 这几列怎么变(对照 <a href="data-model.html#process">processes 表</a>)。注意 <code>state</code> 中途经 <code>waking</code> 过渡:</p>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>字段</th><th>唤醒前(spawned / hibernating)</th><th>② 立即(返回前端)</th><th>⑧ 就绪(经 stream)</th></tr></thead>
-          <tbody>
-            <tr><td><code>state</code></td><td><code>spawned</code> / <code>hibernating</code></td><td><code>waking</code></td><td><code>running</code>(失败则回滚原态)</td></tr>
-            <tr><td><code>sandbox_id</code></td><td><code>null</code></td><td><code>null</code>(后台起)</td><td>新沙箱 id</td></tr>
-            <tr><td><code>provider</code></td><td><code>null</code>(首跑)/ 沿用(恢复)</td><td>不变</td><td>本次厂商</td></tr>
-            <tr><td><code>last_active_at</code></td><td>上次值 / null</td><td>不变</td><td>now</td></tr>
-          </tbody>
-        </table></div>
-
-        <h2 id="current">当前实现 vs 异步目标</h2>
-        <p>mock 阶段 <code>wake()</code> 是<strong>同步形</strong>(直接回 <code>running</code>);异步目标把它拆成「立即置 <code>waking</code> 返回 + 后台 bring-up + stream 推 running」:</p>
-        <pre><code>// process/manager.ts —— 异步目标(mock 现状仍同步:省略 waking、直接回 running)
-async wake(pid) {
-  const cur = this.get(pid)
-  if (cur === undefined) return undefined            // 404 在路由层
-  if (cur.state === 'running') return cur             // ① 幂等
-  const from = cur.state                              // 记住来路(spawned/hibernating)以便回滚
-  UPDATE processes SET state='waking'                 // ② 立即置 waking
-  void this.bringUp(pid, from)                        //    后台跑 ③–⑧,不 await
-  return this.get(pid)                                //    立即返回 PCB(waking)
-}
-
-// 后台 bring-up(③–⑧):
-//   起沙箱(派生镜像) → driver 拨入握手 → CP 下发种子
-//   → 并行(OCI pull 程序包+闭包 ‖ git clone 进程态)→ 起引擎 → 报 ready
-//   成功:UPDATE state='running' + 回填 sandbox_id/provider,经 stream 推
-//   失败:释放沙箱 → UPDATE state=from(回滚)→ 经 stream 报错</code></pre>
-        <div class="note">
-          <span class="note-label">接入真实沙箱时</span>
-          ① 把 <code>wake()</code> 改成上面的异步形(置 <code>waking</code> 即返回 + 后台 <code>bringUp</code>);
-          ② 把 <code>MockSandboxGateway</code> 换成真实 provider(<code>create</code> 真起容器);
-          ③ 在 <code>bringUp</code> 里补 driver 握手、种子下发、<a href="program-package.html#pull">OCI 拉程序包</a>、<code>git clone</code>、拉 harness、stream 推 <code>running</code>。
-          <code>routes/proc.ts</code> 与 <a href="data-model.html#process"><code>SandboxGateway</code> 收口</a>不动。
-        </div>
-
-        <h2 id="sync-async">已拍板:wake 走异步(waking 过渡态)</h2>
         <p>
-          唤醒流程里唯一真正要先定的设计点——<strong>已定:走异步</strong>。症结在第 ③ 步:真实沙箱冷启<strong>秒级~数十秒</strong>。
-          同步会让 HTTP 请求挂这么久(易超时 / 被代理切断 / 用户重试,且期间无反馈),所以引入第 4 个状态 <code>waking</code> 承认这段过渡:
+          代码现状：<code>ProcessManager</code> 的 <code>ProcessState</code> 仅定义
+          <code>'spawned' | 'running' | 'hibernating'</code> 三态，尚无 <code>waking</code>。
+          程序内部的执行 FSM（phase / status）住进程目录 <code>meta.yml</code>，不进 PCB，与本状态机正交。
         </p>
-        <div class="dgm">
-          <div class="dgm-cols" style="flex-wrap:nowrap;align-items:stretch">
-            <div class="node c-bad" style="flex:1">
-              <span class="nt">A · 同步阻塞 <span class="tag">已否决</span></span>
-              <span class="nd">
-                wake 一路做到 <code>running</code> 才返回。<br>
-                <strong>+</strong> 实现最简单,返回即终态。<br>
-                <strong>−</strong> HTTP 长挂数十秒,易超时 / 被代理切断 / 用户重试;启动期间无反馈;取消、并发都难做。
-              </span>
-            </div>
-            <div class="node c-sandbox" style="flex:1">
-              <span class="nt">B · 异步 + 过渡态 <span class="tag"><span class="pill run">已选</span> <span class="pill hib">waking</span></span></span>
-              <span class="nd">
-                wake 立即把进程置 <code>waking</code> 返回,后台起沙箱;前端从<strong>已订阅的 stream</strong> 看它转 <code>running</code>。<br>
-                <strong>+</strong> 即时反馈、与 HTTP 超时无关、可显示进度、可取消、<code>waking</code> 天然防并发。<br>
-                <strong>−</strong> 引入第 4 个状态 + 失败回滚把态退回原态;前端要处理过渡态渲染。
-              </span>
-            </div>
-          </div>
-          <div class="dgm-cap">
-            <code>waking</code> <strong>不是</strong>当初砍掉的 <code>exited</code>(终止态)——它是 <code>running</code> 的前奏,不是终点。
-          </div>
-        </div>
-        <div class="note ok">
-          <span class="note-label">已定:B(承认过渡态)</span>
-          状态机:<code>spawned/hibernating → <strong>waking</strong> → running</code>,失败回滚到<strong>进入前的原态</strong>(记住来路)。
-          <strong>前端不新增机制</strong>:它本就长连在事件 / 状态 stream 上(收对话事件),「now running」不过是那条 stream 上的又一个状态变更,顺带就收。
-          扩散控制:<code>waking</code> 在 UI 上仍归「未就绪」一类(和休眠同区显示,只是带 spinner),不必到处分叉。
-        </div>
-        <div class="note">
-          <span class="note-label">连带要顺一句的</span>
-          对称地 <code>hibernate</code> 也有耗时——但 destroy 通常比 create 快得多,且失败不影响「已让出算力」的语义,<strong>先不引入 hibernating 过渡态</strong>,除非实测慢到需要。
+        <p>生命周期操作的状态转移与副作用：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>操作</th><th>前置</th><th>后置</th><th>对 PCB / 沙箱的副作用</th><th>实现</th></tr></thead>
+            <tbody>
+              <tr><td><code>spawn</code></td><td>—</td><td><code>spawned</code></td><td>插入 PCB 行、钉死 <code>program@version</code>；创建空 bare 仓库 <code>aprog-proc-&lt;pid&gt;</code> 并回填 <code>repo_url</code>；<code>sandbox_id=null</code>，不起沙箱</td><td>✅</td></tr>
+              <tr><td><code>wake</code></td><td><code>spawned</code> / <code>hibernating</code></td><td><code>running</code></td><td>创建沙箱（A 平面）→ 置 <code>running</code>、回填 <code>sandbox_id</code> / <code>provider</code> / <code>last_active_at</code></td><td>🚧 至握手</td></tr>
+              <tr><td><code>wake</code>（已 running）</td><td><code>running</code></td><td><code>running</code></td><td>幂等：直接返回当前 PCB，不重起沙箱</td><td>✅</td></tr>
+              <tr><td><code>hibernate</code> / <code>kill</code></td><td><code>running</code></td><td><code>hibernating</code></td><td>末次检查点（沙箱侧 git push）→ 销毁沙箱 → 置 <code>hibernating</code>、<code>sandbox_id=null</code></td><td>🚧</td></tr>
+            </tbody>
+          </table>
         </div>
 
-        <h2 id="edge">边界:失败回滚 / 幂等并发</h2>
-        <ul>
-          <li><strong>失败回滚</strong>:后台 bring-up 任一步(起沙箱 / 下发种子 / 拉程序包 / <code>git clone</code> / 拉 harness)失败,<strong>不能停在 <code>waking</code> 也不能进 <code>running</code></strong>(否则「显示在唤醒 / 有沙箱,实际没跑」)。→ 释放已起的沙箱 → 回滚到来路原态(<code>spawned</code>/<code>hibernating</code>)→ 经 stream 把错误回前端。</li>
-          <li><strong>幂等</strong>:<code>running</code> 入态直接返回当前 PCB(第 ① 步),重复点「唤醒」不重起沙箱。</li>
-          <li><strong>并发</strong>:两个 tab 同时点 wake——<code>waking</code> 本身就是<strong>天然的并发占位</strong>:第二次进来看到 <code>waking</code> 即返回,不再起第二个沙箱。</li>
-          <li><strong>属主边界</strong>:wake 是 <code>owner</code> 档(起算力是花钱动作),区别于 <code>viewer</code>/<code>editor</code>(读流 / 投输入)。</li>
-        </ul>
+        <h2 id="spawn">2 · spawn</h2>
+        <p>
+          <code>spawn</code> 创建一个进程而不消耗算力：写入 PCB 行（<code>state=spawned</code>）并为进程创建承载其内容态的 git 仓库。
+          pid 由数据库自增（类比操作系统 pid）。仓库为<strong>私有 bare 仓</strong>，名由 pid 推导（<code>aprog-proc-&lt;pid&gt;</code>）；
+          其 clone URL 写入 PCB 的 <code>repo_url</code> 列——仓库名可由 pid 推导，而实际地址入库，二者不可混淆。
+          建库以 <code>auto_init=false</code> 创建空仓，以保持「<code>spawned</code> 无检查点」的语义。建库失败则删除该 PCB 行回滚，不留半成品。
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 用户与前端
+    participant CP as 控制平面
+    participant PM as ProcessManager
+    participant R as RepoGateway
+    participant DB as processes 表
+    U->>CP: POST /proc { programId, version?, name }
+    CP->>CP: 鉴权 + 校验 program / version / name
+    CP->>PM: spawn(...)
+    PM->>DB: INSERT PCB（state=spawned, sandbox_id=null, repo_url=null）
+    PM->>R: create(pid)：建空 bare 仓 aprog-proc-&lt;pid&gt;
+    R-->>PM: clone URL
+    PM->>DB: UPDATE repo_url
+    Note over PM,DB: 建库失败 → DELETE PCB 行回滚
+    PM-->>U: 201 · PCB（state=spawned）
+          </pre>
+        </div>
+        <p>
+          实际仓库由 <code>RepoGateway</code> 收口：真实实现 <code>GitHubRepoGateway</code> 调 GitHub API 建私有库（不写入进程名 / program / pid 等描述性元数据）；
+          未配置凭证时以 <code>MockRepoGateway</code> 顶替，仅生成可观测的占位 URL。更换 host（如 Gitea / Forgejo）只需替换实现，编排逻辑不变。
+        </p>
+
+        <h2 id="wake">3 · wake 控制流</h2>
+        <p>
+          <code>wake</code> 是唯一启动算力的动词，为 owner-only 端点。它统一覆盖两种入态——首次运行与休眠恢复——对前端透明。
+          接口契约如下：
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <tbody>
+              <tr><td>方法 / 路径</td><td><code>POST /proc/:pid/wake</code></td></tr>
+              <tr><td>鉴权 / 授权</td><td><code>withAuth</code>（token → User）→ <code>authorize(user, pid, 'owner')</code>；不存在 404、非属主 403</td></tr>
+              <tr><td>请求体</td><td>无</td></tr>
+              <tr><td>响应（当前）</td><td><code>200</code> + PCB（<code>state=running</code>）；同步返回（见 §4）</td></tr>
+              <tr><td>响应（目标）</td><td><code>200</code> + PCB（<code>state=waking</code>），毫秒级返回；<code>running</code> 经 SSE 或轮询稍后推送</td></tr>
+              <tr><td>后端落点</td><td><code>routes/proc.ts → wake()</code> → <code>ProcessManager.wake(pid)</code>（<code>process/manager.ts</code>）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          同一 <code>wake</code> 据进程仓库<strong>是否已有检查点</strong>（即入态为 <code>spawned</code> 还是 <code>hibernating</code>）分叉为两条路径，
+          差异仅在 <code>git clone</code> 取回的内容；起沙箱、拉程序包、起引擎、建通道、回写 PCB 完全相同。
+        </p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>入态</th><th>语义</th><th><code>git clone</code> 取回</th><th>引擎启动</th></tr></thead>
+            <tbody>
+              <tr><td><code>spawned → running</code></td><td>首次运行：从未起过沙箱、无检查点</td><td>空仓 / 初始 input</td><td>从 <code>input_cursor=0</code> 初始化运行</td></tr>
+              <tr><td><code>hibernating → running</code></td><td>休眠恢复：曾运行、有检查点</td><td>HEAD（最新检查点）</td><td>按 resume 续跑</td></tr>
+              <tr><td><code>running → running</code></td><td>幂等：已有活动沙箱</td><td>—</td><td>直接返回当前 PCB，不重起</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          下图为完整控制流。<code>wake</code> 跨越两个平面：A 平面（资源平面，<code>SandboxProvider</code> 创建沙箱）与 B 平面（数据平面，driver 拨出的 WebSocket）。
+          阴影区为握手之后<strong>当前未实现</strong>的运行时编排。OCI 闭包拉取与 git clone 直连存储、不经数据平面通道，图中以 driver 自指消息表示。
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 用户与前端
+    participant CP as 控制平面
+    participant PM as ProcessManager
+    participant SP as SandboxProvider
+    participant D as driver
+    participant E as 引擎
+    U->>CP: POST /proc/:pid/wake
+    CP->>PM: wake(pid)
+    Note over PM: running 入态 → 幂等直接返回
+    PM->>SP: create(pid, program@version)
+    Note over SP: 解析镜像 ImageRef；生成 bindToken
+    SP->>SP: register-before-launch（登记 bindToken → DriverRegistry）
+    SP->>D: PPIO 起容器、推 driver bundle、注入 env、后台 node 启动
+    SP-->>PM: { sandboxId, provider }
+    PM-->>U: 返回 PCB（state=running）
+    Note over U,PM: 已实现；当前同步返回，过早置 running
+    D->>CP: WebSocket Hello（protocolVersion, bindToken）
+    CP-->>D: Welcome（pid, mode=resume/restore）
+    Note over CP,D: 握手已实现 ✅
+    rect rgb(244,239,233)
+    Note over CP,E: 以下均未实现 ❌
+    CP-->>D: 下发种子：程序引用 / registry token / git deploy token / 模型鉴权
+    D->>D: OCI pull 程序包闭包，untar 至 skills/
+    D->>D: git clone 进程态至进程目录
+    D->>E: 经 SDK 启动引擎（首跑 init / 恢复 resume）
+    E-->>D: ready
+    D->>CP: ready 帧
+    CP-->>U: 经 SSE 或轮询转为 running
+    end
+          </pre>
+        </div>
+
+        <p>各环节职责与实现要点：</p>
+        <p>
+          <strong>① 入口与编排（✅）。</strong>
+          <code>routes/proc.ts</code> 完成鉴权与 owner 授权后调 <code>ProcessManager.wake(pid)</code>。
+          <code>wake</code> 取 PCB：若已 <code>running</code> 则幂等返回；否则调 <code>SandboxGateway.create</code> 起沙箱，成功后置 <code>running</code> 并回填 <code>sandbox_id</code> / <code>provider</code> / <code>last_active_at</code>。
+        </p>
+        <p>
+          <strong>② A 平面：创建沙箱（✅）。</strong>
+          <code>ProviderSandboxGateway.create</code> 先据 <code>program@version</code> 解析出已烘镜像的 <code>ImageRef</code>，并<strong>由控制平面生成 <code>bindToken</code></strong>（信任凭证归控制平面所有）。
+          <code>PPIOProvider</code> 调厂商 SDK 起 Firecracker MicroVM（冷启约 4 秒），在「容器已起、driver 未启」的窗口内回调 <code>onProvisioned</code>，
+          上层据 <code>sandboxId</code> 把 <code>bindToken</code> 登记进 <code>DriverRegistry</code>——<strong>登记早于 driver 拨号</strong>，从根上消除握手竞态。
+          随后经 <code>files.write</code> 以 root 推入 driver bundle（<code>/root/aprog/driver.mjs</code>），并以 <code>background</code> 方式后台启动 node 进程。
+          启动时注入的环境变量包含：<code>APROG_BIND_TOKEN</code>（绑定令牌）、<code>APROG_CONTROL_PLANE_URL</code>（控制平面回拨地址）、引擎鉴权（如 <code>ANTHROPIC_AUTH_TOKEN</code>，经 <code>injectedEnv</code> 运行时注入、不落镜像），以及可选的 <code>NODE_EXTRA_CA_CERTS</code>（控制平面边缘 CA 证书，使 driver 经 TLS 回拨时信任自签证书）。
+        </p>
+        <p>
+          <strong>③ B 平面：driver 握手（✅）。</strong>
+          driver 自启后第一件事即回连：据 <code>APROG_CONTROL_PLANE_URL</code> 推导通道地址 <code>wss://host/&lt;base&gt;/v1/driver/channel</code>，
+          持注入的 <code>bindToken</code> 拨出 WebSocket，发送 <code>Hello</code> 帧（<code>protocolVersion</code> + <code>bindToken</code>），控制平面据登记簿认领连接并应答 <code>Welcome</code> 帧（<code>pid</code> + <code>mode</code>）。
+          <code>mode</code> 取 <code>resume</code>（瞬时重连）或 <code>restore</code>（冷唤醒），driver 据此决定铺设进程目录的方式。
+          握手以原子单元退避重试（最多 20 次，退避封顶 3 秒），兜网络抖动。所有通信帧遵循统一格式 <code>Frame&lt;t,p&gt;</code>。
+        </p>
+        <p>
+          <strong>④ 握手之后的运行时编排（❌ 全部未实现）。</strong>
+          按 <code>Welcome</code> 与控制平面下发的种子（程序引用 / 短期 registry pull token / git deploy token / 模型鉴权），driver 应：
+          按 digest 拉取程序包 OCI 闭包并 untar 至 <code>skills/</code>（机制已验证，未接入 driver）；<code>git clone</code> 进程态至进程目录（首跑为空 / 初始 input，恢复为 HEAD）；
+          经 SDK 启动原生引擎；引擎就绪后回报 <code>ready</code> 帧。这些种子因人而异、必须握手后下发，真实凭证不出控制平面，沙箱只取短时窄 scope 的令牌。
+          当前 driver 在握手成功后仅保持连接，后续编排待重设计接入。
+        </p>
+
+        <p>唤醒前后 PCB 字段的变化（对照 <code>processes</code> 表）：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>字段</th><th>唤醒前（spawned / hibernating）</th><th>唤醒后（running）</th></tr></thead>
+            <tbody>
+              <tr><td><code>state</code></td><td><code>spawned</code> / <code>hibernating</code></td><td><code>running</code></td></tr>
+              <tr><td><code>sandbox_id</code></td><td><code>null</code></td><td>新沙箱 id</td></tr>
+              <tr><td><code>provider</code></td><td><code>null</code>（首跑）/ 沿用（恢复）</td><td>本次厂商</td></tr>
+              <tr><td><code>last_active_at</code></td><td>上次值 / <code>null</code></td><td>now</td></tr>
+              <tr><td><code>repo_url</code></td><td>spawn 时已写入</td><td>不变</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="async">4 · 已知限制：过早置 running 与异步唤醒目标</h2>
+        <div class="note">
+          <span class="note-label">已知限制：过早置 running</span>
+          当前 <code>wake</code> 为<strong>同步返回</strong>：<code>sandbox.create</code> 返回（沙箱容器启动、driver 进程拉起）后即将进程置为 <code>running</code> 并响应前端。
+          此时 driver 握手尚未完成、引擎尚未启动，故 <code>running</code> 的置位<strong>过早</strong>——状态宣称运行中，实则尚未就绪。
+        </div>
+        <p>
+          目标形态为<strong>异步唤醒</strong>：<code>wake</code> 立即将进程置为 <code>waking</code> 并毫秒级返回，bring-up（起沙箱 → 握手 → 下发种子 → 拉程序包与 clone 进程态 → 起引擎）转入后台任务；
+          driver 启动引擎并回报 <code>ready</code> 后，控制平面才将进程转为 <code>running</code>，经前端本就订阅的 SSE / 轮询推送。补全这条 ready 回流是打通整条链路的关键。
+        </p>
+        <p>引入异步的动因在于：真实沙箱冷启为秒级至数十秒，同步返回会使 HTTP 请求长时间阻塞，易超时、被代理切断或触发用户重试，且启动期间无反馈。同步与异步两种形态对比：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>维度</th><th>当前 · 同步 ❌</th><th>目标 · 异步（waking）</th></tr></thead>
+            <tbody>
+              <tr><td>返回时机</td><td><code>sandbox.create</code> 返回后</td><td>受理后立即</td></tr>
+              <tr><td>返回态</td><td><code>running</code>（过早）</td><td><code>waking</code></td></tr>
+              <tr><td>HTTP 时长</td><td>阻塞至容器与 driver 进程拉起</td><td>毫秒级</td></tr>
+              <tr><td>ready 信号</td><td>无（置 running 时握手未完、引擎未起）</td><td>driver 报 ready 后转 running</td></tr>
+              <tr><td><code>running</code> 推送</td><td>同步响应内</td><td>经 SSE / 轮询</td></tr>
+              <tr><td>并发保护</td><td>无显式占位</td><td><code>waking</code> 天然占位，防并发重起</td></tr>
+              <tr><td>失败处理</td><td>—</td><td>销毁沙箱 + 回滚至来路（<code>spawned</code> / <code>hibernating</code>）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">waking 的定位</span>
+          <code>waking</code> 是 <code>running</code> 的前奏过渡，非终止态；它<strong>不是</strong>曾被否决的 <code>exited</code>。状态机为
+          <code>spawned / hibernating → waking → running</code>，bring-up 任一步失败则释放已起沙箱并回滚至进入前的来路态。
+          前端无须新增机制：它本就长连在状态 stream 上，<code>running</code> 仅是该流上的又一次状态变更。
+        </div>
+
+        <h2 id="hibernate">5 · hibernate</h2>
+        <p>
+          <code>hibernate</code> 显式释放算力：进程态先检查点到 git，随后销毁沙箱，进程回到 <code>hibernating</code>。
+          因耐久真相为控制平面托管的 bare 仓库（已 git push 的检查点），休眠本身很轻；销毁沙箱后厂商成本归零，引擎私有的会话文件随沙箱消失（非权威，无妨）。
+          <code>kill</code> 与运行完毕与 <code>hibernate</code> <strong>同效</strong>——均经统一的释放路径回到 <code>hibernating</code>，不产生终止态，仅触发方不同。
+        </p>
+        <div class="diagram">
+          <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 用户与前端
+    participant CP as 控制平面
+    participant PM as ProcessManager
+    participant SP as SandboxProvider
+    U->>CP: POST /proc/:pid/hibernate（或 kill）
+    CP->>PM: hibernate(pid)
+    Note over PM: 非 running / 无沙箱 → 幂等直接返回
+    rect rgb(244,239,233)
+    Note over PM,SP: 末次检查点 git push（沙箱侧，未实现 ❌）
+    end
+    PM->>SP: destroy(sandboxId)
+    SP-->>PM: ok（销毁沙箱；检查点引用占位）
+    PM->>PM: state=hibernating, sandbox_id=null, last_active_at=now
+    PM-->>U: 200 · PCB（state=hibernating）
+          </pre>
+        </div>
+        <p>
+          实现现状：释放路径（<code>ProcessManager.release</code> → <code>SandboxGateway.destroy</code> → 置 <code>hibernating</code>、<code>sandbox_id=null</code>）已落地，
+          对非 <code>running</code> 或无沙箱者幂等。<code>ProviderSandboxGateway.destroy</code> 调 <code>provider.destroy</code> 按 id 销毁沙箱（幂等：沙箱已不在视作成功）。
+          但<strong>末次检查点（quiescent 点落盘 + 末次 commit 的 git push）属沙箱侧编排，尚未实现</strong>，当前 <code>destroy</code> 仅返回占位检查点引用。
+          PCB 不存 commit 指针：「最新检查点」即仓库 HEAD，可推导，故 <code>wake</code> 默认 clone 检出 HEAD 即取回最新检查点。
+          对称地，<code>hibernate</code> 暂不引入过渡态：销毁通常远快于创建，且失败不影响「已让出算力」的语义，除非实测需要再增设。
+        </p>
+
+        <h2 id="status">6 · 实现状态</h2>
+        <p>进程模型与唤醒链路的资源平面已就绪，未完成部分集中于 driver 握手之后的运行时编排与异步唤醒。</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>动词 / 阶段</th><th>要素</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td rowspan="2">spawn</td><td>建 PCB 行（state=spawned）、钉死 program@version</td><td>✅</td></tr>
+              <tr><td>建空 bare 仓 <code>aprog-proc-&lt;pid&gt;</code> → 回填 <code>repo_url</code>（建库失败回滚）</td><td>✅</td></tr>
+              <tr><td rowspan="6">wake</td><td>入口编排：鉴权 + owner 授权 → <code>ProcessManager.wake</code>、幂等</td><td>✅</td></tr>
+              <tr><td>A 平面：解析 ImageRef、生成 bindToken、register-before-launch</td><td>✅</td></tr>
+              <tr><td>A 平面：PPIO 起容器、推 driver、注入 env、后台启动</td><td>✅</td></tr>
+              <tr><td>B 平面：driver 拨 WS、Hello / Welcome 握手</td><td>✅</td></tr>
+              <tr><td>握手后编排：下发种子、OCI 拉闭包 untar 至 skills/、git clone 进程态、经 SDK 起引擎、回报 ready</td><td>❌</td></tr>
+              <tr><td>异步唤醒与 <code>waking</code> 过渡态、ready 回流转 running</td><td>❌ 当前为同步，过早置 running</td></tr>
+              <tr><td rowspan="2">hibernate / kill</td><td>释放路径：destroy 沙箱 → 置 hibernating、sandbox_id=null、幂等</td><td>🚧</td></tr>
+              <tr><td>末次检查点（quiescent 落盘 + commit + git push，沙箱侧）</td><td>❌ 当前仅占位引用</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          可校验的代码落点：<code>packages/control-plane/src/process/manager.ts</code>（<code>wake</code> / <code>hibernate</code>）、
+          <code>api/routes/proc.ts</code>（路由）、<code>process/sandbox-gateway.ts</code>（A 平面收口）、
+          <code>packages/sandbox/src/providers/ppio.ts</code>（PPIO provider）、<code>packages/driver/src/main.ts</code>（driver 握手）。
+          相邻专题见 <a href="program-package.html">02 · 程序与发版</a>（程序包拉取）、<a href="images.html">03 · 镜像与沙箱</a>、
+          <a href="protocol.html">04 · 通道与协议</a>（握手与帧）、<a href="state.html">06 · 状态契约</a>（git 检查点与进程目录）。
+        </p>
 
         <div class="pager" data-pager></div>
       </article>
+      <aside class="toc"></aside>
     </main>
   </div>
   <script src="docs.js"></script>
-  <script type="module">
-    // 专业时序图:Mermaid sequenceDiagram。主题色读站点 CSS 变量，与浅色文档一致。
-    // 若 CDN 不可达,mermaid 块退化为可读的图源文本(页面其余不受影响)。
-    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-    const cs = getComputedStyle(document.documentElement);
-    const v = (n, f) => (cs.getPropertyValue(n).trim() || f);
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: 'strict',
-      theme: 'base',
-      themeVariables: {
-        fontFamily: v('--mono', 'ui-monospace, SFMono-Regular, Menlo, monospace'),
-        fontSize: '13px',
-        background: v('--bg-sidebar', '#fbfcfd'),
-        primaryColor: v('--code-bg', '#f6f8fa'),
-        primaryTextColor: v('--fg', '#1f2328'),
-        primaryBorderColor: v('--accent', '#0969da'),
-        lineColor: v('--fg-muted', '#59636e'),
-        actorBkg: v('--code-bg', '#f6f8fa'),
-        actorBorder: v('--accent', '#0969da'),
-        actorTextColor: v('--fg', '#1f2328'),
-        actorLineColor: v('--border', '#d1d9e0'),
-        signalColor: v('--fg-muted', '#59636e'),
-        signalTextColor: v('--fg', '#1f2328'),
-        labelBoxBkgColor: v('--accent-soft', '#0969da14'),
-        labelBoxBorderColor: v('--accent', '#0969da'),
-        labelTextColor: v('--fg', '#1f2328'),
-        noteBkgColor: v('--accent-soft', '#0969da14'),
-        noteTextColor: v('--fg', '#1f2328'),
-        noteBorderColor: v('--accent', '#0969da'),
-        activationBkgColor: v('--code-bg', '#f6f8fa'),
-      },
-    });
-    try { await mermaid.run({ querySelector: '.mermaid' }); } catch (e) { console.error('mermaid render failed', e); }
-  </script>
+  <script src="vendor/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'neutral', sequence: { useMaxWidth: true } });</script>
 </body>
 </html>

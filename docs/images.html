@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 · 镜像与沙箱 — aprog 设计文档</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="images">
+  <header class="brandbar">
+    <button class="nav-toggle" aria-label="导航">☰</button>
+    <a class="brand" href="index.html">aprog</a>
+    <div class="brandbar-right">
+      <input class="search" type="search" placeholder="搜索文档…  ⌘K">
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="content with-toc">
+      <article>
+        <div class="eyebrow">aprog 设计文档 · 03</div>
+        <h1>镜像与沙箱</h1>
+        <p class="lead">
+          镜像是进程的运行底座，沙箱是承载一次运行的容器。本篇定义镜像的本地管理与烘制、base 镜像的内容、
+          沙箱供应商抽象，以及当前供应商 PPIO 的运行约束。镜像与程序的关系参见 <a href="program-package.html">02 · 程序与发版</a>，
+          沙箱在唤醒时的创建时序参见 <a href="proc-wake.html">05 · 运行生命周期</a>。
+        </p>
+
+        <h2 id="role">1 · 镜像与程序的分工</h2>
+        <p>系统的依赖分为两条轴，兑现路径不同，不应混为一谈：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>轴</th><th>对象</th><th>承载</th><th>兑现</th></tr></thead>
+            <tbody>
+              <tr><td>纵向 · 运行底座</td><td>镜像（语言运行时、编译器、引擎等重而共享的底座）</td><td>OCI 镜像 → 供应商 snapshot / template</td><td>创建沙箱时由 <code>provider.create</code> 拉取</td></tr>
+              <tr><td>横向 · 程序依赖</td><td>程序与库（轻、专属、随程序发版）</td><td>OCI 程序包闭包（见 02）</td><td>driver 唤醒后按 digest 拉取并部署至 <code>skills/</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>判据：慢变、跨进程共享、体积大的底座烘入镜像，随镜像版本走；轻量、程序专属、随程序迭代的部分随程序包在 spawn 时部署。</p>
+
+        <h2 id="layout">2 · 本地管理与烘制</h2>
+        <p>镜像与程序采用同一套目录模型：git 源目录为管理面，发布产物在仓库之外。镜像是与平台无关的逻辑实体，由各供应商分别打包：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>层级</th><th>示例</th><th>含义</th></tr></thead>
+            <tbody>
+              <tr><td><code>images/</code></td><td>—</td><td>所有镜像的根目录</td></tr>
+              <tr><td><code>&lt;名&gt;/</code></td><td><code>images/base/</code></td><td>一个逻辑镜像；目录名即镜像名</td></tr>
+              <tr><td><code>&lt;版本&gt;/</code></td><td><code>images/base/0.1.0/</code></td><td>一个版本（中立逻辑镜像；跨供应商共享的材料置于此层）</td></tr>
+              <tr><td><code>&lt;供应商&gt;/</code></td><td><code>images/base/0.1.0/ppio/</code></td><td>某供应商的打包入口目录</td></tr>
+              <tr><td><code>· bake.ts</code></td><td></td><td>该供应商的打包脚本，直接调用其 SDK，无抽象层</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          发布动作为 <code>aprog-bake &lt;名&gt; &lt;版本&gt; &lt;供应商&gt;</code>，定位并执行对应的 <code>bake.ts</code>，产出供应商 snapshot / template。
+          snapshot 采用确定性命名 <code>aprog-&lt;名&gt;:&lt;版本&gt;</code>，供各供应商共用；控制平面据此合成 <code>ImageRef.id</code>，无需查表。
+          资源规格（CPU / 内存 / 磁盘）不在烘制期决定，而在运行时由 <code>Sandbox.create</code> 设定（rootfs 与资源规格解耦）。
+        </p>
+
+        <h2 id="base">3 · base 镜像内容</h2>
+        <p>base 镜像 0.1.0 提供通用的根运行环境：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>项</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr><td>基底</td><td><code>ubuntu:24.04</code></td></tr>
+              <tr><td>运行用户</td><td>root（<code>HOME=/root</code>）</td></tr>
+              <tr><td>基础工具</td><td>ca-certificates、curl、git、unzip、zip、xz-utils、build-essential</td></tr>
+              <tr><td>语言 / 运行时</td><td>uv、bun、sdkman、nvm + Node LTS</td></tr>
+              <tr><td>引擎前端</td><td>claude-code（全局安装）</td></tr>
+              <tr><td>模型路由</td><td>GLM 配置烘入 <code>/root/.claude/settings.json</code>（base_url 与模型映射）；鉴权密钥不烘入，运行时注入</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>所有运行期必需的可执行文件均链接至 <code>/usr/local/bin</code>（原因见 §5）。</p>
+
+        <h2 id="provider">4 · 沙箱供应商抽象</h2>
+        <p>
+          沙箱经供应商抽象 <code>SandboxProvider</code> 收口；网关 <code>ProviderSandboxGateway</code> 与具体供应商解耦。
+          当前唯一的真实供应商为 PPIO（E2B 同构的托管 microVM，国内出站开放）。更换或新增供应商时，实现一个 <code>SandboxProvider</code>
+          并提供对应的 <code>resolveImageRef</code> 即可，网关本体不变。沙箱在唤醒时创建：控制平面将 driver 经 <code>files.write</code> 推入，
+          以后台进程启动，并注入 bindToken、控制平面地址、引擎鉴权与 CA 证书等环境变量（时序见 05）。
+        </p>
+
+        <h2 id="ppio">5 · PPIO 运行约束</h2>
+        <p>PPIO 的托管运行时对镜像有若干约束，直接影响打包与注入方式：</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>约束</th><th>表现</th><th>对策</th></tr></thead>
+            <tbody>
+              <tr><td>envd 由平台注入</td><td>envd 在镜像 → microVM 转换时由 PPIO 注入，不在你的 Docker 镜像内</td><td>打包时无需包含 envd；镜像与基底无关</td></tr>
+              <tr><td>默认运行用户固定为 <code>user</code></td><td>PPIO 忽略 Dockerfile 中的 <code>USER root</code>，默认以 <code>user</code> 运行</td><td>provider 在每次 <code>files.write</code> / <code>commands.run</code> 显式传 <code>user:'root'</code></td></tr>
+              <tr><td>非交互 PATH 受限</td><td>envd 忽略镜像的 <code>ENV PATH</code>；非交互 PATH 仅含 <code>/usr/local/bin</code> 与默认目录（外加自动前置的 nvm node bin）</td><td>driver / 引擎所需的二进制一律 <code>symlink</code> 至 <code>/usr/local/bin</code></td></tr>
+              <tr><td>nvm node 路径</td><td>node 安装于 <code>/root/.nvm/versions/node/&lt;ver&gt;/bin/</code>，仅在 source 后入 PATH</td><td>将 node / npm / npx 链接至 <code>/usr/local/bin</code> 以接入常驻 PATH</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note">
+          <span class="note-label">凭证</span>
+          每进程 / 每沙箱的凭证（bindToken、引擎鉴权、git 凭证等）一律运行时注入，绝不烘入镜像。
+        </div>
+
+        <div class="pager" data-pager></div>
+      </article>
+      <aside class="toc"></aside>
+    </main>
+  </div>
+  <script src="docs.js"></script>
+</body>
+</html>

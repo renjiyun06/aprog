@@ -44,42 +44,36 @@
 
         <h2 id="start">从这里开始</h2>
         <div class="hero-cards">
-          <a class="hero-card" href="concepts.html">
+          <a class="hero-card" href="overview.html">
             <div class="num">01</div>
-            <div class="name">核心概念</div>
-            <p class="blurb">程序 / 进程 / 沙箱 / 引擎四个词，以及一次执行的完整生命周期。</p>
+            <div class="name">总览</div>
+            <p class="blurb">心智模型、两个平面、组件、端到端唤醒流，以及每步的实现状态。先读这篇。</p>
           </a>
-          <a class="hero-card" href="window.html">
+          <a class="hero-card" href="program-package.html">
             <div class="num">02</div>
-            <div class="name">工作窗口</div>
-            <p class="blurb">用户实际操作的界面：进程列表、对话区、目录区，进程的运行与休眠两态。</p>
-          </a>
-          <a class="hero-card" href="components.html">
-            <div class="num">03</div>
-            <div class="name">组件清单</div>
-            <p class="blurb">一次活着的进程涉及哪些进程/服务：Control Plane、Driver、Engine、Sandbox。</p>
+            <div class="name">程序与发版</div>
+            <p class="blurb">OCI 包模型、aprog.json 依赖、GHCR、publish / pull、镜像。</p>
           </a>
           <a class="hero-card" href="protocol.html">
+            <div class="num">03</div>
+            <div class="name">通道与协议</div>
+            <p class="blurb">harness 事件 + driver↔CP 通信两组，统一 Frame 格式，握手。</p>
+          </a>
+          <a class="hero-card" href="proc-wake.html">
             <div class="num">04</div>
-            <div class="name">事件协议与会话</div>
-            <p class="blurb">engine-neutral 的事件流如何进入对话区，以及 aprog 为何自己存储会话。</p>
+            <div class="name">生命周期 / 唤醒</div>
+            <p class="blurb">spawn / wake / hibernate 全序，运行时编排，built / TODO。</p>
           </a>
           <a class="hero-card" href="state.html">
             <div class="num">05</div>
-            <div class="name">进程目录与状态</div>
-            <p class="blurb">为什么进程状态不依赖对话上下文，三层数据各自的权威性与快照边界。</p>
-          </a>
-          <a class="hero-card" href="flows.html">
-            <div class="num">06</div>
-            <div class="name">生命周期流程</div>
-            <p class="blurb">spawn / attach / detach / hibernate / wake / exit 的端到端调用链。</p>
+            <div class="name">状态契约</div>
+            <p class="blurb">进程目录三层数据、git 检查点、分支、DB 投影。</p>
           </a>
         </div>
 
         <div class="note">
           <span class="note-label">阅读建议</span>
-          按侧边栏从上到下读一遍即可建立完整心智模型。只想搞清“系统由哪些组件构成”，直接跳
-          <a href="components.html">组件清单</a>。
+          先读 <a href="overview.html">总览</a> 建立完整心智模型（含端到端唤醒流与实现状态），再按需深入其余四篇。
         </div>
 
         <div class="pager" data-pager></div>
