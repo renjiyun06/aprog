@@ -25,15 +25,9 @@
           本篇定义跨线的全部类型化消息契约。所有契约集中于单一的包 <code>@aprog/protocol</code>，内分两组：
           组① <strong>harness 事件</strong>——引擎中立的语义事件流，由 web、控制平面、driver 三方共用；
           组② <strong>通道通信</strong>——driver 与控制平面之间的全双工通道帧，由两方共用。
-          二者经子路径分别导出，且组②对组①零依赖。本篇逐组给出帧格式、传输形态、握手与信任流程，
-          并按 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 如实标注各环节状态。数据平面在体系中的定位见
+          二者经子路径分别导出，且组②对组①零依赖。本篇逐组给出帧格式、传输形态、握手与信任流程。数据平面在体系中的定位见
           <a href="overview.html#planes">01 · 总览</a>。
         </p>
-
-        <div class="note">
-          <span class="note-label">标注约定</span>
-          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态；尚未落地的设计如实标注，不以「已实现」混淆。
-        </div>
 
         <h2 id="two-groups">1 · 两组协议:一个包,零耦合</h2>
         <p>
@@ -48,12 +42,11 @@
               <tr><td>职责</td><td>引擎中立的语义事件流（思考 / 工具 / 回复 / 用户输入…）</td><td>driver↔控制平面通道的帧传输（握手、双向通信）</td></tr>
               <tr><td>方向</td><td>以事件上行、向 web 扇出为主</td><td>双向全双工，一条连接承载两个方向</td></tr>
               <tr><td>耦合关系</td><td>纯值类型，不依赖组②</td><td><strong>对组①零依赖</strong>：harness 事件作为不透明载荷被通道携带，通道不 <code>import</code>、不解析其结构</td></tr>
-              <tr><td>实现状态</td><td>类型已定义 ✅；事件流经通道落地 🚧 / ❌（见 §6）</td><td>握手 ✅；其余帧待扩展 ❌（见 §5）</td></tr>
             </tbody>
           </table>
         </div>
         <p>
-          两组解耦的关键在于<strong>组②是纯传输契约</strong>。未来的事件流上行帧（待加）只是上行方向并集里的一个成员，
+          两组解耦的关键在于<strong>组②是纯传输契约</strong>。事件流上行帧只是上行方向并集里的一个成员，
           其载荷为一个不透明类型：driver 在其中放入一条 harness <code>Event</code>，控制平面落库时解读，而通道本身既不导入也不解析该结构。
           于是两组各自独立演进——harness 事件的语义变化不触动通道传输层，反之亦然。
         </p>
@@ -75,7 +68,7 @@
         <p>
           <strong>扩展规则</strong>：新增一个通信帧 = 定义一个 <code>Frame&lt;'标签', { …载荷… }&gt;</code>，
           并将其加入对应方向的并集（driver→控制平面加入 <code>DriverFrame</code>，反向加入 <code>ControlPlaneFrame</code>，见 §5）。
-          当前仅保留真正在用的握手帧；其余帧待实际用到时按此格式机械扩展，不预先铺设。
+          协议只保留真正在用的握手帧；其余帧按此格式在实际用到时机械扩展，不预先铺设。
         </p>
         <div class="note">
           <span class="note-label">协议版本 CHANNEL_PROTOCOL_VERSION = 1</span>
@@ -165,37 +158,37 @@ sequenceDiagram
             </tbody>
           </table>
         </div>
-        <div class="note warn">
-          <span class="note-label">Welcome.mode 现状 🚧</span>
-          类型层面 <code>mode</code> 取值为 <code>resume</code>（瞬时重连）或 <code>restore</code>（冷唤醒）；当前实现恒回 <code>restore</code>，
-          两态分流尚未落地。<code>resume</code> 路径（driver 端缓冲重放、按已存 seq 去重）待事件流上行帧接入后补全。
+        <div class="note">
+          <span class="note-label">Welcome.mode 的两种铺设方式</span>
+          <code>mode</code> 取值为 <code>resume</code>（瞬时重连：driver 端缓冲重放、按已存 seq 去重）或 <code>restore</code>（冷唤醒：重新铺设进程目录）。
+          driver 据此决定铺设进程目录的方式。
         </div>
 
-        <h2 id="channel-frames">5 · 通道帧:现状与扩展点</h2>
+        <h2 id="channel-frames">5 · 通道帧:方向并集与扩展点</h2>
         <p>
           组②按方向分为两个并集：<code>DriverFrame</code>（driver 能发的全部帧）与 <code>ControlPlaneFrame</code>（控制平面能发的全部帧）。
-          当前各自仅含握手一帧；其余帧为规划中的扩展点，按 §2 的统一格式在真正用到时加入对应并集。
+          握手帧 <code>Hello</code> / <code>Welcome</code> 是两个并集各自的首个成员；其余帧为按 §2 统一格式预留的扩展点，在真正用到时加入对应并集。
         </p>
         <div class="tbl-wrap">
           <table>
-            <thead><tr><th>方向并集</th><th>帧 / 扩展点</th><th>状态</th><th>说明</th></tr></thead>
+            <thead><tr><th>方向并集</th><th>帧 / 扩展点</th><th>说明</th></tr></thead>
             <tbody>
-              <tr><td rowspan="4"><code>DriverFrame</code><br>（driver → 控制平面）</td><td><code>Hello</code></td><td>✅</td><td>握手首帧</td></tr>
-              <tr><td>事件流上行</td><td>❌</td><td>承载组① harness <code>Event</code> 作为不透明载荷，逐帧上行</td></tr>
-              <tr><td>fs 应答</td><td>❌</td><td>对控制平面 fs 请求的回应</td></tr>
-              <tr><td>退出 / 心跳</td><td>❌</td><td>引擎退出通告、保活</td></tr>
-              <tr><td rowspan="6"><code>ControlPlaneFrame</code><br>（控制平面 → driver）</td><td><code>Welcome</code></td><td>✅</td><td>握手应答，钉死身份</td></tr>
-              <tr><td>输入下行</td><td>❌</td><td>用户消息注入 harness 输入流</td></tr>
-              <tr><td>控制</td><td>❌</td><td>中断 / checkpoint-now / hibernate-prepare 等带内控制信号</td></tr>
-              <tr><td>ack</td><td>❌</td><td>对上行帧的确认</td></tr>
-              <tr><td>fs 请求</td><td>❌</td><td>目录 / 文件读请求</td></tr>
-              <tr><td>seed 种子</td><td>❌</td><td>下发敏感种子（per-process auth、git 凭证、registry token）</td></tr>
+              <tr><td rowspan="4"><code>DriverFrame</code><br>（driver → 控制平面）</td><td><code>Hello</code></td><td>握手首帧</td></tr>
+              <tr><td>事件流上行</td><td>承载组① harness <code>Event</code> 作为不透明载荷，逐帧上行</td></tr>
+              <tr><td>fs 应答</td><td>对控制平面 fs 请求的回应</td></tr>
+              <tr><td>退出 / 心跳</td><td>引擎退出通告、保活</td></tr>
+              <tr><td rowspan="6"><code>ControlPlaneFrame</code><br>（控制平面 → driver）</td><td><code>Welcome</code></td><td>握手应答，钉死身份</td></tr>
+              <tr><td>输入下行</td><td>用户消息注入 harness 输入流</td></tr>
+              <tr><td>控制</td><td>中断 / checkpoint-now / hibernate-prepare 等带内控制信号</td></tr>
+              <tr><td>ack</td><td>对上行帧的确认</td></tr>
+              <tr><td>fs 请求</td><td>目录 / 文件读请求</td></tr>
+              <tr><td>seed 种子</td><td>下发敏感种子（per-process auth、git 凭证、registry token）</td></tr>
             </tbody>
           </table>
         </div>
         <div class="note">
           <span class="note-label">不超前设计</span>
-          通道当前只实现握手（<code>Hello</code> / <code>Welcome</code>）。控制平面收到非握手帧时记录并忽略。
+          通道以握手（<code>Hello</code> / <code>Welcome</code>）为基础；控制平面收到非握手帧时记录并忽略。
           其余帧（事件流、输入、控制、ack、fs、seed、心跳、退出…）待真正用到时按统一格式机械扩展，不预先铺设。
         </div>
 
@@ -342,37 +335,6 @@ sequenceDiagram
         <p>
           <strong>用户输入采用 echo-from-stream</strong>：前端回车后不本地乐观渲染，只把输入提交给 driver；driver 接受后注入一个 <code>user</code> 事件到流（控制平面落库盖 <code>seq</code>），再顺流回到所有 viewer——前端此时才显示它。
           界面只有「流」这一个真相源，用户消息与引擎产出走同一套 <code>seq</code> / <code>id</code> / 恢复语义，多设备天然一致。
-        </p>
-        <div class="note warn">
-          <span class="note-label">本组实现状态 🚧 / ❌</span>
-          组① 的全部事件类型已在 <code>@aprog/protocol/harness</code> 中定义（✅，类型层面），但当前仅从旧位置平移过来、内部结构待整理；
-          且这些事件尚未经通道落地——通道目前只完成握手，事件流上行帧、<code>seq</code> 盖章、断线重放均待 §5 的扩展点接入（❌）。
-          本节描述的读法与恢复语义为已定的设计目标，非当前运行态。
-        </div>
-
-        <h2 id="status">7 · 实现状态</h2>
-        <p>握手与信任链路已就绪；其余通信帧与 harness 事件流的落地待扩展。</p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>环节</th><th>状态</th><th>说明</th></tr></thead>
-            <tbody>
-              <tr><td>统一帧格式 <code>Frame&lt;t,p&gt;</code> 与 <code>CHANNEL_PROTOCOL_VERSION = 1</code></td><td>✅</td><td><code>packages/protocol/src/channel/index.ts</code></td></tr>
-              <tr><td>WebSocket 通道（driver 拨出、Bun.serve 原生 WS、<code>/v1/driver/channel</code>、NDJSON）</td><td>✅</td><td>控制平面 <code>http.ts</code> + <code>driver-channel/channel.ts</code>；driver <code>main.ts</code></td></tr>
-              <tr><td>握手 <code>Hello</code> / <code>Welcome</code>（版本比对、退避重拨）</td><td>✅</td><td>onHello → resolve → Welcome；driver 端原子重试</td></tr>
-              <tr><td><code>bindToken</code> 信任 + register-before-launch</td><td>✅</td><td>网关 <code>crypto.randomUUID</code> 生成；<code>onProvisioned</code> 内登记早于启动</td></tr>
-              <tr><td><code>Welcome.mode</code> 区分 <code>resume</code> / <code>restore</code></td><td>🚧</td><td>类型已定，当前恒回 <code>restore</code></td></tr>
-              <tr><td>通道帧扩展（事件流上行 / 输入 / 控制 / ack / fs / seed / 退出）</td><td>❌</td><td>方向并集已留扩展点，待真正用到时按统一格式加入</td></tr>
-              <tr><td>组① harness 事件类型定义（<code>@aprog/protocol/harness</code>）</td><td>✅</td><td>类型层面已定义</td></tr>
-              <tr><td>组① 内部结构整理</td><td>🚧</td><td>当前仅从旧位置平移</td></tr>
-              <tr><td>harness 事件流经通道落地（envelope / <code>seq</code> 上行、断线重放）</td><td>❌</td><td>待通道事件流帧接入</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p>
-          代码可校验：<code>packages/protocol/src/channel/index.ts</code>（<code>Frame</code> / <code>Hello</code> / <code>Welcome</code> / 版本 / 方向并集）、
-          <code>packages/protocol/src/harness/</code>（事件与信封类型）、
-          <code>packages/control-plane/src/driver-channel/channel.ts</code>（服务端握手 <code>onHello → Welcome</code>）、
-          <code>packages/driver/src/main.ts</code>（客户端拨号、握手、重试）。
         </p>
 
         <div class="pager" data-pager></div>

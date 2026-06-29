@@ -22,14 +22,9 @@
         <div class="eyebrow">aprog 设计文档 · 01</div>
         <h1>总览</h1>
         <p class="lead">
-          本篇定义 aprog 平台的核心抽象、组成模块，以及一次进程唤醒的完整控制流，并标注各环节的实现状态。
+          本篇定义 aprog 平台的核心抽象、组成模块，以及一次进程唤醒的控制流。
           它是设计文档体系的主干；各专题在此基础上展开：程序与发版（02）、镜像与沙箱（03）、通道与协议（04）、运行生命周期（05）、状态契约（06）。
         </p>
-
-        <div class="note">
-          <span class="note-label">标注约定</span>
-          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态；文档随实现推进而扩充。
-        </div>
 
         <h2 id="abstractions">1 · 核心抽象</h2>
         <p>aprog 是运行 AI 程序的虚拟操作系统。其核心抽象与传统操作系统逐一对应：</p>
@@ -84,7 +79,7 @@ flowchart LR
         </p>
 
         <h2 id="wake">4 · 进程唤醒控制流</h2>
-        <p>下图为用户触发唤醒至引擎就绪的完整时序。阴影区为当前<strong>未实现</strong>部分。</p>
+        <p>下图为用户触发唤醒至引擎就绪的控制流时序。唤醒经资源平面创建沙箱、数据平面建立通道，driver 在沙箱内拉起运行环境后回报就绪：</p>
         <div class="diagram">
           <pre class="mermaid">
 sequenceDiagram
@@ -100,13 +95,9 @@ sequenceDiagram
     PM->>SP: create(pid, program@version)
     Note over SP: 生成 bindToken；先登记后启动
     SP->>D: 推送 driver 并注入 env，后台启动
-    PM-->>U: 返回 PCB（state=running）
-    Note over U,PM: 已实现；当前为同步返回，过早置 running
+    PM-->>U: 返回 PCB（state=waking）
     D->>CP: WebSocket Hello（bindToken）
     CP-->>D: Welcome（pid, mode）
-    Note over CP,D: 握手已实现
-    rect rgb(244,239,233)
-    Note over CP,E: 以下均未实现
     CP-->>D: 下发种子：程序引用 / registry / 凭证
     D->>D: 拉取 OCI 闭包，untar 至 skills/
     D->>D: git clone 进程态
@@ -114,19 +105,16 @@ sequenceDiagram
     E-->>D: ready
     D->>CP: ready 帧
     CP-->>U: 经 SSE 或轮询转为 running
-    end
           </pre>
         </div>
-        <div class="note">
-          <span class="note-label">已知限制：过早置 running</span>
-          当前 <code>wake</code> 为同步返回：<code>sandbox.create</code> 返回（沙箱容器启动、driver 进程拉起）后即将进程置为 running，
-          此时握手尚未完成、引擎尚未启动。目标形态为异步：<code>wake</code> 立即返回 <code>waking</code> 态，
-          前端经轮询或 SSE 等待，直至 driver 启动引擎并回报 ready 后转为 running。补全这条 ready 回流是打通整条链路的关键。
-        </div>
+        <p>
+          唤醒为异步：<code>wake</code> 立即返回 <code>waking</code> 态，前端经轮询或 SSE 等待；
+          driver 完成握手、拉取程序闭包与进程态、启动引擎并回报 ready 后，进程转为 <code>running</code>。
+        </p>
 
         <h2 id="distribution">5 · 程序分发</h2>
         <p>
-          程序以目录形态开发，发布为 OCI 制品并推送至 GHCR（工具 <code>aprog-publish</code>）。✅
+          程序以目录形态开发，发布为 OCI 制品并推送至 GHCR（工具 <code>aprog-publish</code>）。
           依赖声明于程序目录的 <code>aprog.json</code>（<code>{"dependencies":{"state":"0.1.0"}}</code>），不写入 <code>SKILL.md</code>。
           发布期解析传递闭包，将每个依赖按 sha256 digest 钉死，拍平写入 OCI config（即 lockfile）。
           driver 拉取时不解析依赖，仅取该已钉死的扁平闭包，解包并排部署至 <code>skills/</code>，并借内容寻址实现去重。
@@ -140,29 +128,8 @@ sequenceDiagram
           <a href="state.html">06 · 状态契约</a>。控制平面的数据库为上述真相的<strong>投影</strong>，非权威来源。
         </p>
 
-        <h2 id="status">7 · 实现状态</h2>
-        <p>核心要素已基本就绪，未完成部分集中于 driver 握手后的运行时编排。</p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>平面</th><th>要素</th><th>状态</th></tr></thead>
-            <tbody>
-              <tr><td rowspan="2">资源平面</td><td>base 镜像（ubuntu / root / 工具链 / GLM）经 aprog-bake 烘为 PPIO template</td><td>✅</td></tr>
-              <tr><td>PPIO provider：唤醒时创建沙箱、推送 driver、注入环境变量</td><td>✅</td></tr>
-              <tr><td rowspan="3">数据平面</td><td>控制平面北面 REST 与 SSE</td><td>✅</td></tr>
-              <tr><td>控制平面南面 WebSocket 通道与 DriverRegistry（先登记后启动）</td><td>✅</td></tr>
-              <tr><td>driver 握手 Hello / Welcome；通信帧 <code>Frame&lt;t,p&gt;</code></td><td>✅</td></tr>
-              <tr><td rowspan="2">分发面</td><td>aprog-publish：aprog.json → 闭包 → digest 钉死 → 推送 GHCR</td><td>✅</td></tr>
-              <tr><td>driver 拉取 OCI 闭包并解包至 skills/</td><td>❌ 机制已验证，未接入 driver</td></tr>
-              <tr><td rowspan="4">运行时编排</td><td>异步唤醒与 waking 过渡态</td><td>❌ 当前为同步</td></tr>
-              <tr><td>driver：git clone 进程态</td><td>❌</td></tr>
-              <tr><td>driver：经 SDK 启动引擎</td><td>❌</td></tr>
-              <tr><td>driver → 控制平面 ready 帧，前端转为 running</td><td>❌</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <h2 id="map">8 · 文档导航</h2>
-        <p>设计文档主干为 5 篇（本页为 01）；过时材料归档于 <code>docs/legacy/</code>。</p>
+        <h2 id="map">7 · 文档导航</h2>
+        <p>设计文档主干为 6 篇（本页为 01）；过时材料归档于 <code>docs/legacy/</code>。</p>
         <div class="hero-cards">
           <a class="hero-card" href="program-package.html">
             <div class="num">02</div><div class="name">程序与发版</div>

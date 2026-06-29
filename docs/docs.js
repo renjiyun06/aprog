@@ -143,6 +143,33 @@
     });
   }
 
+  // ── 图表点击放大（lightbox）──────────────────────────────────────────
+  // 文中图表按列宽收纳；点击 .diagram 弹出全屏浮层、把图放到接近满屏，点击或 ESC 关闭。
+  function closeLightbox() {
+    const o = document.querySelector('.dlg-overlay');
+    if (o) o.remove();
+  }
+  function wireDiagramZoom() {
+    document.addEventListener('click', function (e) {
+      if (e.target.closest('.dlg-overlay')) { closeLightbox(); return; }
+      const dgm = e.target.closest('.diagram');
+      if (!dgm) return;
+      const svg = dgm.querySelector('svg');
+      if (!svg) return;
+      const ov = document.createElement('div');
+      ov.className = 'dlg-overlay';
+      const clone = svg.cloneNode(true);
+      clone.removeAttribute('style');       // 去掉 mermaid 注入的 max-width 限制
+      clone.removeAttribute('width');
+      clone.removeAttribute('height');
+      ov.appendChild(clone);
+      document.body.appendChild(ov);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeLightbox();
+    });
+  }
+
   addAnchors();
   buildSidebar();
   buildToc();
@@ -150,4 +177,5 @@
   spy();
   wireToggle();
   wireSearch();
+  wireDiagramZoom();
 })();

@@ -28,11 +28,6 @@
           运行编排见 <a href="proc-wake.html">05 · 运行生命周期</a>，程序分发见 <a href="program-package.html">02 · 程序与发版</a>。
         </p>
 
-        <div class="note">
-          <span class="note-label">标注约定</span>
-          全文以 ✅ 已实现 / 🚧 部分实现 / ❌ 未实现 标注各环节状态。须区分两类断言：<strong>协议 / 契约设计</strong>（已定）与<strong>运行时落地</strong>（多在 driver 侧待接入），后文如实标注。
-        </div>
-
         <h2 id="dir">1 · 进程目录与权威状态</h2>
         <p>
           每个进程在 per-user 根目录 <code>~/.aprog/</code> 下拥有一个进程目录 <code>~/.aprog/&lt;id&gt;/</code>（类比 <code>/proc/&lt;pid&gt;/</code>）。
@@ -66,11 +61,11 @@
         <p>同一段“执行”涉及三类数据，职责严格分开，不得混为一谈：</p>
         <div class="tbl-wrap">
           <table>
-            <thead><tr><th>层</th><th>内容 / 载体</th><th>权威性</th><th>承载 / 分发</th><th>参与 resume</th></tr></thead>
+            <thead><tr><th>层</th><th>内容 / 载体</th><th>权威性</th><th>承载 / 分发</th></tr></thead>
             <tbody>
-              <tr><td>① 程序 Program</td><td>skill 目录（解包至 <code>skills/</code>）</td><td>共享、不可变、按版本</td><td>OCI 制品按版本拉取</td><td>提供执行逻辑（非状态）</td></tr>
-              <tr><td>② 进程态 Process state</td><td><code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code></td><td><strong>每进程独占、可变、可分支 · 唯一权威</strong></td><td>git 仓库（commit / push）</td><td>✅ 权威</td></tr>
-              <tr><td>③ 会话事件流 Session events</td><td><code>session.jsonl</code>（harness 产生的逐字事件）</td><td>仅展示 / 审计，非权威</td><td>事件流（投影）</td><td>❌</td></tr>
+              <tr><td>① 程序 Program</td><td>skill 目录（解包至 <code>skills/</code>）</td><td>共享、不可变、按版本</td><td>OCI 制品按版本拉取</td></tr>
+              <tr><td>② 进程态 Process state</td><td><code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code></td><td><strong>每进程独占、可变、可分支 · 唯一权威</strong></td><td>git 仓库（commit / push）</td></tr>
+              <tr><td>③ 会话事件流 Session events</td><td><code>session.jsonl</code>（harness 产生的逐字事件）</td><td>仅展示 / 审计，非权威</td><td>事件流（投影）</td></tr>
             </tbody>
           </table>
         </div>
@@ -368,25 +363,6 @@ flowchart LR
             <li>“最新检查点是哪个 commit” = 仓库 HEAD，可推导，<strong>不入 PCB</strong>；<code>spawned</code> / <code>hibernating</code> 的区分由 <code>state</code> 列承载。</li>
             <li>进程跑在哪个镜像，由钉死的 <code>program@版本</code> join <code>program_versions</code> 派生，<strong>不入 PCB</strong>。</li>
           </ul>
-        </div>
-
-        <h2 id="status">7 · 实现状态</h2>
-        <p>状态契约的<strong>协议层</strong>已由 <code>state</code> 库定义并落地；git 检查点 / 分支的<strong>运行时</strong>多在 driver 侧待接入，与 <a href="proc-wake.html">05</a> 一致。</p>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr><th>层</th><th>要素</th><th>状态</th></tr></thead>
-            <tbody>
-              <tr><td rowspan="3">状态契约（协议）</td><td>execution 目录结构、<code>meta.yml</code> / <code>input.md</code> / <code>execution-state/</code> 契约</td><td>✅ 由 <code>state</code> 库定义</td></tr>
-              <tr><td><code>state_schema</code> 快照与合并、<code>by-ref</code> blob、原子写</td><td>✅ 协议已定</td></tr>
-              <tr><td>cursor / resume 语义、at-least-once、幂等归程序</td><td>✅ 协议已定</td></tr>
-              <tr><td>进程模型</td><td><code>processes</code>（PCB）表 + 生命周期 spawn / wake / hibernate / kill</td><td>✅ 已实现（沙箱动作 mock）</td></tr>
-              <tr><td rowspan="2">检查点</td><td>mark + <code>turn.end</code> 捕获 + debounce 语义</td><td>🚧 协议 / 设计已定，运行时未落地</td></tr>
-              <tr><td>git <code>commit</code> / <code>push</code> 耐久（<code>CheckpointStore</code>）</td><td>🚧 仅接口；现存代码为旧式 bundle，未接 git；<code>destroy</code> 回占位 ref</td></tr>
-              <tr><td>唤醒取回</td><td>driver：<code>git clone</code> 灌回 HEAD</td><td>❌ 未接入 driver</td></tr>
-              <tr><td>分支与 rewind</td><td>git 分支即进程分叉、superproject ↔ submodule</td><td>❌ 运行时未落地（协议 / 设计已定）</td></tr>
-              <tr><td>沙箱编排</td><td><code>SandboxGateway</code>：<code>ProviderSandboxGateway</code>（PPIO） vs <code>MockSandboxGateway</code></td><td>🚧 真实网关存在；检查点走 git 部分占位，默认 mock</td></tr>
-            </tbody>
-          </table>
         </div>
 
         <div class="pager" data-pager></div>

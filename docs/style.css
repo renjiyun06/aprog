@@ -142,7 +142,11 @@ td code { white-space: nowrap; }
 .note .note-label { font-weight: 600; display: block; margin-bottom: 3px; font-size: 12.5px; }
 
 /* diagram block (ascii, legacy) */
-.diagram { background: var(--diagram-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; overflow-x: auto; margin: 0 0 22px; }
+.diagram { background: var(--diagram-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px; overflow-x: auto; margin: 0 0 22px; cursor: zoom-in; position: relative; }
+.diagram::after { content: '⤢ 点击放大'; position: absolute; top: 8px; right: 12px; font-size: 11px; color: var(--fg-subtle); opacity: 0.65; pointer-events: none; }
+/* 点击放大浮层 */
+.dlg-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(15, 18, 22, 0.82); display: flex; align-items: center; justify-content: center; padding: 28px; overflow: auto; cursor: zoom-out; }
+.dlg-overlay svg { max-width: 95vw; max-height: 92vh; width: auto; height: auto; background: #fff; border-radius: 10px; box-shadow: 0 12px 48px rgba(0, 0, 0, 0.45); padding: 14px; box-sizing: border-box; }
 .diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
 
 /* ═══════════════ rich diagram kit ═══════════════ */
