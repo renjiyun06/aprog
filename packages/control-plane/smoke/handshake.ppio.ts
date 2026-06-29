@@ -35,7 +35,12 @@ const drivers = {
   unregister: (t: string) => real.unregister(t),
 } as unknown as DriverRegistry;
 
-const dc = new DriverChannelServer(drivers);
+// seedFor / onReady：smoke 用桩（握手后下发 Seed、收 Ready 打印）。
+const dc = new DriverChannelServer(
+  drivers,
+  (pid) => ({ pid: String(pid), program: { id: 'smoke', version: '0.0.0' }, registry: '', repoUrl: null, mode: 'restore' as const }),
+  (pid) => console.log(`[e2e] driver Ready ✓ pid=${pid}`),
+);
 const server = Bun.serve({
   port: PORT,
   fetch(req, srv) {

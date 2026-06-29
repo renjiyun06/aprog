@@ -1,0 +1,3 @@
+# vendor:出网代理 v2ray 二进制(~39MB)。不入库——由 bake 在构建前自动下载(见 bake.ts ensureV2ray)。
+v2ray
+v2ray.zip

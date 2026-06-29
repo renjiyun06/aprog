@@ -1,27 +1,25 @@
 // aprog 事件流的事件种类。把任何引擎的产出归一成这几类（harness-neutral）。
 //
-// 一个「项(item)」= 一条思考 / 一条回复 / 一次工具调用 / 一次命令执行 / 一次文件改动，
-// 生命周期为 start → delta* → end。与 docs/protocol.html 的「事件种类」表一一对应。
+// 一个「项(item)」= 一条思考 / 一条回复 / 一次工具调用，生命周期为 start → delta* → end。
+// 第一批只接入「会话四流 + 回合边界」：思考/回复/工具(item.*) + 用户回显(user) + 回合起止(turn.*)。
+// 更多项类别（command / file_change）与更多事件（compaction / error 及各类遥测）待后续批次接入时再加
+//（SDK 真实产出共 35 类，对账见调研；此处只留已接入的，不预先铺设死类型）。
 
 import type { Envelope, ItemId, TurnId } from './envelope.ts';
 
 /** 一个项的类别。 */
-export type ItemType = 'thinking' | 'reply' | 'tool' | 'command' | 'file_change';
+export type ItemType = 'thinking' | 'reply' | 'tool';
 
 /** item.delta 的增量载荷，按项类别区分。 */
 export type ItemPatch =
   | { kind: 'text'; text: string }                         // thinking / reply 的文本增量
-  | { kind: 'tool_args'; partial_json: string }            // tool 的入参 JSON 分片
-  | { kind: 'command_output'; chunk: string }              // command 的输出分片
-  | { kind: 'file_change'; diff: string };                 // file_change 的补丁分片
+  | { kind: 'tool_args'; partial_json: string };           // tool 的入参 JSON 分片
 
 /** item.end 的 coalesced 全量，按项类别区分。 */
 export type ItemValue =
   | { item: 'thinking'; text: string; signature?: string }
   | { item: 'reply'; text: string }
-  | { item: 'tool'; name: string; args: unknown; result?: unknown }
-  | { item: 'command'; command: string; output: string; exit_code?: number }
-  | { item: 'file_change'; path: string; diff: string };
+  | { item: 'tool'; name: string; args: unknown; result?: unknown };
 
 export interface TokenUsage {
   input?: number;
@@ -96,40 +94,15 @@ export interface TurnEnd extends Envelope {
   usage?: TokenUsage;
 }
 
-/**
- * 引擎上下文压缩边界：harness 把它自己的历史上下文做了一次摘要压缩（context compaction）。
- * 注意这与“流的合并/读时投影”无关——事件流本身永不删减；这条只是如实记录“此处之前的引擎上下文已被压缩”，
- * 让用户在历史里看到这一刻。取自 Claude 的 `compact_boundary` / `SDKCompactBoundaryMessage`。
- */
-export interface CompactionEvent extends Envelope {
-  kind: 'compaction';
-  /** 触发方式：自动（接近上下文上限）或手动。 */
-  trigger: 'auto' | 'manual';
-  /** 压缩前的 token 数（引擎提供时）。 */
-  pre_tokens?: number;
-}
-
-/**
- * 错误 / 非致命提示。带严重级别——UI 据此区别对待：
- *   fatal     致命，回合无法继续（红色挂了）。取自 Codex `Error`。
- *   transient 瞬时，系统正在自愈（黄色「重连中…」，不该报死）。取自 Codex `StreamError`。
- *   warning   继续了但需提示用户（黄色提示行）。取自 Codex `Warning`。
- */
-export interface ErrorEvent extends Envelope {
-  kind: 'error';
-  severity: 'fatal' | 'transient' | 'warning';
-  message: string;
-}
-
-/** 流上的事件全集（discriminated union on `kind`）。 */
+/** 流上的事件全集（discriminated union on `kind`）。
+ *  第一批：会话四流(item.* 思考/回复/工具 + user 回显) + 回合边界(turn.*)。
+ *  compaction / error 及各类遥测事件待后续批次接入时再加（不预先铺设死类型）。 */
 export type Event =
   | TurnStart
   | UserEvent
   | ItemStart
   | ItemDelta
   | ItemEnd
-  | TurnEnd
-  | CompactionEvent
-  | ErrorEvent;
+  | TurnEnd;
 
 export type EventKind = Event['kind'];

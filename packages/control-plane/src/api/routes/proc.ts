@@ -6,7 +6,7 @@
 
 import type { Router } from '../router.ts';
 import type { AuthCtx } from '../context.ts';
-import { withErrors, validation } from '../errors.ts';
+import { withErrors, validation, conflict } from '../errors.ts';
 import { withAuth, authorize } from '../middleware/auth.ts';
 import { paged, created, json, parsePid, readJson } from '../respond.ts';
 
@@ -61,11 +61,18 @@ async function kill(ctx: AuthCtx): Promise<Response> {
   return json(await ctx.deps.procs.kill(pid));
 }
 
-/** POST /proc/:pid/input — 投递用户输入（editor）→ DriverChannel.sendInput。 */
+/** POST /proc/:pid/input {text} — 投递用户输入（editor）→ 下发 Input 帧给运行中沙箱的 driver。
+ *  driver 收到后喂引擎 + 回 echo 一条 user 事件上行（经事件流 SSE 让所有订阅者看到这句）。 */
 async function input(ctx: AuthCtx): Promise<Response> {
   const pid = parsePid(ctx);
   await authorize(ctx.user, pid, 'editor', ctx.deps);
-  throw new Error('not implemented: POST /proc/:pid/input → channelFor(pid).sendInput（待对接沙箱）');
+  const b = await readJson(ctx.req);
+  const text = str(b.text);
+  if (text === '') throw validation('缺少 text');
+  const conn = ctx.deps.channelFor(pid);
+  if (conn === undefined) throw conflict('进程未在运行（无活跃 driver 连接），无法投递输入');
+  conn.send({ t: 'input', p: { pid: String(pid), text } });
+  return json({ ok: true });
 }
 
 /** POST /proc/:pid/interrupt — 打断当前回合（editor）→ DriverChannel.control('interrupt')。 */

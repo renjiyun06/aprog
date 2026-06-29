@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "aprog 协议契约：两组——① harness 事件（语义流，三方共用）② channel 通信事件（driver↔CP 通道，两方共用，零依赖①）。",
+  "description": "aprog 协议契约：两组——① harness 事件（语义流，三方共用）② channel 通信事件（driver↔CP 通道，两方共用，单向依赖①：EngineEvent 帧驮 harness Event）。",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

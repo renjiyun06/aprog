@@ -6,10 +6,14 @@ dist/
 # runtime data (进程目录快照等不进 git)
 /var/lib/aprog/
 
-# secrets / local env (绝不入库：DAYTONA_API_KEY 等凭据)
+# secrets / local env (绝不入库：DAYTONA_API_KEY、GitHub App 私钥 等凭据)
 .env
 .env.*
 !.env.example
+# 主密钥（GitHub App 私钥等）：CP 长寿凭证，绝不入库
+.secrets/
+**/.secrets/
+*.pem
 
 # 开发期页面评论（live-annotate 落盘，不入库）
 .comments/

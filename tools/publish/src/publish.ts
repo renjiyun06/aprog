@@ -7,8 +7,9 @@
 // 两层解析的「重」那半在这里跑(见 docs/program-package.html#deps):
 //   声明  : programs/<名>/<版本>/aprog.json 的 dependencies —— { "state": "0.1.0" }(键=关系给 harness,值=版本给 packager)
 //   解析  : 走传递闭包、每个依赖按 digest 钉死、拍平进 config(= lockfile)。SKILL.md 不背依赖、不写版本
-//   产物  : 一个自包含 manifest —— layers = 闭包里每个程序一层;config = 那份 lockfile
-// driver(spawn 期)只做「轻」那半:GET 这一个 manifest、按 digest 取未缓存的层、untar 并排到 skills/。
+//   产物  : 每个程序发成「自己」的 OCI artifact —— 只含本程序一层;config(=lockfile)记整条闭包(每成员 名@版本 + digest + 落地 target)
+//           依赖的层不并入,各自待在它的包仓里(分开布局:共享库单一归属、跨仓引用、去重有保证)
+// driver(spawn 期)只做「轻」那半:GET 本程序 manifest + config,按 lockfile 逐成员去各自包仓(registry 由 CP 经 seed 下发)取未缓存的层、untar 并排到 skills/。
 // 它不读 aprog.json、不递归、不求解——闭包已被本工具拍平钉死。
 //
 // 载体用 OCI + oras(白嫖 registry/分发/鉴权,与镜像同一套)。本地 registry 用 --plain-http;
@@ -29,7 +30,7 @@ consola.options.formatOptions.date = false;
 const LAYER_MT = 'application/vnd.aprog.skill.layer.v1.tar+gzip';
 const CFG_MT = 'application/vnd.aprog.program.manifest.v1+json';
 // 默认指向 GHCR(真发布目标);本地 registry:2 只是验证脚手架,用 --registry localhost:5000 覆盖。
-const DEFAULT_REGISTRY = 'ghcr.io/renjiyun06';
+const DEFAULT_REGISTRY = 'ghcr.io/kybera';
 
 // ── 仓库定位（与 aprog-bake 同法）──────────────────────────────────────────
 function findRepoRoot(start: string): string {
@@ -122,6 +123,26 @@ function orasCapture(cmd: string[]): string {
   return p.stdout.toString();
 }
 
+/** 分开布局:依赖的层必须已发布在它自己的包仓里(driver 跨仓拉取的前提)。
+ *  取依赖已发布 manifest 的层 digest,与本地确定性重算的 digest 比对:不存在→提示先发;不一致→提示重发。 */
+function verifyDepPublished(registry: string, plain: boolean, m: Member, localDigest: string): void {
+  const ref = `${registry}/${m.name}:${m.version}`;
+  const flag = plain ? ['--plain-http'] : [];
+  let manifest: { layers?: { digest?: string }[] };
+  try {
+    manifest = JSON.parse(orasCapture(['oras', 'manifest', 'fetch', ...flag, ref]));
+  } catch {
+    throw new Error(`依赖 ${m.name}@${m.version} 尚未发布(${ref})。分开布局需自底向上先发它:\n  aprog-publish push ${m.name} ${m.version}`);
+  }
+  const published = manifest.layers?.[0]?.digest;
+  if (published !== localDigest) {
+    throw new Error(
+      `依赖 ${m.name}@${m.version} 已发布的层 digest 与本地不一致:\n  已发布 ${published}\n  本地   ${localDigest}\n源已改或打包不确定,请重发该依赖:aprog-publish push ${m.name} ${m.version}`,
+    );
+  }
+  console.log(`  依赖 ${m.name}@${m.version} 已发布且层 digest 一致 ✓`);
+}
+
 // ── push ───────────────────────────────────────────────────────────────
 const push = defineCommand({
   meta: { name: 'push', description: '解依赖闭包、组 OCI artifact、推到 registry' },
@@ -149,10 +170,19 @@ const push = defineCommand({
     console.log(`[publish] ${args.name}@${args.version} 闭包(${closure.length}):${closure.map((m) => `${m.name}@${m.version}`).join(', ')}`);
 
     const workDir = mkdtempSync(join(tmpdir(), 'aprog-publish-'));
+    // 对每个闭包成员都确定性打层(为拿 digest 写进 lockfile);但只推「自己」那一层——
+    // 分开布局:依赖的层各自待在它的包仓里,driver 按 lockfile 逐成员回各仓拉(digest 因确定性打包跨仓一致)。
     const layers = closure.map((m) => ({ m, ...buildLayer(m, workDir) }));
-    for (const l of layers) console.log(`  层 ${l.m.name}@${l.m.version}  ${l.digest}`);
+    const isSelf = (m: Member): boolean => m.name === args.name && m.version === args.version;
+    const self = layers.find((l) => isSelf(l.m));
+    if (self === undefined) throw new Error(`内部错误:闭包里没有自身 ${args.name}@${args.version}`);
+    for (const l of layers) {
+      console.log(`  层 ${l.m.name}@${l.m.version}  ${l.digest}  ${isSelf(l.m) ? '(本包·推送)' : '(依赖·引用其包仓)'}`);
+    }
 
     // config blob = lockfile:闭包按 digest 钉死 + 每层落地 target。
+    // 分开布局:成员的层在 `<registry>/<成员名>` 仓(registry 运行时由 CP 经 seed 下发给 driver),
+    // 故 lockfile 只记 name/version/target/layer,定位靠「同命名空间 + 成员名」约定,不写死 registry。
     const config = {
       schemaVersion: 1,
       name: args.name,
@@ -166,8 +196,11 @@ const push = defineCommand({
     writeFileSync(join(workDir, cfgFile), JSON.stringify(config, null, 2));
 
     const ref = `${args.registry}/${args.name}:${args.version}`;
+    const deps = layers.filter((l) => !isSelf(l.m));
     if (args['dry-run']) {
-      console.log(`[publish] dry-run:将推 ${ref}(config + ${layers.length} 层),未真推。工件在 ${workDir}`);
+      console.log(
+        `[publish] dry-run:将推 ${ref}(config + 1 自身层)。依赖(${deps.length})引用其包仓:${deps.map((l) => `${l.m.name}@${l.m.version}`).join(', ') || '(无)'}。工件在 ${workDir}`,
+      );
       return;
     }
     if (!orasExists()) {
@@ -175,12 +208,15 @@ const push = defineCommand({
       process.exit(1);
     }
     const plain = plainHttpFor(args.registry, args['plain-http']);
+    // 分开布局:依赖必须已发布在各自包仓里(driver 跨仓拉取的前提)。逐个校验存在 + digest 一致。
+    for (const l of deps) verifyDepPublished(args.registry, plain, l.m, l.digest);
+
     const cmd = [
       'oras', 'push', ...(plain ? ['--plain-http'] : []), ref,
       '--config', `${cfgFile}:${CFG_MT}`,
-      ...layers.map((l) => `${l.file}:${LAYER_MT}`),
+      `${self.file}:${LAYER_MT}`, // 只推自身层(依赖层在各自包仓)
     ];
-    console.log(`[publish] 推 ${ref}${plain ? '(plain-http)' : ''}`);
+    console.log(`[publish] 推 ${ref}${plain ? '(plain-http)' : ''}(仅自身层;依赖引用 ${deps.length} 个包仓)`);
     sh(cmd, workDir); // cwd=workDir 用相对名,避开 oras 绝对路径校验
     console.log(`[publish] ✓ 已发布 ${ref}`);
   },
@@ -230,12 +266,13 @@ const inspect = defineCommand({
     const manifest = JSON.parse(orasCapture(['oras', 'manifest', 'fetch', ...plain, ref]));
     console.log(`manifest ${ref}`);
     console.log(`  artifactType: ${manifest.artifactType ?? manifest.config?.mediaType}`);
-    console.log(`  层数: ${manifest.layers?.length ?? 0}`);
+    console.log(`  层数(本仓): ${manifest.layers?.length ?? 0}（分开布局:只含本程序层,依赖层在各自包仓）`);
     // 取 config blob(lockfile),按 layer digest 映射出闭包落地。
     const cfg = JSON.parse(orasCapture(['oras', 'blob', 'fetch', ...plain, '--output', '-', `${args.registry}/${args.name}@${manifest.config.digest}`]));
     console.log('  依赖闭包(name@version → target ← layer):');
     for (const c of cfg.closure ?? []) {
-      console.log(`    ${c.name}@${c.version}  →  ${c.target}  ←  ${String(c.layer).slice(0, 19)}…`);
+      const here = c.name === args.name && c.version === args.version;
+      console.log(`    ${c.name}@${c.version}  →  ${c.target}  ←  ${String(c.layer).slice(0, 19)}…  ${here ? '(本包层·在本仓)' : `(依赖·在 ${c.name} 仓)`}`);
     }
   },
 });

@@ -11,7 +11,12 @@ const BUNDLE = process.env.APROG_DRIVER_BUNDLE ?? `${import.meta.dir}/../../driv
 
 const registry = new DriverRegistry();
 registry.register(TOKEN, { pid: 1, sandboxId: 'local-sbx' }); // 预登记（模拟 register-before-launch）
-const dc = new DriverChannelServer(registry);
+// seedFor / onReady：smoke 用桩。握手后 CP 会下发 Seed，driver 占位部署后回 Ready，这里打印即可。
+const dc = new DriverChannelServer(
+  registry,
+  (pid) => ({ pid: String(pid), program: { id: 'smoke', version: '0.0.0' }, registry: '', repoUrl: null, mode: 'restore' as const }),
+  (pid) => console.log(`[local] driver Ready ✓ pid=${pid}`),
+);
 
 const server = Bun.serve({
   port: PORT,
@@ -45,6 +50,8 @@ while (Date.now() < deadline) {
 }
 
 console.log(ok ? '\n[local] ✓ 握手成功：CP 活连接表已绑定 pid=1' : '\n[local] ✗ 超时未握手');
+// 握手后再宽限片刻，让 driver 处理 Seed（占位部署 ~300ms）并回 Ready，观测完整唤醒闭环。
+if (ok) await Bun.sleep(1200);
 proc.kill();
 server.stop(true);
 process.exit(ok ? 0 : 1);

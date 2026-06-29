@@ -74,6 +74,9 @@ const DRIVER_PATH = `${DRIVER_DIR}/driver.mjs`;
 const DRIVER_LOG = `${DRIVER_DIR}/driver.log`;
 /** 控制平面回拨入口的 CA 证书在沙箱内的落点（配了 caCertPem 时写入，并经 NODE_EXTRA_CA_CERTS 让 driver 信任）。 */
 const DRIVER_CA_PATH = `${DRIVER_DIR}/cp-ca.pem`;
+/** 引擎二进制（claude-code）在镜像里的落点：ppio.Dockerfile 把 claude 软链到此。
+ *  driver 的 bundle 后 SDK 自带二进制路径解析失效，故经 APROG_ENGINE_BIN 显式指给它（见 driver/engine.ts）。 */
+const ENGINE_BIN = '/usr/local/bin/claude';
 
 export class PPIOProvider implements SandboxProvider {
   readonly id = 'ppio' as const;
@@ -164,6 +167,7 @@ export class PPIOProvider implements SandboxProvider {
       const envs: Record<string, string> = {
         APROG_BIND_TOKEN: bindToken,
         APROG_CONTROL_PLANE_URL: this.controlPlaneUrl,
+        APROG_ENGINE_BIN: ENGINE_BIN, // driver 据此用镜像烘好的 claude 起引擎
         ...(this.caCertPem ? { NODE_EXTRA_CA_CERTS: DRIVER_CA_PATH } : {}),
         ...this.injectedEnv,
       };

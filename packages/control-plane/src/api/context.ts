@@ -5,6 +5,7 @@
 // 业务逻辑住在 Deps 指向的子系统里（ProcessManager / stream / driver-channel），不在 API 层。
 
 import type { ProcessManager } from '../process/manager.ts';
+import type { LifecycleHub } from '../process/lifecycle.ts';
 import type { StreamStore } from '../stream/store.ts';
 import type { StreamHub } from '../stream/hub.ts';
 import type { DriverConnection } from '../driver-channel/channel.ts';
@@ -45,6 +46,8 @@ export interface Deps {
   installs: InstallStore;
   /** 进程编排：ps / spawn / wake / hibernate / 取 PCB。 */
   procs: ProcessManager;
+  /** 进程生命周期扇出：状态变更广播给该用户的 SSE 订阅（账号级 GET /proc/stream）。 */
+  lifecycle: LifecycleHub;
   /** 事件流存储：盖 seq、落库、回放。 */
   store: StreamStore;
   /** 事件流扇出：live 广播给多个订阅者。 */

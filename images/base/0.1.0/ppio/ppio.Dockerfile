@@ -76,3 +76,11 @@ RUN . "$NVM_DIR/nvm.sh" && nvm use --lts \
 # 6) 烘 GLM 路由（非密）到 root 的 ~/.claude/settings.json。密钥不在此处，运行时注入。
 RUN mkdir -p /root/.claude
 COPY settings.json /root/.claude/settings.json
+
+# 7) v2ray（出网代理客户端）—— 沙箱在国内，访问被墙的 github/ghcr 等外网需经代理。
+#    把【二进制本身】烘进镜像（静态、非密）；shadowsocks 上游节点（密钥）运行时由 CP 经 driver env 下发，
+#    driver 据此起本地 http 代理（见 driver/proxy.ts）。
+#    二进制由 bake 前预下载并放在本构建目录（vendor，避免构建期再依赖被墙的 github releases —— 正是本功能要消除的痛点）。
+#    无 routing 段的配置不需 geoip/geosite 数据，故只烘 v2ray 主程序。
+COPY v2ray /usr/local/bin/v2ray
+RUN chmod +x /usr/local/bin/v2ray

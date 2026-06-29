@@ -17,3 +17,45 @@ export interface StreamStore {
   /** 当前流的末端 seq。 */
   head(pid: number): Promise<Seq>;
 }
+
+/**
+ * 内存实现（第一批）：每进程一条 append-only 数组。盖全局单调 seq（覆盖 driver 的本地占位 seq）。
+ * 关键不变量：append 同步盖 seq——调用方按 WS 到达顺序逐条 append，seq 即与到达序一致（保序）。
+ * 持久化（落 session.aprog.jsonl / 检查点）与压实（compact）留作后续；CP 重启会丢内存流——批一接受。
+ */
+export class MemoryStreamStore implements StreamStore {
+  private readonly streams = new Map<number, Event[]>();
+  private readonly heads = new Map<number, Seq>();
+
+  async append(pid: number, event: Omit<Event, 'seq'>): Promise<Event> {
+    const seq = (this.heads.get(pid) ?? 0) + 1;
+    this.heads.set(pid, seq);
+    const stamped = { ...event, seq } as Event; // 覆盖入参里 driver 的本地 seq，盖 CP 全局 seq
+    let arr = this.streams.get(pid);
+    if (arr === undefined) {
+      arr = [];
+      this.streams.set(pid, arr);
+    }
+    arr.push(stamped);
+    return stamped;
+  }
+
+  async *readFrom(pid: number, from: Seq): AsyncIterable<Event> {
+    const arr = this.streams.get(pid);
+    if (arr === undefined) return;
+    // 快照当前长度：回放途中的并发 append 由 hub 的 live 续，不在此处重复吐。
+    const snapshot = arr.slice();
+    for (const e of snapshot) {
+      if (e.seq > from) yield e;
+    }
+  }
+
+  async compact(pid: number): Promise<void> {
+    // 第一批不压实：回放仍吐原始 delta（at-least-once，前端按 id 幂等去重）。留待后续优化。
+    void pid;
+  }
+
+  async head(pid: number): Promise<Seq> {
+    return this.heads.get(pid) ?? 0;
+  }
+}

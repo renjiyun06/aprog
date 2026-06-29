@@ -14,8 +14,6 @@ export type {
   ItemDelta,
   ItemEnd,
   TurnEnd,
-  CompactionEvent,
-  ErrorEvent,
   Event,
   EventKind,
 } from './events.ts';

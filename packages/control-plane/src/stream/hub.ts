@@ -9,3 +9,35 @@ export interface StreamHub {
   /** 注册一个 live 订阅者，返回退订函数。 */
   subscribe(pid: number, onEvent: (e: Event) => void): () => void;
 }
+
+/** 内存实现：每进程一个订阅者集合。单订阅者回调抛错不影响其他订阅者。 */
+export class MemoryStreamHub implements StreamHub {
+  private readonly subs = new Map<number, Set<(e: Event) => void>>();
+
+  publish(pid: number, event: Event): void {
+    const set = this.subs.get(pid);
+    if (set === undefined) return;
+    for (const fn of set) {
+      try {
+        fn(event);
+      } catch {
+        // 单个订阅者异常隔离，不阻断其余扇出。
+      }
+    }
+  }
+
+  subscribe(pid: number, onEvent: (e: Event) => void): () => void {
+    let set = this.subs.get(pid);
+    if (set === undefined) {
+      set = new Set();
+      this.subs.set(pid, set);
+    }
+    set.add(onEvent);
+    return () => {
+      const s = this.subs.get(pid);
+      if (s === undefined) return;
+      s.delete(onEvent);
+      if (s.size === 0) this.subs.delete(pid);
+    };
+  }
+}

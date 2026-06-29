@@ -3,6 +3,7 @@
 // 这里只保留「选哪个 provider」这一选择器——多供应商的形态体现在这个可扩展的选择上。
 
 import type { GitHubRepoConfig } from './process/repo-gateway.ts';
+import type { GithubAppConfig } from './credentials/issuer.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -35,6 +36,24 @@ export interface Config {
   };
   /** 进程仓库提供方（GitHub）。未配 GITHUB_TOKEN 则为 undefined（→ MockRepoGateway，造假 URL）。 */
   github?: GitHubRepoConfig;
+  /** 凭证签发主密钥（GitHub App）。配齐 APROG_GH_APP_ID + 私钥则启用 issuer：给 driver 签 per-process
+   *  仓库短票 / 程序包拉取凭证（见 credentials/issuer.ts）。未配则不签票（driver 占位阶段不消费）。 */
+  githubApp?: GithubAppConfig;
+  /** 程序包 registry 基址（含命名空间），如 ghcr.io/kybera。driver 据此拉 OCI 程序闭包。 */
+  registry: string;
+  /** 沙箱出网代理（沙箱在国内，访问被墙的 github/ghcr 等需经代理）。配了 SS 节点则注入沙箱：
+   *  driver 用这把 SS 起本地 v2ray http 代理，并令 node/git/引擎经它出网；NO_PROXY 放行 CP 回拨 +
+   *  bypass 列表（默认含 GLM 国内端点 open.bigmodel.cn，避免国内→美国绕路）。未配则沙箱直连出网。 */
+  proxy?: ProxyConfig;
+}
+
+/** 沙箱出网代理配置。 */
+export interface ProxyConfig {
+  /** shadowsocks 上游节点（密钥）——注入 driver，起 v2ray。 */
+  ss: { server: string; port: number; password: string; method: string };
+  /** 不走代理的主机（国内/内网），追加进 NO_PROXY。CP 回拨主机由 controlPlaneUrl 自动放行，此列表额外追加
+   *  （默认 GLM 端点）。 */
+  bypass: string[];
 }
 
 export interface SmtpConfig {
@@ -58,9 +77,47 @@ export function loadConfig(): Config {
     webUrl: process.env.APROG_WEB_URL ?? 'https://localhost:5174',
     smtp: loadSmtp(),
     github: loadGithub(),
+    githubApp: loadGithubApp(),
+    registry: process.env.APROG_REGISTRY ?? 'ghcr.io/kybera',
+    proxy: loadProxy(),
     sandbox: {
       provider: resolveSandboxProvider(),
     },
+  };
+}
+
+/** 从环境变量读沙箱出网代理（SS 节点）。未配 APROG_PROXY_SS_SERVER/PASSWORD 则返回 undefined（沙箱直连出网）。
+ *  APROG_PROXY_BYPASS：逗号分隔的额外直连主机，默认 open.bigmodel.cn（GLM 国内端点，避免绕美国代理增延迟）。 */
+function loadProxy(): ProxyConfig | undefined {
+  const server = process.env.APROG_PROXY_SS_SERVER;
+  const password = process.env.APROG_PROXY_SS_PASSWORD;
+  if (!server || !password) return undefined;
+  return {
+    ss: {
+      server,
+      port: Number(process.env.APROG_PROXY_SS_PORT ?? 0),
+      password,
+      method: process.env.APROG_PROXY_SS_METHOD ?? 'aes-256-gcm',
+    },
+    bypass: (process.env.APROG_PROXY_BYPASS ?? 'open.bigmodel.cn')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  };
+}
+
+/** 凭证签发主密钥（GitHub App）。需 APROG_GH_APP_ID + APROG_GH_APP_KEY_PATH（PKCS#1/PKCS#8 PEM 路径）。
+ *  owner 复用 GITHUB_OWNER。任一缺失则返回 undefined（不启用 issuer）。 */
+function loadGithubApp(): GithubAppConfig | undefined {
+  const appId = process.env.APROG_GH_APP_ID;
+  const privateKeyPath = process.env.APROG_GH_APP_KEY_PATH;
+  const owner = process.env.GITHUB_OWNER;
+  if (!appId || !privateKeyPath || !owner) return undefined;
+  return {
+    appId,
+    privateKeyPath,
+    owner,
+    installationId: process.env.APROG_GH_APP_INSTALLATION_ID || undefined,
   };
 }
 

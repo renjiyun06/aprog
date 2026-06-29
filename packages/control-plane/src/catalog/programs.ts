@@ -1,8 +1,10 @@
-// 程序目录（catalog）。智能程序 = skill 的全局静态目录项。
+// 程序目录（catalog）。智能程序 = skill 的全局目录项。
 //
-// 权威态本应是磁盘 skill 注册表（SKILL.md frontmatter）；当前还没有该注册表，
-// 故先用一份静态常量作为目录来源，启动时 upsert 进 DB（薄镜像，便于查询/校验）。
-// 模型见 docs/data-model.html#program-versions：拆「身份 programs + 版本 program_versions」两表——
+// 权威态 = DB（programs + program_versions 两表），不再有静态常量自动 seed。
+// 「发布一个程序/某版本」是一个有意的两步动作：① 推 OCI 包到 registry；② 把该版本登记进 DB
+// （programs 一行 + program_versions 一行）。DB 据此如实反映「真实发布了什么」，与已发布的包对齐。
+// 本类只做查询/校验/解析（list/has/get/resolveImage），不写入——登记由发布流程显式完成。
+// 模型见 docs/data-model.html#program-versions：
 //   · programs：跨版本稳定的展示元数据 + current_version 指针。
 //   · program_versions：每版本一行，承载「这版程序依赖哪版镜像」（image_name + image_version）。
 // 系统应用（商店/设置）是前端 chrome，不在目录里。
@@ -35,58 +37,9 @@ export interface CatalogListItem {
   publisher: string;
 }
 
-/** 目录编写源：一个程序 = 身份 + 若干版本（每版本声明依赖的镜像 name@version）。 */
-interface CatalogEntry {
-  id: string;
-  name: string;
-  summary: string;
-  category: string;
-  publisher: string;
-  currentVersion: string;
-  versions: { version: string; image: string }[]; // image = "<name>@<version>"
-}
-
-/** 当前目录（与前端 registry 的智能程序一一对应）。后续由 skill 注册表派生。
- *  能力那块先搁置：所有程序暂统一依赖 base@0.1.0（见 images/base/0.1.0）。 */
-const CATALOG: CatalogEntry[] = [
-  { id: 'requirement', name: '需求分析',   category: '规划与设计', publisher: 'aprog', currentVersion: '0.2.0', versions: [{ version: '0.2.0', image: 'base@0.1.0' }], summary: '把模糊的想法访谈成结构化需求：澄清目标、边界、验收标准，产出一份可执行的需求说明。' },
-  { id: 'design',      name: 'UI 设计',    category: '规划与设计', publisher: 'aprog', currentVersion: '0.4.0', versions: [{ version: '0.4.0', image: 'base@0.1.0' }], summary: '把模糊想法塑形成具体可执行的设计：发现品牌意图 → 选型 → 生成并迭代界面产物，支持浏览器内批注反馈。' },
-  { id: 'jinglan',     name: '景兰开发',   category: '开发与质量', publisher: 'aprog', currentVersion: '0.1.0', versions: [{ version: '0.1.0', image: 'base@0.1.0' }], summary: '景兰项目的开发程序：在沙箱里读写代码、跑命令、推进功能与修复。' },
-  { id: 'ruxiayuan',   name: '如夏园开发', category: '开发与质量', publisher: 'aprog', currentVersion: '0.1.0', versions: [{ version: '0.1.0', image: 'base@0.1.0' }], summary: '如夏园项目的开发程序：在沙箱里读写代码、跑命令、推进功能与修复。' },
-  { id: 'codebase',    name: '代码库分析', category: '开发与质量', publisher: 'aprog', currentVersion: '0.1.0', versions: [{ version: '0.1.0', image: 'base@0.1.0' }], summary: '读懂一份代码库：从总览到核心概念逐层勘察，产出结构化的理解笔记。' },
-  { id: 'testgen',     name: '测试生成',   category: '开发与质量', publisher: 'aprog', currentVersion: '0.1.0', versions: [{ version: '0.1.0', image: 'base@0.1.0' }], summary: '为目标代码生成测试：分析行为、覆盖边界、产出可运行的测试用例。' },
-  { id: 'docs',        name: '文档撰写',   category: '文档',       publisher: 'aprog', currentVersion: '0.1.0', versions: [{ version: '0.1.0', image: 'base@0.1.0' }], summary: '撰写与维护项目文档：从大纲到成稿，保持结构与措辞一致。' },
-];
-
-/** 解析 "<name>@<version>" → ImageDep。 */
-function parseImage(ref: string): ImageDep {
-  const at = ref.lastIndexOf('@');
-  if (at <= 0 || at === ref.length - 1) throw new Error(`非法镜像引用（应为 name@version）：${ref}`);
-  return { imageName: ref.slice(0, at), imageVersion: ref.slice(at + 1) };
-}
-
-/** 程序目录存储：启动时把 CATALOG upsert 进 programs + program_versions，对外提供列出/校验/解析。 */
+/** 程序目录存储：DB 为权威源（发布时显式登记），对外提供列出/校验/解析。本类只读，不 seed。 */
 export class ProgramCatalog {
-  constructor(private readonly db: Database) {
-    this.seed();
-  }
-
-  /** 幂等同步目录到两张表（INSERT OR REPLACE）。 */
-  private seed(): void {
-    const upProg = this.db.query(
-      'INSERT OR REPLACE INTO programs (id, name, summary, category, publisher, current_version) VALUES (?, ?, ?, ?, ?, ?)',
-    );
-    const upVer = this.db.query(
-      'INSERT OR REPLACE INTO program_versions (program_id, version, image_name, image_version, published_at) VALUES (?, ?, ?, ?, NULL)',
-    );
-    for (const p of CATALOG) {
-      upProg.run(p.id, p.name, p.summary, p.category, p.publisher, p.currentVersion);
-      for (const v of p.versions) {
-        const img = parseImage(v.image);
-        upVer.run(p.id, v.version, img.imageName, img.imageVersion);
-      }
-    }
-  }
+  constructor(private readonly db: Database) {}
 
   /** 全部程序（商店目录）。version = current_version（前端沿用 version 字段）。 */
   list(): CatalogListItem[] {
