@@ -388,6 +388,7 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .state-dot.attached    { background: var(--accent); box-shadow: 0 0 0 2px rgba(76,194,255,0.18); }
 .state-dot.running     { background: var(--success); }
 .state-dot.hibernating { background: rgba(255,255,255,0.22); }
+.state-dot.waking      { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
 .state-dot.warn        { background: var(--warn); }
 .state-dot.exited      { background: var(--danger); }
 .state-dot.spawning    { background: var(--success); animation: pulse 1.4s ease-in-out infinite; }
@@ -471,6 +472,7 @@ code, kbd, .mono { font-family: var(--font-mono); }
   color: var(--text-3);
 }
 .dormant-glyph svg { width: 24px; height: 24px; }
+.dormant-glyph.waking-glyph { font-size: 24px; line-height: 1; color: var(--warn); font-family: ui-monospace, monospace; }
 .dormant-title { font-size: 15px; font-weight: 600; color: var(--fg); }
 .dormant-sub { font-size: 12.5px; color: var(--text-3); line-height: 1.7; }
 .dormant-wake { margin-top: 6px; display: inline-flex; align-items: center; gap: 7px; }
@@ -526,6 +528,12 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .msg { max-width: 720px; }
 .msg-user { align-self: flex-end; background: var(--accent); color: var(--accent-on); padding: 8px 12px; border-radius: 12px 12px 4px 12px; font-size: 13px; line-height: 1.45; font-weight: 500; white-space: pre-wrap; }
 .msg-user code { font-family: var(--font-mono); font-size: 12px; background: rgba(0,0,0,0.18); padding: 1px 5px; border-radius: 3px; color: var(--accent-on); }
+
+/* 「等待响应」行——发出输入 → 代理首个 event 之间的占位动画,避免空窗让用户以为卡死。
+   braille spinner(JS spin() 驱动,与建进程/唤醒同款)+ 文案,终端风呼应 thinking 行。 */
+.pending-reply { align-self: flex-start; display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-3); font-style: italic; padding: 2px 0; }
+.pending-reply .pending-spin { color: var(--accent); font-style: normal; display: inline-block; width: 1ch; text-align: center; }
+.pending-reply .pending-text { color: var(--text-3); }
 
 .evt { display: flex; flex-direction: column; gap: 4px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
 .evt-thinking { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-style: italic; }
@@ -948,6 +956,9 @@ kbd { font-family: var(--font-mono); font-size: 11px; font-weight: 500; backgrou
 .dzt-share:hover, .dzt-life:hover { background: rgba(255,255,255,0.11); }
 .dzt-share svg, .dzt-life svg { width: 14px; height: 14px; }
 .dzt-life { color: var(--text-2); }
+.dzt-life:disabled { opacity: 0.75; cursor: default; }
+.dzt-life:disabled:hover { background: rgba(255,255,255,0.06); }
+.dzt-life-spin { font-family: ui-monospace, monospace; color: var(--warn); }
 
 /* ─── share dialog ──────────────────────────────────────────────────── */
 .share-dialog { width: 440px; }

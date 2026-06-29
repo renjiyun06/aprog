@@ -20,7 +20,7 @@ interface Branch {
   id: string;
   name: string;            // 主线 / 支线 · xxx
   isMain: boolean;
-  dot: 'running' | 'hibernating';
+  dot: 'running' | 'waking' | 'hibernating';
   current: string;         // 当前存档点 label
   live: boolean;           // 有未存档的进行中进度
   forkFromLabel?: string;  // 支线：从哪个存档点岔开
@@ -159,8 +159,8 @@ export interface ProcInfo {
   name: string;
   /** pinned program version this process runs (from meta.yml.program_version) */
   version?: string;
-  /** only two states matter to the user: running (sandbox attached) vs hibernating (no sandbox) */
-  dot: 'running' | 'hibernating';
+  /** running（沙箱已起、driver 就绪）/ waking（唤醒受理中的过渡态）/ hibernating（无沙箱） */
+  dot: 'running' | 'waking' | 'hibernating';
   /** 首次创建、从未运行（后端 state=spawned）——dot 仍是 hibernating，但文案区分「待运行」与「休眠」 */
   fresh?: boolean;
   active?: boolean;
@@ -195,6 +195,8 @@ export interface ProgramShellProps {
   events: SessionEvent[];
   /** send a message to the attached process */
   onSend?: (text: string) => void;
+  /** 已发出输入、尚未等到代理首个事件时为 true → 在对话区底部渲染等待动画（防"卡死"观感）。 */
+  awaitingReply?: boolean;
 
   /* the attached proc's directory tree */
   tree: FsNode[];
@@ -392,9 +394,24 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
   const [spin, setSpin] = createSignal(0);
   const SPIN_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   createEffect(() => {
-    if (!creating()) return;
+    if (!creating() && !waking() && !p.awaitingReply) return; // 建进程 / 唤醒 / 等代理回复 都转 braille spinner
     const t = setInterval(() => setSpin((i) => (i + 1) % SPIN_FRAMES.length), 80);
     onCleanup(() => clearInterval(t));
+  });
+
+  // 对话区自动下滚:跟随新内容到底,但仅当用户本就在底部(向上翻看历史时不打断)。
+  let streamEl: HTMLDivElement | undefined;
+  let stickBottom = true;
+  const onStreamScroll = (): void => {
+    const el = streamEl;
+    if (el) stickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+  createEffect(() => {
+    void p.events.length; // 依赖事件流增长(流式 delta 会让 events 重算)
+    void p.awaitingReply; // 等待动画出现时也滚到底
+    const el = streamEl;
+    if (!el || !stickBottom) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
   });
   const treeW = () => p.treeW ?? 256;
   const [sidebarW, setSidebarW] = createSignal(232);
@@ -404,6 +421,7 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
      instead of the chat stream + composer (the directory stays). */
   const activeProc = () => p.procs.find((x) => x.active) ?? p.procs[0];
   const dormant = () => activeProc()?.dot === 'hibernating';
+  const waking = () => activeProc()?.dot === 'waking'; // 唤醒受理中：过渡态，中心区显示「唤醒中」而非对话/休眠卡
   const fresh = () => activeProc()?.fresh === true; // spawned：从未运行，文案区分「待运行」vs「休眠」
 
   /* ── share (demo) ── current user is owner of the attached process, so the
@@ -687,11 +705,16 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
             <Show when={activeProc()}>
               <button
                 class="dzt-life"
-                title={dormant() ? '唤醒 · 关联沙箱' : '休眠 · 释放沙箱'}
-                onClick={() => { const a = activeProc(); if (!a) return; dormant() ? p.onWake?.(a.pid) : p.onHibernate?.(a.pid); }}
+                disabled={waking()}
+                title={waking() ? '唤醒中…' : dormant() ? '唤醒 · 关联沙箱' : '休眠 · 释放沙箱'}
+                onClick={() => { const a = activeProc(); if (!a || waking()) return; dormant() ? p.onWake?.(a.pid) : p.onHibernate?.(a.pid); }}
               >
-                <Show when={dormant()} fallback={<MoonIcon />}><PowerIcon /></Show>
-                {dormant() ? '唤醒' : '休眠'}
+                <Show
+                  when={waking()}
+                  fallback={<><Show when={dormant()} fallback={<MoonIcon />}><PowerIcon /></Show>{dormant() ? '唤醒' : '休眠'}</>}
+                >
+                  <span class="dzt-life-spin">{SPIN_FRAMES[spin()]}</span>唤醒中
+                </Show>
               </button>
             </Show>
           </span>
@@ -714,12 +737,18 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
           when={p.viewFile}
           fallback={
             <Show
-              when={dormant()}
+              when={dormant() || waking()}
               fallback={
                 <div class="dz-chat">
-                  <div class="chat-stream dz-stream">
+                  <div class="chat-stream dz-stream" ref={(el) => (streamEl = el)} onScroll={onStreamScroll}>
                     <Show when={p.events.length > 0}>
                       <For each={p.events}>{(e) => <EventView e={e} />}</For>
+                    </Show>
+                    <Show when={p.awaitingReply}>
+                      <div class="msg msg-agent pending-reply">
+                        <span class="pending-spin">{SPIN_FRAMES[spin()]}</span>
+                        <span class="pending-text">正在等待响应…</span>
+                      </div>
                     </Show>
                   </div>
 
@@ -735,7 +764,20 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
                 </div>
               }
             >
+              {/* waking: 唤醒受理中的过渡态——沙箱起中 / driver 拉起运行环境，就绪后经 SSE 回流 running */}
+              <Show when={waking()}>
+                <div class="dz-dormant">
+                  <div class="dormant-card">
+                    <div class="dormant-glyph waking-glyph">{SPIN_FRAMES[spin()]}</div>
+                    <div class="dormant-title">正在唤醒进程…</div>
+                    <div class="dormant-sub">
+                      已受理唤醒：分配沙箱、driver 拉起运行环境中。<br />就绪后将自动进入对话。
+                    </div>
+                  </div>
+                </div>
+              </Show>
               {/* hibernating: no sandbox, no live conversation — only a wake action */}
+              <Show when={dormant()}>
               <div class="dz-dormant">
                 <div class="dormant-card">
                   <div class="dormant-glyph"><Show when={fresh()} fallback={<MoonIcon />}><PowerIcon /></Show></div>
@@ -756,6 +798,7 @@ export const ProgramShell: Component<ProgramShellProps> = (p) => {
                   </button>
                 </div>
               </div>
+              </Show>
             </Show>
           }
         >

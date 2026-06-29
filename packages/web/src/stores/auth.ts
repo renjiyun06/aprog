@@ -3,6 +3,7 @@
 
 import { createSignal } from 'solid-js';
 import { api, getToken, setToken } from '../lib/api';
+import { closeLifecycleStream } from './processes';
 
 interface Identity {
   id: string;
@@ -115,6 +116,7 @@ export const auth = {
     setToken(null);
     localStorage.removeItem(LS_IDENTITY);
     setUser(null);
+    closeLifecycleStream(); // 断开账号级生命周期 SSE
   },
 
   /** 本地装饰：改显示名 / 头像（不入后端）。 */

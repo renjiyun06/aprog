@@ -1,6 +1,6 @@
-import { createSignal, createMemo, onMount, type Component } from 'solid-js';
+import { createSignal, createMemo, createEffect, onMount, type Component } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import { ProgramShell, type ProcInfo, type SessionEvent, type FsNode } from '../components/ProgramShell';
+import { ProgramShell, type ProcInfo, type FsNode } from '../components/ProgramShell';
 import {
   processesFor,
   loadProcesses,
@@ -9,6 +9,7 @@ import {
   hibernateProcess,
   type ProcessRecord,
 } from '../stores/processes';
+import { sessionEvents, attachSession, sendInput, isAwaitingReply } from '../stores/session';
 
 export type ProgramProps = {
   pid?: number;
@@ -17,14 +18,13 @@ export type ProgramProps = {
   onResizeTreeW?: (nw: number) => void;
 };
 
-/* 会话 / 打开的文件还没有后端（待接入沙箱）：先按 pid 存一份本地视图态。
-   进程列表与生命周期（spawn/wake/hibernate、dot 状态）都走后端（stores/processes）。 */
+/* 会话事件已接后端（stores/session：SSE 事件流 + POST 输入）；打开的文件还没有后端（待接入沙箱），
+   先按 pid 存一份本地文件视图态。进程列表与生命周期（spawn/wake/hibernate、dot 状态）走 stores/processes。 */
 interface View {
-  events: SessionEvent[];
   openFiles: string[];
   viewFile: string | null;
 }
-const emptyView = (): View => ({ events: [], openFiles: [], viewFile: null });
+const emptyView = (): View => ({ openFiles: [], viewFile: null });
 
 /* 沙箱未接入：进程目录只给一个占位结构，内容读取也只回占位文案。 */
 const PLACEHOLDER_TREE: FsNode[] = [
@@ -33,7 +33,8 @@ const PLACEHOLDER_TREE: FsNode[] = [
   { name: 'session.aprog.jsonl', kind: 'file' },
 ];
 
-const dotOf = (s: ProcessRecord['state']): ProcInfo['dot'] => (s === 'running' ? 'running' : 'hibernating');
+const dotOf = (s: ProcessRecord['state']): ProcInfo['dot'] =>
+  s === 'running' ? 'running' : s === 'waking' ? 'waking' : 'hibernating';
 
 /* ──────────────────────────────────────────────────────────────────────
    每个 aprog 智能程序都是同一套 ProgramShell；区别只是 programId + 标题。
@@ -67,6 +68,11 @@ export function makeProgram(programId: string, procTitle: string): Component<Pro
       setViews(pid, (v) => ({ ...(v ?? emptyView()), ...patch }));
     const av = (): View => { const a = active(); return a ? viewOf(a.pid) : emptyView(); };
 
+    /* 会话事件来自后端事件流（stores/session）。活动进程一旦 running 就开流（attach 幂等）。 */
+    const events = createMemo(() => { const a = active(); return a ? sessionEvents(a.pid) : []; });
+    const awaitingReply = createMemo(() => { const a = active(); return a ? isAwaitingReply(a.pid) : false; });
+    createEffect(() => { const a = active(); if (a && a.state === 'running') attachSession(a.pid); });
+
     /* 生命周期 → 后端（stores/processes）。 */
     const onSpawn = async (name: string): Promise<boolean> => {
       const rec = await spawnProcess(programId, name);
@@ -80,10 +86,10 @@ export function makeProgram(programId: string, procTitle: string): Component<Pro
     const onWake = (pid: number): void => { void wakeProcess(pid); };
     const onAttach = (pid: number): void => { setActiveId(pid); };
 
-    /* 会话 / 文件：本地 mock（待接入沙箱）。 */
+    /* 输入 → 后端（POST /proc/:pid/input）。用户回显经事件流回吐，不本地塞。 */
     const onSend = (text: string): void => {
       const a = active(); if (!a) return;
-      patchView(a.pid, { events: [...viewOf(a.pid).events, { kind: 'user', body: text }] });
+      void sendInput(a.pid, text);
     };
     const openFile = (path: string): void => {
       const a = active(); if (!a) return;
@@ -107,7 +113,8 @@ export function makeProgram(programId: string, procTitle: string): Component<Pro
         procTitle={procTitle}
         procs={shownProcs()}
         procDir={active() ? `~/.aprog/${active()!.pid}` : '~/.aprog'}
-        events={av().events}
+        events={events()}
+        awaitingReply={awaitingReply()}
         onSend={onSend}
         tree={active() ? PLACEHOLDER_TREE : []}
         onOpenFile={openFile}
